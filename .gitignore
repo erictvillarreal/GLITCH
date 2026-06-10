@@ -1,0 +1,10 @@
+*.csv
+*.log
+*.json
+__pycache__/
+*.pyc
+.glitch_*.json
+.projectx_creds.json
+.tradovate_creds.json
+glitch/Downloads/
+statistics/
