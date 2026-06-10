@@ -220,7 +220,7 @@ def run():
                     paper_log.append({"date":today_str,"signal":False,
                                       "pnl":0,"note":"range_too_tight"})
                     save_log(paper_log)
-                    sleep_until_tomorrow(); continue
+                    sleep_until_tomorrow(); break
 
                 _,prev,med = get_prev_ranges()
                 if prev > 0 and prev < med:
@@ -229,7 +229,7 @@ def run():
                     paper_log.append({"date":today_str,"signal":False,
                                       "pnl":0,"note":"regime_filter"})
                     save_log(paper_log)
-                    sleep_until_tomorrow(); continue
+                    sleep_until_tomorrow(); break
 
                 tp_pts = max(orb_range*0.50,4)
                 sl_pts = max(orb_range*0.40,3)
@@ -255,7 +255,7 @@ def run():
                 notify_exit("FLATTEN",lp,pnl,state['entry'],state['direction'])
                 notify_summary(paper_log)
                 reset_state(); state=load_state()
-                sleep_until_tomorrow(); continue
+                sleep_until_tomorrow(); break
 
             if already_logged_today(paper_log,today_str):
                 time.sleep(POLL_INTERVAL); continue
@@ -303,7 +303,7 @@ def run():
                                 state['entry'],state['direction'])
                     notify_summary(paper_log)
                     reset_state(); state=load_state()
-                    sleep_until_tomorrow(); continue
+                    sleep_until_tomorrow(); break
 
             time.sleep(POLL_INTERVAL)
 
