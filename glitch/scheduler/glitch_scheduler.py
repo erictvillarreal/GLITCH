@@ -204,6 +204,13 @@ def run():
         if phase in ("scanning","closing"):
 
             # Finaliza ORB si no está built
+            now_check = ct_now()
+            if not state.get("orb_built") and now_check.hour >= 10:
+                log.info("  Late start — skipping today")
+                _record_no_trade(paper_log, today_str, "late_start")
+                save_log(paper_log)
+                sleep_until_tomorrow()
+                continue
             if not state.get("orb_built"):
                 bars = fetch_bars()
                 if not bars.empty:
