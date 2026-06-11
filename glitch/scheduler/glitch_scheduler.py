@@ -207,7 +207,8 @@ def run():
             now_check = ct_now()
             if not state.get("orb_built") and now_check.hour >= 10:
                 log.info("  Late start — skipping today")
-                _record_no_trade(paper_log, today_str, "late_start")
+                paper_log.append({"date":today_str,"signal":False,"pnl":0,"note":"late_start"})
+                save_log(paper_log)
                 save_log(paper_log)
                 sleep_until_tomorrow()
                 continue
