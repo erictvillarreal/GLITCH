@@ -222,6 +222,10 @@ def run():
 
                 orb_range = (state['orb_high'] or 0)-(state['orb_low'] or 0)
 
+                if orb_range < 1.0:
+                    log.info(f"  Range {orb_range:.2f}pts — Yahoo delay, retrying 60s")
+                    time.sleep(60)
+                    continue
                 if orb_range < 4.0:
                     log.info(f"  Range {orb_range:.2f}pts too tight")
                     notify_no_signal("range_too_tight")
