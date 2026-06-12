@@ -266,6 +266,10 @@ def run():
                 sleep_until_tomorrow(); break
 
             if already_logged_today(paper_log,today_str):
+                # Send daily summary at 15:00 CT if not sent yet
+                now_s = ct_now()
+                if now_s.hour == 15 and now_s.minute == 0:
+                    notify_daily_summary(paper_log)
                 time.sleep(POLL_INTERVAL); continue
 
             # Descarga y chequea

@@ -141,3 +141,43 @@ Symbol: MES Micro E-mini S&P500
 WR backtest: 76.2% | Pass rate: 100%
 Railway: activo 24/7
 {_now_utc()}""")
+
+def notify_daily_summary(paper_log: list):
+    """Resumen diario — se manda pase lo que pase."""
+    from datetime import date
+    today = str(date.today())
+    trades    = [t for t in paper_log if t.get('signal')]
+    no_sig    = [t for t in paper_log if not t.get('signal')]
+    wins      = [t for t in trades if t.get('pnl',0) > 0]
+    losses    = [t for t in trades if t.get('pnl',0) < 0]
+    total_pnl = sum(t.get('pnl',0) for t in trades)
+    wr        = len(wins)/len(trades) if trades else 0
+    ev_day    = total_pnl/len(paper_log) if paper_log else 0
+    sign      = "+" if total_pnl >= 0 else ""
+
+    # Today's result
+    today_trades = [t for t in paper_log if str(t.get('date',''))==today]
+    if today_trades:
+        t = today_trades[-1]
+        if t.get('signal'):
+            today_str = f"{'✅ WIN' if t.get('pnl',0)>0 else '❌ LOSS'} ${t.get('pnl',0):+.2f}"
+        else:
+            today_str = f"⚪ Sin trade ({t.get('note','─')})"
+    else:
+        today_str = "⚪ Sin datos hoy"
+
+    bar_w = 15
+    done  = int(min(max(total_pnl,0)/3000,1)*bar_w)
+    bar   = '█'*done + '░'*(bar_w-done)
+    pct   = min(max(total_pnl,0)/3000*100,100)
+
+    send(f"""📅 S10 RESUMEN DIARIO
+Hoy: {today_str}
+
+Acumulado ({len(paper_log)} días):
+Trades: {len(trades)} | WR: {wr:.1%} ({len(wins)}W/{len(losses)}L)
+PnL: ${sign}{total_pnl:.2f} | EV/día: ${'+' if ev_day>=0 else ''}{ev_day:.2f}
+
+Combine: [{bar}] {pct:.1f}%
+${max(total_pnl,0):.0f} / $3,000
+{_now_utc()}""")
