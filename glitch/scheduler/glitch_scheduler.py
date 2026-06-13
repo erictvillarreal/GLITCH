@@ -132,11 +132,27 @@ def record_trade(paper_log, state, reason, exit_price, pnl, today_str):
     save_log(paper_log)
 
 def sleep_until_tomorrow():
+    """Duerme hasta las 9:25 AM CT del siguiente dia habil."""
     now = ct_now()
-    mins = max(0,(15*60)-(now.hour*60+now.minute))
-    secs = mins*60 + 8*3600
-    log.info(f"Done for today — sleeping {secs//3600:.0f}h")
-    time.sleep(max(secs,300))
+    # Calcula dias hasta el lunes si es viernes/sabado/domingo
+    days_ahead = 1
+    next_day = now.weekday() + 1  # dia de mañana
+    if next_day == 5:    # mañana es sabado → esperar hasta lunes
+        days_ahead = 3
+    elif next_day == 6:  # mañana es domingo → esperar hasta lunes
+        days_ahead = 2
+    elif next_day == 7:  # hoy es domingo → esperar hasta lunes
+        days_ahead = 1
+
+    # Calcula segundos hasta las 9:25 AM CT del proximo dia habil
+    from datetime import timedelta
+    target = (now + timedelta(days=days_ahead)).replace(
+        hour=9, minute=25, second=0, microsecond=0)
+    secs = max(int((target - now).total_seconds()), 300)
+    hrs  = secs // 3600
+    mins = (secs % 3600) // 60
+    log.info(f"Done for today — sleeping {hrs}h {mins}m until {target.strftime('%a %d %b %H:%M CT')}")
+    time.sleep(secs)
 
 def run():
     dry_run = os.getenv("DRY_RUN","true").lower()=="true"
