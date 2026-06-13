@@ -198,7 +198,7 @@ def run():
                                   "pnl":0,"note":"out_of_window"})
                 save_log(paper_log)
 
-            time.sleep(SLEEP_INTERVAL)
+            sleep_until_tomorrow()
             continue
 
         # ── BUILDING ORB (9:30-9:35) ───────────────────
