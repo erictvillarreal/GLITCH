@@ -198,7 +198,10 @@ def run():
                                   "pnl":0,"note":"out_of_window"})
                 save_log(paper_log)
 
-            sleep_until_tomorrow()
+            if now.hour >= 10:
+                sleep_until_tomorrow()
+            else:
+                time.sleep(60)
             continue
 
         # ── BUILDING ORB (9:30-9:35) ───────────────────
