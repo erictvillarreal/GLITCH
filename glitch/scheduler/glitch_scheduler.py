@@ -131,29 +131,6 @@ def record_trade(paper_log, state, reason, exit_price, pnl, today_str):
     })
     save_log(paper_log)
 
-def sleep_until_tomorrow():
-    """Duerme hasta las 9:25 AM CT del siguiente dia habil."""
-    now = ct_now()
-    # Calcula dias hasta el lunes si es viernes/sabado/domingo
-    days_ahead = 1
-    next_day = now.weekday() + 1  # dia de mañana
-    if next_day == 5:    # mañana es sabado → esperar hasta lunes
-        days_ahead = 3
-    elif next_day == 6:  # mañana es domingo → esperar hasta lunes
-        days_ahead = 2
-    elif next_day == 7:  # hoy es domingo → esperar hasta lunes
-        days_ahead = 1
-
-    # Calcula segundos hasta las 9:25 AM CT del proximo dia habil
-    from datetime import timedelta
-    target = (now + timedelta(days=days_ahead)).replace(
-        hour=9, minute=25, second=0, microsecond=0)
-    secs = max(int((target - now).total_seconds()), 300)
-    hrs  = secs // 3600
-    mins = (secs % 3600) // 60
-    log.info(f"Done for today — sleeping {hrs}h {mins}m until {target.strftime('%a %d %b %H:%M CT')}")
-    time.sleep(secs)
-
 def run():
     dry_run = os.getenv("DRY_RUN","true").lower()=="true"
     log.info("="*55)
@@ -169,7 +146,15 @@ def run():
     if state.get("date") != today_str:
         reset_state(); state = load_state()
 
+    # Tope de seguridad: nunca corre más de 6h en una sola invocación
+    start_time = time.time()
+    MAX_RUNTIME_SECS = 6 * 3600
+
     while True:
+        if time.time() - start_time > MAX_RUNTIME_SECS:
+            log.info("Max runtime reached — exiting process (cron will re-invoke tomorrow)")
+            return
+
         now       = ct_now()
         phase     = market_phase()
         today_str = str(date.today())
@@ -199,9 +184,10 @@ def run():
                 save_log(paper_log)
 
             if now.hour >= 10:
-                sleep_until_tomorrow()
+                log.info("Market closed for today — exiting process")
+                return
             else:
-                time.sleep(60)
+                time.sleep(30)
             continue
 
         # ── BUILDING ORB (9:30-9:35) ───────────────────
@@ -229,8 +215,8 @@ def run():
                 paper_log.append({"date":today_str,"signal":False,"pnl":0,"note":"late_start"})
                 save_log(paper_log)
                 save_log(paper_log)
-                sleep_until_tomorrow()
-                continue
+                log.info("Done for today — exiting process")
+                return
             if not state.get("orb_built"):
                 bars = fetch_bars()
                 if not bars.empty:
@@ -251,7 +237,8 @@ def run():
                     paper_log.append({"date":today_str,"signal":False,
                                       "pnl":0,"note":"range_too_tight"})
                     save_log(paper_log)
-                    sleep_until_tomorrow(); break
+                    log.info("Done for today — exiting process")
+                    return
 
                 _,prev,med = get_prev_ranges()
                 if prev > 0 and prev < med:
@@ -260,7 +247,8 @@ def run():
                     paper_log.append({"date":today_str,"signal":False,
                                       "pnl":0,"note":"regime_filter"})
                     save_log(paper_log)
-                    sleep_until_tomorrow(); break
+                    log.info("Done for today — exiting process")
+                    return
 
                 tp_pts = max(orb_range*0.50,4)
                 sl_pts = max(orb_range*0.40,3)
@@ -286,7 +274,8 @@ def run():
                 notify_exit("FLATTEN",lp,pnl,state['entry'],state['direction'])
                 notify_summary(paper_log)
                 reset_state(); state=load_state()
-                sleep_until_tomorrow(); break
+                log.info("Done for today — exiting process")
+                return
 
             if already_logged_today(paper_log,today_str):
                 # Send daily summary at 15:00 CT if not sent yet
@@ -338,7 +327,8 @@ def run():
                                 state['entry'],state['direction'])
                     notify_summary(paper_log)
                     reset_state(); state=load_state()
-                    sleep_until_tomorrow(); break
+                    log.info("Done for today — exiting process")
+                    return
 
             time.sleep(POLL_INTERVAL)
 
