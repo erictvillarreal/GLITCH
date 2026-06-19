@@ -219,18 +219,15 @@ def run():
                 return
             if not state.get("orb_built"):
                 bars = fetch_bars()
-                if not bars.empty:
-                    orb_bars = bars[bars['ct_time']<9*60+35]
-                    if not orb_bars.empty:
-                        state['orb_high'] = float(orb_bars['high'].max())
-                        state['orb_low']  = float(orb_bars['low'].min())
-
-                orb_range = (state['orb_high'] or 0)-(state['orb_low'] or 0)
-
-                if orb_range < 1.0:
-                    log.info(f"  Range {orb_range:.2f}pts — Yahoo delay, retrying 60s")
-                    time.sleep(60)
+                orb_bars = bars[bars["ct_time"]<9*60+35] if not bars.empty else bars
+                log.info(f"  Diagnostic: total_bars={len(bars)} orb_bars={len(orb_bars)}")
+                if len(orb_bars) < 5:
+                    log.info(f"  Only {len(orb_bars)}/5 ORB bars available — retrying 30s")
+                    time.sleep(30)
                     continue
+                state["orb_high"] = float(orb_bars["high"].max())
+                state["orb_low"]  = float(orb_bars["low"].min())
+                orb_range = state["orb_high"] - state["orb_low"]
                 if orb_range < 4.0:
                     log.info(f"  Range {orb_range:.2f}pts too tight")
                     notify_no_signal("range_too_tight")
