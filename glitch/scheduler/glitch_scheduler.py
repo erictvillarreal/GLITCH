@@ -220,7 +220,13 @@ def run():
             if not state.get("orb_built"):
                 bars = fetch_bars()
                 orb_bars = bars[bars["ct_time"]<9*60+35] if not bars.empty else bars
-                log.info(f"  Diagnostic: total_bars={len(bars)} orb_bars={len(orb_bars)}")
+                if not orb_bars.empty:
+                    ct_min = orb_bars['ct_time'].min()
+                    ct_max = orb_bars['ct_time'].max()
+                    log.info(f"  Diagnostic: total_bars={len(bars)} orb_bars={len(orb_bars)} "
+                             f"orb_window=[{ct_min//60:02.0f}:{ct_min%60:02.0f}-{ct_max//60:02.0f}:{ct_max%60:02.0f}]")
+                else:
+                    log.info(f"  Diagnostic: total_bars={len(bars)} orb_bars=0 orb_window=[empty]")
                 if len(orb_bars) < 5:
                     log.info(f"  Only {len(orb_bars)}/5 ORB bars available — retrying 30s")
                     time.sleep(30)
