@@ -20,7 +20,7 @@ logging.basicConfig(stream=__import__("sys").stdout,
 log = logging.getLogger("glitch")
 
 MES_POINT     = 5.0
-NC            = 3
+NC            = 5
 LOG_FILE      = "paper_trade_log.json"
 STATE_FILE    = ".scheduler_state.json"
 POLL_INTERVAL = 60
