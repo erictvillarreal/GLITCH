@@ -244,6 +244,11 @@ class ProjectXClient:
         resp = self._post("/api/Order/cancel", {"orderId": order_id})
         return resp.get("success", False)
 
+    def cancel_all_orders(self, account_id: int) -> dict:
+        """POST /api/Order/cancelallorders -- usado por core/safety.py FlattenFailsafe."""
+        self.ensure_auth()
+        return self._post("/api/Order/cancelallorders", {"accountId": account_id})
+
     def get_open_orders(self, account_id: int) -> list[dict]:
         """POST /api/Order/search"""
         self.ensure_auth()
@@ -375,6 +380,27 @@ class ProjectXClient:
             return True, f"OK equity=${equity:.0f} buffer=${buffer:.0f}"
         except Exception as e:
             return False, f"API error: {e}"
+
+    def flatten_position(self, account_id: int, symbol: str) -> dict:
+        """
+        BUGFIX (11-ago-2026): este metodo no existia pero run_glitch.py,
+        run_glitch_xfa.py y core/safety.py (FlattenFailsafe) lo llaman --
+        el flatten de fin de dia habria tronado con AttributeError.
+        No hay endpoint nativo documentado de 'liquidate' en ProjectX;
+        se implementa como orden de mercado en direccion contraria a la
+        posicion neta actual. Ajustar si ProjectX expone un endpoint dedicado.
+        """
+        self.ensure_auth()
+        positions = self.get_positions(account_id)
+        results = []
+        for p in positions:
+            net = p.get("netPos", 0)
+            if net == 0:
+                continue
+            side = OrderSide.BID if net > 0 else OrderSide.ASK
+            oid = self.place_market_order(account_id, p.get("contractId", symbol), side, abs(net))
+            results.append(oid)
+        return {"flattened_orders": results}
 
     # ── HTTP helpers ──────────────────────────────────────────────────────
 

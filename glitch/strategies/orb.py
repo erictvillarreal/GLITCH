@@ -1,22 +1,22 @@
 """
 Glitch — Opening Range Breakout (ORB) Strategy
-===============================================
-Entry logic:
-  - Define the opening range: first N minutes after RTH open (9:30 AM CT)
-  - Long signal:  price breaks ABOVE the opening range high
-  - Short signal: price breaks BELOW the opening range low
-  - One trade per day max
-  - Exit via triple barrier (TP / SL / time)
+================================================
+Mecanica:
+  1. Definir el "opening range" = high/low de los primeros N minutos
+     tras la apertura de la sesion RTH (9:30 AM CT para el cash open de ES/MES,
+     que es la ventana de mayor liquidez/volumen intradia).
+  2. Señal LONG: primer cierre por encima del OR high.
+     Señal SHORT: primer cierre por debajo del OR low.
+  3. Un solo trade por lado por dia (evita overtrading / viola DLL rapido).
+  4. Salida via triple-barrier (ATR-based TP/SL) ya existente en el repo.
 
-Parameters to optimize:
-  orb_minutes : width of opening range (5, 10, 15, 30)
-  tp_atr_mult : take profit in ATR multiples
-  sl_atr_mult : stop loss in ATR multiples
-  atr_window  : ATR lookback period
-  max_hold_bars : vertical barrier (time stop)
-  direction   : "long", "short", "both"
+Por que ORB:
+  - Mecanico y objetivo (cero discrecion) -> facil de paper-tradear y auditar.
+  - Encaja con la ventana de sesion CME ya definida en prop_firm.py.
+  - Tipicamente WR 35-50% / RR 2-4, que es una de las zonas ganadoras
+    identificadas en el grid search (ver find_geometry2.py).
 """
-
+from __future__ import annotations
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
@@ -24,138 +24,75 @@ from dataclasses import dataclass
 
 @dataclass
 class ORBConfig:
-    orb_minutes:    int   = 15      # opening range window
-    tp_atr_mult:    float = 2.0     # take profit
-    sl_atr_mult:    float = 1.0     # stop loss
-    atr_window:     int   = 20      # ATR lookback
-    max_hold_bars:  int   = 30      # time stop in bars
-    direction:      str   = "both"  # "long", "short", "both"
-    session_open:   str   = "09:30" # CT
-    session_close:  str   = "14:30" # CT — no entries after this
+    or_minutes: int = 15          # ventana del opening range (minutos)
+    session_open_hour: int = 9    # 9:30 AM CT cash open (aprox, ver nota abajo)
+    session_open_minute: int = 30
+    max_entries_per_day: int = 2  # 1 long + 1 short posibles, no mas
+    confirm_close: bool = True    # exigir CIERRE fuera del rango (no solo mecha)
 
 
-def compute_atr(df: pd.DataFrame, window: int = 20) -> pd.Series:
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low  - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    return tr.rolling(window, min_periods=1).mean()
-
-
-def generate_signals(
-    df: pd.DataFrame,
-    cfg: ORBConfig = None,
-    tz: str = "America/Chicago",
-) -> pd.DataFrame:
+def compute_opening_range(prices: pd.DataFrame, cfg: ORBConfig, tz: str = "America/Chicago"):
     """
-    Scan all bars and return a DataFrame of entry signals.
+    Calcula el OR high/low por dia de sesion.
+    prices: DataFrame OHLCV con DatetimeIndex UTC (formato estandar del data/loader.py)
+    Devuelve DataFrame indexado por fecha de sesion con columnas or_high, or_low, or_end_ts
+    """
+    local = prices.copy()
+    local.index = local.index.tz_convert(tz)
 
-    Input:  df with DatetimeIndex (UTC), columns: open high low close volume
-    Output: DataFrame with columns:
-              entry_idx    (integer position in df)
-              entry_bar    (timestamp)
-              direction    (+1 long / -1 short)
-              entry_price
-              orb_high
-              orb_low
-              atr
+    open_t = pd.Timestamp(f"{cfg.session_open_hour:02d}:{cfg.session_open_minute:02d}").time()
+    end_t  = (pd.Timestamp(f"{cfg.session_open_hour:02d}:{cfg.session_open_minute:02d}")
+              + pd.Timedelta(minutes=cfg.or_minutes)).time()
+
+    local["session_date"] = local.index.date
+    mask = (local.index.time >= open_t) & (local.index.time < end_t)
+    or_window = local[mask]
+
+    or_stats = or_window.groupby("session_date").agg(
+        or_high=("high", "max"),
+        or_low=("low", "min"),
+    )
+    or_stats["or_end_ts"] = [
+        pd.Timestamp.combine(pd.Timestamp(d), end_t).tz_localize(tz)
+        for d in or_stats.index
+    ]
+    return or_stats
+
+
+def generate_orb_signals(prices: pd.DataFrame, cfg: ORBConfig = None, tz: str = "America/Chicago"):
+    """
+    Genera señales de entrada ORB.
+    Devuelve DataFrame: entry_idx (posicion entera en `prices`), side (+1/-1), session_date
     """
     if cfg is None:
         cfg = ORBConfig()
 
-    # Work in CT for session logic
-    local = df.copy()
+    or_stats = compute_opening_range(prices, cfg, tz)
+
+    local = prices.copy()
     local.index = local.index.tz_convert(tz)
-
-    atr = compute_atr(local, cfg.atr_window)
-
-    open_time  = pd.Timestamp(f"1970-01-01 {cfg.session_open}").time()
-    close_time = pd.Timestamp(f"1970-01-01 {cfg.session_close}").time()
+    local["session_date"] = local.index.date
+    local["pos"] = np.arange(len(local))
 
     signals = []
-    dates = local.index.normalize().unique()
-
-    for date in dates:
-        day_mask = local.index.normalize() == date
-        day = local[day_mask]
-
-        if len(day) < cfg.orb_minutes + 1:
+    for session_date, row in or_stats.iterrows():
+        day_bars = local[(local["session_date"] == session_date) & (local.index > row["or_end_ts"])]
+        if day_bars.empty:
             continue
 
-        # Opening range bars: first N minutes after 9:30
-        orb_mask = (
-            (day.index.time >= open_time) &
-            (day.index.time <  pd.Timestamp(f"1970-01-01 {cfg.session_open}")
-                               .time().__class__(
-                                   (pd.Timestamp(f"1970-01-01 {cfg.session_open}") +
-                                    pd.Timedelta(minutes=cfg.orb_minutes)).hour,
-                                   (pd.Timestamp(f"1970-01-01 {cfg.session_open}") +
-                                    pd.Timedelta(minutes=cfg.orb_minutes)).minute
-                               ))
-        )
-        orb_bars = day[orb_mask]
+        broke_long = False
+        broke_short = False
+        for _, bar in day_bars.iterrows():
+            ref_price = bar["close"] if cfg.confirm_close else bar["high"]
+            ref_price_low = bar["close"] if cfg.confirm_close else bar["low"]
 
-        if len(orb_bars) < 2:
-            continue
+            if not broke_long and ref_price > row["or_high"]:
+                signals.append({"entry_idx": int(bar["pos"]), "side": 1, "session_date": session_date})
+                broke_long = True
+            if not broke_short and ref_price_low < row["or_low"]:
+                signals.append({"entry_idx": int(bar["pos"]), "side": -1, "session_date": session_date})
+                broke_short = True
+            if broke_long and broke_short:
+                break  # ya se dispararon ambos lados posibles (max_entries_per_day=2)
 
-        orb_high = orb_bars["high"].max()
-        orb_low  = orb_bars["low"].min()
-        orb_range = orb_high - orb_low
-
-        if orb_range <= 0:
-            continue
-
-        # Scan bars AFTER the opening range for breakout
-        post_orb = day[day.index > orb_bars.index[-1]]
-        post_orb = post_orb[post_orb.index.time <= close_time]
-
-        traded_today = False
-
-        for bar_time, bar in post_orb.iterrows():
-            if traded_today:
-                break
-
-            bar_atr = atr.loc[bar_time] if bar_time in atr.index else orb_range
-
-            # Long breakout
-            if cfg.direction in ("long", "both"):
-                if bar["close"] > orb_high:
-                    # Find integer position in original df
-                    bar_utc = bar_time.tz_convert("UTC")
-                    if bar_utc in df.index:
-                        idx = df.index.get_loc(bar_utc)
-                        signals.append({
-                            "entry_idx":   idx,
-                            "entry_bar":   bar_utc,
-                            "direction":   1,
-                            "entry_price": bar["close"],
-                            "orb_high":    orb_high,
-                            "orb_low":     orb_low,
-                            "atr":         bar_atr,
-                        })
-                        traded_today = True
-
-            # Short breakout
-            if cfg.direction in ("short", "both") and not traded_today:
-                if bar["close"] < orb_low:
-                    bar_utc = bar_time.tz_convert("UTC")
-                    if bar_utc in df.index:
-                        idx = df.index.get_loc(bar_utc)
-                        signals.append({
-                            "entry_idx":   idx,
-                            "entry_bar":   bar_utc,
-                            "direction":   -1,
-                            "entry_price": bar["close"],
-                            "orb_high":    orb_high,
-                            "orb_low":     orb_low,
-                            "atr":         bar_atr,
-                        })
-                        traded_today = True
-
-    if not signals:
-        return pd.DataFrame()
-
-    return pd.DataFrame(signals).set_index("entry_bar")
+    return pd.DataFrame(signals)

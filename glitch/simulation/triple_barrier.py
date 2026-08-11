@@ -158,13 +158,21 @@ def extract_daily_pnl_from_labels(
     ----------
     labels : output of label_triple_barrier
     prices : OHLC DataFrame with DatetimeIndex
-    contract_value_per_pct : dollar value of 1% move per contract
+    contract_value_per_pct : dollar value of a FULL 100% (1.0 fractional) move
+        for 1 contract, i.e. entry_price * point_value_usd. Example: MES at
+        ~5000 with point_value_usd=5 -> 25_000. `pnl_pct` in `labels` is a raw
+        FRACTION (0.001 = 0.1%), not a percentage number, so do NOT pass
+        "dollar value of 1%" here (that was a units bug in earlier versions of
+        this function) or results will be off by 100x.
     """
     if labels.empty:
         return np.array([])
 
     labels = labels.copy()
-    labels["date"] = pd.to_datetime(prices.index[labels["entry_idx"].astype(int)])
+    # BUGFIX: normalizar a solo fecha (sin hora) para agrupar trades del mismo dia.
+    # Antes: pd.to_datetime(...) conservaba el timestamp completo -> cada trade
+    # se contaba como un "dia" propio y el EV/dia quedaba subestimado.
+    labels["date"] = pd.to_datetime(prices.index[labels["entry_idx"].astype(int)]).normalize()
     labels["pnl_dollar"] = labels["pnl_pct"] * contract_value_per_pct
 
     daily = labels.groupby("date")["pnl_dollar"].sum()
