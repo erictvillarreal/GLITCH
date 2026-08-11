@@ -1,0 +1,65 @@
+name: Glitch CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=. --cov-report=term-missing --cov-fail-under=80
+
+      - name: Lint
+        run: |
+          ruff check .
+
+  simulation_benchmark:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Run Monte Carlo benchmark
+        run: |
+          python -c "
+          import time
+          from core.prop_firm import load_firm
+          from simulation.monte_carlo import MonteCarloSimulator, StrategyParams
+          
+          firm = load_firm('ftmo_100k')
+          strategy = StrategyParams(win_rate=0.60, rr=1.5, risk_per_trade_pct=0.006)
+          
+          t0 = time.time()
+          sim = MonteCarloSimulator(firm, strategy, n_paths=10_000, seed=42)
+          results = sim.run()
+          elapsed = time.time() - t0
+          
+          print(f'10k paths completed in {elapsed:.2f}s')
+          print(f'System pass rate: {results.system_pass_rate:.1%}')
+          assert elapsed < 30, f'Simulation too slow: {elapsed:.1f}s'
+          assert results.system_pass_rate > 0
+          print('Benchmark PASSED')
+          "
