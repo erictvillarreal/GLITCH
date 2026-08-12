@@ -148,32 +148,25 @@ def label_triple_barrier(
 def extract_daily_pnl_from_labels(
     labels: pd.DataFrame,
     prices: pd.DataFrame,
-    contract_value_per_pct: float = 500.0,  # ES: ~$50/pt, ~500 per 1%
+    point_value_usd: float = 5.0,   # MES=$5/pt, MNQ=$2/pt (ver INSTRUMENT_SPECS)
+    n_contracts: int = 1,
 ) -> np.ndarray:
     """
     Aggregate labeled trades into a daily PnL series.
-    Used to construct DailyReturnDist from backtest labels.
 
-    Parameters
-    ----------
-    labels : output of label_triple_barrier
-    prices : OHLC DataFrame with DatetimeIndex
-    contract_value_per_pct : dollar value of a FULL 100% (1.0 fractional) move
-        for 1 contract, i.e. entry_price * point_value_usd. Example: MES at
-        ~5000 with point_value_usd=5 -> 25_000. `pnl_pct` in `labels` is a raw
-        FRACTION (0.001 = 0.1%), not a percentage number, so do NOT pass
-        "dollar value of 1%" here (that was a units bug in earlier versions of
-        this function) or results will be off by 100x.
+    BUGFIX (12-ago-2026): version anterior usaba un "contract_value_per_pct"
+    fijo para todo el dataset, asumiendo un nivel de precio constante
+    (ej. MES~5000). Si el precio real se mueve mucho durante la ventana del
+    backtest (MES paso de ~5000 a ~7690 en el dataset real), esa constante
+    queda mal calibrada. Fix: usar el entry_price REAL de cada trade.
     """
     if labels.empty:
         return np.array([])
 
     labels = labels.copy()
-    # BUGFIX: normalizar a solo fecha (sin hora) para agrupar trades del mismo dia.
-    # Antes: pd.to_datetime(...) conservaba el timestamp completo -> cada trade
-    # se contaba como un "dia" propio y el EV/dia quedaba subestimado.
     labels["date"] = pd.to_datetime(prices.index[labels["entry_idx"].astype(int)]).normalize()
-    labels["pnl_dollar"] = labels["pnl_pct"] * contract_value_per_pct
+    labels["pnl_points"] = labels["pnl_pct"] * labels["entry_price"]
+    labels["pnl_dollar"] = labels["pnl_points"] * point_value_usd * n_contracts
 
     daily = labels.groupby("date")["pnl_dollar"].sum()
     return daily.values
