@@ -6,11 +6,11 @@ Entrada: apertura RTH (9:30 CT)
 Salida: via triple-barrier ATR (pt=2.5x, sl=1.5x) o fin de sesion (14:30 CT)
 Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 """
-import os, sys, json, logging, time
-from datetime import datetime, date
+import os, sys, json, logging, time, datetime as dt_module
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import numpy as np
-import yfinance as yf
+from massive import RESTClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scheduler.telegram_bot import send
@@ -54,17 +54,33 @@ def is_trading_day():
     }
     return (now.year, now.month, now.day) not in holidays
 
-def fetch_daily(ticker, n_days=10):
-    """Descarga n_days de datos diarios via Yahoo."""
+# Front month map — actualizar trimestralmente
+FRONT_MONTH = {
+    "MES": "MESU6",
+    "MNQ": "MNQU6",
+}
+
+def fetch_daily(product, n_days=15):
+    """Descarga n_days de datos diarios via Massive."""
     try:
-        d = yf.Ticker(ticker).history(period=f"{n_days}d", interval="1d")
-        if d.empty or len(d) < 3: return None
-        d = d.reset_index()
-        d.columns = [c.lower() for c in d.columns]
-        d['ret'] = (d['close'] - d['open']) / d['open']
-        return d
+        ticker = FRONT_MONTH[product]
+        key    = os.getenv("POLYGON_API_KEY", "6F2vDNs8WtwPJLl_TtnWSksMzYPFtdYs")
+        client = RESTClient(key)
+        end   = date.today().isoformat()
+        start = (date.today() - timedelta(days=n_days*2)).isoformat()
+        bars  = list(client.list_futures_aggregates(
+            ticker,
+            window_start_gte=start,
+            window_start_lte=end,
+            limit=200, sort="asc",
+        ))
+        if len(bars) < 3: return None
+        rows = [{"open": b.open, "close": b.close,
+                 "ret": (b.close-b.open)/b.open if b.open else 0}
+                for b in bars]
+        return rows  # lista de dicts ordenada por fecha asc
     except Exception as e:
-        log.error(f"fetch_daily {ticker}: {e}")
+        log.error(f"fetch_daily {product}: {e}")
         return None
 
 def fetch_intraday(ticker):
@@ -98,22 +114,20 @@ def compute_signal():
     Genera la señal combo_2d usando Yahoo datos diarios.
     Retorna: (side, reason) donde side = 1 (long) / -1 (short) / 0 (no trade)
     """
-    mes = fetch_daily("MES=F", n_days=10)
-    mnq = fetch_daily("MNQ=F", n_days=10)
+    mes = fetch_daily("MES", n_days=15)
+    mnq = fetch_daily("MNQ", n_days=15)
 
     if mes is None or mnq is None:
         return 0, "datos_insuficientes"
     if len(mes) < 3 or len(mnq) < 3:
         return 0, "historia_insuficiente"
 
-    # ret_prev = retorno de ayer (penultima fila, la ultima es hoy si ya abrió)
-    # Usamos las ultimas 3 filas completadas: [-3]=T-2, [-2]=T-1, [-1]=hoy(incompleto)
-    # En datos diarios de Yahoo, la ultima barra puede ser el dia de hoy incompleto
-    # Por seguridad, usamos [-3] y [-2] como T-2 y T-1
-    mes_ret_prev = mes['ret'].iloc[-2]  # T-1
-    mes_ret_2d   = mes['ret'].iloc[-3]  # T-2
-    mnq_ret_prev = mnq['ret'].iloc[-2]
-    mnq_ret_2d   = mnq['ret'].iloc[-3]
+    # Massive entrega solo barras cerradas — la ultima fila es T-1 (ayer)
+    # [-1]=T-1 (ayer, completo), [-2]=T-2 (anteayer, completo)
+    mes_ret_prev = mes[-1]["ret"]  # T-1
+    mes_ret_2d   = mes[-2]["ret"]  # T-2
+    mnq_ret_prev = mnq[-1]["ret"]
+    mnq_ret_2d   = mnq[-2]["ret"]
 
     log.info(f"MES: ret_prev={mes_ret_prev:.4f} ret_2d={mes_ret_2d:.4f}")
     log.info(f"MNQ: ret_prev={mnq_ret_prev:.4f} ret_2d={mnq_ret_2d:.4f}")
