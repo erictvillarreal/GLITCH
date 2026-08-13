@@ -1,1 +1,1 @@
-worker: python glitch/scheduler/glitch_scheduler.py
+worker: python glitch/scheduler/combo2d_scheduler.py
