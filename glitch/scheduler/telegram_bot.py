@@ -1,13 +1,13 @@
 """
-Glitch Telegram Bot — Notificaciones estilo profesional
+Glitch Telegram Bot — Brain 1 + Brain 2 notifications
 """
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 
-CT    = ZoneInfo("America/Chicago")
-UTC   = timezone.utc
-TOKEN = "8996694212:AAHdGlnbM-0ACf6HvUS67f74tWaNowuUtsY"
+CT      = ZoneInfo("America/Chicago")
+UTC     = timezone.utc
+TOKEN   = "8996694212:AAHdGlnbM-0ACf6HvUS67f74tWaNowuUtsY"
 CHAT_ID = "5154940894"
 BASE    = f"https://api.telegram.org/bot{TOKEN}"
 
@@ -24,160 +24,178 @@ def send(msg: str):
 def _now_utc():
     return datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
-def _direction_str(direction: int) -> str:
-    return "LONG" if direction == 1 else "SHORT"
+# ── BRAIN 1 — TRADE OPEN ─────────────────────────────
+def notify_brain1_open(direction: str, entry: float,
+                        tp: float, sl: float,
+                        nc: int,
+                        combine_pnl: float,
+                        combine_goal: float = 3000.0,
+                        combine_floor: float = 2000.0,
+                        dry_run: bool = True):
+    mode = "PAPER LIVE" if dry_run else "LIVE"
+    pct  = min(max(combine_pnl, 0) / combine_goal * 100, 100)
+    left = max(combine_goal - combine_pnl, 0)
+    dd   = combine_floor
 
-# ── TRADE OPEN ────────────────────────────────────────
-def notify_signal(direction: int, entry: float,
-                  tp: float, sl: float,
-                  tp_pts: float, sl_pts: float,
-                  nc: int = 3, mes_point: float = 5.0,
-                  dry_run: bool = True,
-                  orb_range: float = 0,
-                  equity: float = 50000):
-
-    mode = "PAPER" if dry_run else "LIVE"
-    ev   = tp_pts * nc * mes_point
-    # p_up = probabilidad implícita basada en WR backtest
-    p_up = 0.762  # S10 WR
-    stake= sl_pts * nc * mes_point
-
-    send(f"""S10 TRADE [{mode}]
-Symbol: MES (Micro E-mini S&P500)
-Direction: {_direction_str(direction)}
-Entry: ${entry:,.2f}
-TP: ${tp:,.2f}  ({'+' if direction==1 else '-'}{tp_pts:.1f}pts)
-SL: ${sl:,.2f}  ({'-' if direction==1 else '+'}{sl_pts:.1f}pts)
-EV: ${ev:.2f}
-p_win: {p_up:.3f}
-Stake: ${stake:.2f}
-ORB Range: {orb_range:.1f}pts
-Equity: ${equity:,.2f}
+    send(f"""GLITCH DETECTED - BRAIN 1
+{mode}
+STATUS: OPEN
+{direction}: {entry:,.2f}
+TP/SL: {tp:,.2f} - {sl:,.2f}
+ASSET: MES
+SIZE: {nc} Contracts
+% OF COMBINE: {pct:.1f}%
+$ LEFT TO GOAL: ${left:,.0f} USD
+MAX TRAILING DD: ${dd:,.0f} USD
 {_now_utc()}""")
 
-# ── TRADE CLOSE ───────────────────────────────────────
-def notify_exit(reason: str, exit_price: float, pnl: float,
-                entry: float, direction: int,
-                dry_run: bool = True,
-                equity: float = 50000):
-
-    mode   = "PAPER" if dry_run else "LIVE"
-    result = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT"
-    sign   = "+" if pnl >= 0 else ""
-
-    send(f"""S10 CLOSE [{result}] [{mode}]
-Symbol: MES (Micro E-mini S&P500)
-Direction: {_direction_str(direction)}
-Entry: ${entry:,.2f}
-Exit via: {reason} (${exit_price:,.2f})
-PnL real: ${sign}{pnl:.2f}
-Equity: ${equity:,.2f}
-{_now_utc()}""")
-
-# ── ORB BUILT ─────────────────────────────────────────
-def notify_orb(orb_high: float, orb_low: float,
-               orb_range: float, tp_pts: float, sl_pts: float):
-    send(f"""📐 S10 ORB FIJADO
-High:  ${orb_high:,.2f}
-Low:   ${orb_low:,.2f}
-Range: {orb_range:.2f}pts
-TP params: {tp_pts:.1f}pts | SL params: {sl_pts:.1f}pts
-Esperando breakout para fade...
-{_now_utc()}""")
-
-# ── REGIME SKIP ───────────────────────────────────────
-def notify_regime_skip(prev_range: float, median: float):
-    send(f"""⚪ S10 NO TRADE — Regime Filter
-Rango ayer: {prev_range:.1f}pts
-Mediana 20d: {median:.1f}pts
-Mercado choppy — sin operación hoy
-{_now_utc()}""")
-
-# ── NO SIGNAL ─────────────────────────────────────────
-def notify_no_signal(reason: str = "no_breakout"):
-    msgs = {
-        "no_breakout":    "precio dentro del ORB todo el día",
-        "range_too_tight":"ORB range < 4pts",
-        "regime_filter":  "régimen choppy",
-        "out_of_window":  "fuera de ventana",
-    }
-    send(f"""⚪ S10 NO TRADE
-Razón: {msgs.get(reason, reason)}
-{_now_utc()}""")
-
-# ── DAILY SUMMARY ─────────────────────────────────────
-def notify_summary(paper_log: list, equity: float = 50000):
-    trades    = [t for t in paper_log if t.get('signal')]
-    if not trades: return
-    wins      = [t for t in trades if t.get('pnl',0) > 0]
-    losses    = [t for t in trades if t.get('pnl',0) < 0]
-    total_pnl = sum(t.get('pnl',0) for t in trades)
-    wr        = len(wins)/len(trades) if trades else 0
-    ev_day    = total_pnl/len(paper_log) if paper_log else 0
-    sign      = "+" if total_pnl >= 0 else ""
-
+# ── BRAIN 1 — TRADE CLOSE ────────────────────────────
+def notify_brain1_close(direction: str, entry: float,
+                         exit_price: float, result: str,
+                         pnl: float,
+                         combine_pnl: float,
+                         combine_goal: float = 3000.0,
+                         combine_floor: float = 2000.0,
+                         dry_run: bool = True):
+    mode  = "PAPER LIVE" if dry_run else "LIVE"
+    emoji = "✅" if pnl > 0 else "❌"
+    pct   = min(max(combine_pnl, 0) / combine_goal * 100, 100)
+    left  = max(combine_goal - combine_pnl, 0)
     bar_w = 15
-    done  = int(min(max(total_pnl,0)/3000,1)*bar_w)
-    bar   = '█'*done + '░'*(bar_w-done)
-    pct   = min(max(total_pnl,0)/3000*100,100)
+    done  = int(pct / 100 * bar_w)
+    bar   = "█" * done + "░" * (bar_w - done)
 
-    send(f"""📊 S10 RESUMEN ACUMULADO
-Días: {len(paper_log)} | Trades: {len(trades)}
-WR: {wr:.1%}  ({len(wins)}W / {len(losses)}L)
-PnL total: ${sign}{total_pnl:.2f}
-EV/día: ${"+" if ev_day>=0 else ""}{ev_day:.2f}
-Equity: ${equity:,.2f}
+    send(f"""{emoji} GLITCH CLOSED - BRAIN 1
+{mode} | {result}
+{direction}: {entry:,.2f} → {exit_price:,.2f}
+PnL: ${pnl:+,.2f} USD
+ASSET: MES
 
-Combine: [{bar}] {pct:.1f}%
-${max(total_pnl,0):.0f} / $3,000
+COMBINE PROGRESS:
+[{bar}] {pct:.1f}%
+$ LEFT TO GOAL: ${left:,.0f} USD
+MAX TRAILING DD: ${combine_floor:,.0f} USD
 {_now_utc()}""")
 
-# ── STARTUP ───────────────────────────────────────────
-def notify_start(dry_run: bool):
-    mode = "PAPER" if dry_run else "LIVE"
-    send(f"""⚡ GLITCH SCHEDULER [{mode}]
-Strategy: S10 ORB Fade (counter-trend)
-Symbol: MES Micro E-mini S&P500
-WR backtest: 76.2% | Pass rate: 100%
-Railway: activo 24/7
-{_now_utc()}""")
-
-def notify_daily_summary(paper_log: list):
-    """Resumen diario — se manda pase lo que pase."""
-    from datetime import date
-    today = str(date.today())
-    trades    = [t for t in paper_log if t.get('signal')]
-    no_sig    = [t for t in paper_log if not t.get('signal')]
-    wins      = [t for t in trades if t.get('pnl',0) > 0]
-    losses    = [t for t in trades if t.get('pnl',0) < 0]
-    total_pnl = sum(t.get('pnl',0) for t in trades)
-    wr        = len(wins)/len(trades) if trades else 0
-    ev_day    = total_pnl/len(paper_log) if paper_log else 0
-    sign      = "+" if total_pnl >= 0 else ""
-
-    # Today's result
-    today_trades = [t for t in paper_log if str(t.get('date',''))==today]
-    if today_trades:
-        t = today_trades[-1]
-        if t.get('signal'):
-            today_str = f"{'✅ WIN' if t.get('pnl',0)>0 else '❌ LOSS'} ${t.get('pnl',0):+.2f}"
-        else:
-            today_str = f"⚪ Sin trade ({t.get('note','─')})"
-    else:
-        today_str = "⚪ Sin datos hoy"
-
+# ── BRAIN 1 — NO SIGNAL ──────────────────────────────
+def notify_brain1_no_signal(reason: str,
+                              combine_pnl: float,
+                              combine_goal: float = 3000.0):
+    pct  = min(max(combine_pnl, 0) / combine_goal * 100, 100)
+    left = max(combine_goal - combine_pnl, 0)
     bar_w = 15
-    done  = int(min(max(total_pnl,0)/3000,1)*bar_w)
-    bar   = '█'*done + '░'*(bar_w-done)
-    pct   = min(max(total_pnl,0)/3000*100,100)
+    done  = int(pct / 100 * bar_w)
+    bar   = "█" * done + "░" * (bar_w - done)
 
-    send(f"""📅 S10 RESUMEN DIARIO
-Hoy: {today_str}
+    send(f"""⚪ GLITCH - BRAIN 1 | NO SIGNAL
+Reason: {reason}
 
-Acumulado ({len(paper_log)} días):
-Trades: {len(trades)} | WR: {wr:.1%} ({len(wins)}W/{len(losses)}L)
-PnL: ${sign}{total_pnl:.2f} | EV/día: ${'+' if ev_day>=0 else ''}{ev_day:.2f}
-
-Combine: [{bar}] {pct:.1f}%
-${max(total_pnl,0):.0f} / $3,000
+COMBINE PROGRESS:
+[{bar}] {pct:.1f}%
+$ LEFT TO GOAL: ${left:,.0f} USD
 {_now_utc()}""")
+
+# ── BRAIN 2 — TRADE OPEN ─────────────────────────────
+def notify_brain2_open(direction: str, entry: float,
+                        tp: float, sl: float,
+                        nc: int,
+                        xfa_balance: float,
+                        payout_pct: float = 0.05,
+                        min_buffer: float = 2000.0,
+                        winning_days: int = 0,
+                        days_to_payout: int = 5,
+                        dry_run: bool = True):
+    mode          = "PAPER LIVE" if dry_run else "LIVE"
+    est_payout    = min(xfa_balance * payout_pct, 5000) * 0.90
+    post_buf      = xfa_balance - min(xfa_balance * payout_pct, 5000)
+    days_left     = max(days_to_payout - winning_days, 0)
+
+    send(f"""GLITCH DETECTED - BRAIN 2
+{mode} - OPEN
+{direction}: {entry:,.2f}
+TP/SL: {tp:,.2f} - {sl:,.2f}
+ASSET: MES
+SIZE: {nc} Contracts
+ACCUMULATED BALANCE: ${xfa_balance:,.2f} USD
+EST. PAYOUT (5% RULE): ${est_payout:,.2f} USD
+BUFFER POST-PAYOUT: ${post_buf:,.2f} USD (Floor: ${min_buffer:,.0f} USD)
+DAYS TO NEXT PAYOUT (D. PAYOUT): {days_left} Days
+{_now_utc()}""")
+
+# ── BRAIN 2 — TRADE CLOSE ────────────────────────────
+def notify_brain2_close(direction: str, entry: float,
+                         exit_price: float, result: str,
+                         pnl: float,
+                         xfa_balance: float,
+                         payout_pct: float = 0.05,
+                         min_buffer: float = 2000.0,
+                         winning_days: int = 0,
+                         days_to_payout: int = 5,
+                         dry_run: bool = True):
+    mode       = "PAPER LIVE" if dry_run else "LIVE"
+    emoji      = "✅" if pnl > 0 else "❌"
+    est_payout = min(xfa_balance * payout_pct, 5000) * 0.90
+    post_buf   = xfa_balance - min(xfa_balance * payout_pct, 5000)
+    days_left  = max(days_to_payout - winning_days, 0)
+
+    send(f"""{emoji} GLITCH CLOSED - BRAIN 2
+{mode} | {result}
+{direction}: {entry:,.2f} → {exit_price:,.2f}
+PnL: ${pnl:+,.2f} USD
+ASSET: MES
+
+XFA STATUS:
+ACCUMULATED BALANCE: ${xfa_balance:,.2f} USD
+EST. PAYOUT (5% RULE): ${est_payout:,.2f} USD
+BUFFER POST-PAYOUT: ${post_buf:,.2f} USD (Floor: ${min_buffer:,.0f} USD)
+DAYS TO NEXT PAYOUT (D. PAYOUT): {days_left} Days
+{_now_utc()}""")
+
+# ── BRAIN 2 — NO SIGNAL ──────────────────────────────
+def notify_brain2_no_signal(reason: str,
+                              xfa_balance: float,
+                              winning_days: int = 0,
+                              days_to_payout: int = 5):
+    days_left = max(days_to_payout - winning_days, 0)
+    send(f"""⚪ GLITCH - BRAIN 2 | NO SIGNAL
+Reason: {reason}
+ACCUMULATED BALANCE: ${xfa_balance:,.2f} USD
+DAYS TO NEXT PAYOUT: {days_left} Days
+{_now_utc()}""")
+
+# ── PAYOUT ALERT ─────────────────────────────────────
+def notify_payout_eligible(xfa_balance: float,
+                            payout_pct: float = 0.05,
+                            min_buffer: float = 2000.0):
+    gross      = min(xfa_balance * payout_pct, 5000)
+    take       = gross * 0.90
+    post_buf   = xfa_balance - gross
+    eligible   = post_buf >= min_buffer
+
+    send(f"""💰 GLITCH - BRAIN 2 | PAYOUT ELIGIBLE
+ACCUMULATED BALANCE: ${xfa_balance:,.2f} USD
+EST. PAYOUT (5% RULE): ${take:,.2f} USD
+BUFFER POST-PAYOUT: ${post_buf:,.2f} USD
+Floor: ${min_buffer:,.0f} USD
+ACTION: {"✅ REQUEST PAYOUT" if eligible else "⏳ HOLD — buffer too low"}
+{_now_utc()}""")
+
+# ── LEGACY — mantener compatibilidad con glitch_scheduler.py viejo ──
+def notify_start(dry_run: bool = True):
+    mode = "PAPER" if dry_run else "LIVE"
+    send(f"⚡ GLITCH [{mode}] Starting...\n{_now_utc()}")
+
+def notify_orb(orb_high, orb_low, orb_range, tp_pts, sl_pts):
+    pass  # deprecated
+
+def notify_regime_skip(prev_range, median):
+    notify_brain1_no_signal(f"Regime choppy ({prev_range:.1f}pts < {median:.1f}pts median)", 0)
+
+def notify_no_signal(reason="no_breakout"):
+    notify_brain1_no_signal(reason, 0)
+
+def notify_summary(paper_log, equity=50000):
+    pass  # deprecated — usar notify_brain1_close
+
+def notify_daily_summary(paper_log):
+    pass  # deprecated
