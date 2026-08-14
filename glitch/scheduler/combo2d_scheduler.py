@@ -1,3 +1,5 @@
+import pandas as pd
+import yfinance as yf
 """
 GLITCH — Combo2d MNQ Scheduler
 Estrategia: mean-reversion dia-a-dia con doble confirmacion MES+MNQ
