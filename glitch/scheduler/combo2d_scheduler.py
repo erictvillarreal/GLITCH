@@ -179,7 +179,9 @@ def run():
     log.info(f"Señal: {direction_str} | {reason}")
 
     if side == 0:
-        msg = f"🔕 GLITCH combo2d — SIN SEÑAL\n{reason}"
+        msg = f"""GLITCH - COMBO2D
+STATUS: NO SIGNAL
+REASON: {reason}"""
         send(msg)
         paper_log.append({"date": today_str, "signal": False, "pnl": 0, "note": reason})
         save_log(paper_log)
@@ -202,7 +204,9 @@ def run():
         time.sleep(30)
 
     if entry_bars is None or entry_bars.empty:
-        msg = "⚠️ GLITCH — Sin datos MNQ para entrada"
+        msg = """GLITCH - COMBO2D
+STATUS: ERROR
+ERROR: No MNQ data available for entry"""
         send(msg)
         paper_log.append({"date": today_str, "signal": True, "side": side,
                           "pnl": 0, "note": "no_data_entry"})
@@ -219,12 +223,15 @@ def run():
     log.info(f"Entrada: {direction_str} @ {entry_price:.2f}")
     log.info(f"ATR={atr:.2f}  TP={tp_price:.2f} (+{tp_pts:.2f}pts)  SL={sl_price:.2f} (-{sl_pts:.2f}pts)")
 
-    msg = (f"{'📈' if side==1 else '📉'} GLITCH combo2d — {direction_str}\n"
-           f"Entrada: {entry_price:.2f}\n"
-           f"TP: {tp_price:.2f} (+{tp_pts:.1f} pts)\n"
-           f"SL: {sl_price:.2f} (-{sl_pts:.1f} pts)\n"
-           f"ATR: {atr:.2f} | NC: {NC}\n"
-           f"({'PAPER' if DRY_RUN else 'LIVE'})")
+    msg = (f"GLITCH DETECTED - COMBO2D\n"
+           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'}\n"
+           f"STATUS: OPEN\n"
+           f"{direction_str}: {entry_price:,.2f}\n"
+           f"TP/SL: {tp_price:,.2f} - {sl_price:,.2f}\n"
+           f"ASSET: MNQ\n"
+           f"SIZE: {NC} Contracts\n"
+           f"ATR: {atr:.2f}\n"
+           f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
     send(msg)
 
     # ── 4. Monitorea la posición ─────────────────────────────────────────────
@@ -268,13 +275,14 @@ def run():
 
     # ── 5. Calcula PnL y notifica ─────────────────────────────────────────────
     pnl = (exit_price - entry_price) * side * MNQ_POINT * NC
-    emoji = "✅" if pnl > 0 else "❌"
     log.info(f"EXIT {result} @ {exit_price:.2f} | PnL={pnl:+.2f}")
 
-    msg = (f"{emoji} GLITCH combo2d — {result}\n"
-           f"Salida: {exit_price:.2f}\n"
-           f"PnL: ${pnl:+.2f}\n"
-           f"({'PAPER' if DRY_RUN else 'LIVE'})")
+    msg = (f"GLITCH CLOSED - COMBO2D\n"
+           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'} | {result}\n"
+           f"{direction_str}: {entry_price:,.2f} → {exit_price:,.2f}\n"
+           f"PnL: ${pnl:+,.2f} USD\n"
+           f"ASSET: MNQ\n"
+           f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
     send(msg)
 
     paper_log.append({
@@ -293,9 +301,10 @@ def run():
     total = sum(1 for e in paper_log if e.get('result') in ('TP','SL','FLATTEN'))
     wr    = wins/total if total > 0 else 0
 
-    summary = (f"📊 Resumen combo2d\n"
-               f"Trades: {total} | WR: {wr:.0%}\n"
-               f"PnL total: ${total_pnl:+.2f}")
+    summary = (f"GLITCH - COMBO2D | DAILY SUMMARY\n"
+               f"Trades: {total}\n"
+               f"Win Rate: {wr:.1%}\n"
+               f"PnL Total: ${total_pnl:+,.2f} USD")
     send(summary)
     log.info("Done — saliendo")
 
