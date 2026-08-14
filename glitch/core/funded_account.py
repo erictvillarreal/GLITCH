@@ -181,6 +181,9 @@ class XFAAccount:
         trader_take = gross * self.spec.profit_split_trader
 
         self.balance -= gross
+        # CONFIRMADO via help.topstep.com: despues del primer payout el MLL
+        # se fija en $0 permanentemente. Ya no hace trailing.
+        self.mll_floor = 0.0
         self.winning_days_count = 0
         self.lifetime_payouts += 1
         self.lifetime_payout_usd += trader_take
@@ -216,3 +219,52 @@ class XFAAccount:
             "lifetime_payouts": self.lifetime_payouts,
             "lifetime_payout_usd": round(self.lifetime_payout_usd, 2),
         }
+
+
+def simulate_xfa_paths(dist, spec: XFASpec = XFA_50K, n_paths: int = 5000,
+                        max_days: int = 60, seed: int = 7) -> dict:
+    """
+    Simula N intentos de XFA (primer ciclo, desde balance=$0). Devuelve
+    tambien el balance/payout real al momento del trigger.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n_eligible = 0
+    n_blown = 0
+    days_to_eligible = []
+    balance_at_eligible = []
+    for _ in range(n_paths):
+        acct = XFAAccount(spec)
+        daily_pnls = dist.sample(max_days, rng)
+        for day_pnl in daily_pnls:
+            acct.start_day()
+            acct.record_trade_pnl(float(day_pnl))
+            acct.end_of_day()
+            if acct.status == XFAStatus.PAYOUT_ELIGIBLE:
+                n_eligible += 1
+                days_to_eligible.append(acct.day_number)
+                balance_at_eligible.append(acct.balance)
+                break
+            if not acct.is_alive:
+                n_blown += 1
+                break
+    payouts_usd = None
+    if balance_at_eligible:
+        bal = np.array(balance_at_eligible)
+        gross = np.minimum(bal * spec.payout_pct_of_balance, spec.payout_cap_usd)
+        trader_take = gross * spec.profit_split_trader
+        payouts_usd = {
+            "avg_balance_at_trigger": float(bal.mean()),
+            "median_balance_at_trigger": float(np.median(bal)),
+            "avg_payout_usd": float(trader_take.mean()),
+            "median_payout_usd": float(np.median(trader_take)),
+            "pct_hit_cap": float((bal * spec.payout_pct_of_balance >= spec.payout_cap_usd).mean()),
+        }
+    return {
+        "n_paths": n_paths,
+        "prob_eligible": n_eligible / n_paths,
+        "prob_blown": n_blown / n_paths,
+        "prob_neither_yet": 1 - (n_eligible + n_blown) / n_paths,
+        "avg_days_to_eligible": float(np.mean(days_to_eligible)) if days_to_eligible else None,
+        "payout": payouts_usd,
+    }
