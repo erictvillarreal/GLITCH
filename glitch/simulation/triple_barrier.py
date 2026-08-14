@@ -122,6 +122,13 @@ def label_triple_barrier(
                     label = 1;  exit_price = upper; exit_i = j; break
                 if h >= lower:
                     label = -1; exit_price = lower; exit_i = j; break
+        else:
+            # BUGFIX (12-ago-2026): si el loop termina SIN hacer break (no toco
+            # ni TP ni SL dentro de max_holding_bars), exit_price se quedaba
+            # pegado a entry_price -> todo trade "time-barrier" se registraba
+            # con PnL exactamente $0, sin importar el precio real de salida.
+            # Fix: usar el close real de la barra de vencimiento (exit_i).
+            exit_price = close[exit_i]
 
         pnl_pct = side * (exit_price - entry_price) / entry_price
 

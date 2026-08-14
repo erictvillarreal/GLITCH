@@ -92,11 +92,48 @@ def _bars_to_df(raw_bars: list[dict]) -> pd.DataFrame:
         )
 
 
-def get_latest_bars(lookback_bars: int = 150) -> pd.DataFrame:
-    """Trae las ultimas N barras de 1min de MES via ProjectX (feed real, no delayed)."""
+def get_latest_bars_projectx(lookback_bars: int = 150) -> pd.DataFrame:
+    """Trae las ultimas N barras de 1min de MES via ProjectX (feed real, no delayed).
+    Requiere cuenta activa de Topstep (Combine o fondeada)."""
     client = _get_client()
     raw = client.get_bars(_contract_id, bar_type=1, bar_size=1, count=lookback_bars, live=True)
     return _bars_to_df(raw)
+
+
+def get_latest_bars_yahoo(days: int = 5) -> pd.DataFrame:
+    """
+    Trae barras de 1min de MES=F via Yahoo Finance -- GRATIS, sin cuenta.
+    Mismo patron que scheduler/glitch_scheduler.py:fetch_bars() (ya probado en
+    produccion en Railway), adaptado al esquema estandar del repo
+    (open, high, low, close, volume; DatetimeIndex UTC).
+
+    LIMITACIONES CONOCIDAS (ya las viviste en el scheduler original):
+      - Delay real desconocido/no garantizado (no es feed de ejecucion,
+        NUNCA usar con --mode live).
+      - Datos intradia de 1min solo profundidad ~7 dias via yfinance.
+      - Barras a veces incompletas/con huecos -- por eso el scheduler
+        original exige "5 barras completas de ORB" antes de operar; aplico
+        el mismo criterio en check_new_signals() via generate_orb_signals.
+    """
+    import yfinance as yf
+    d = yf.Ticker("MES=F").history(period=f"{days}d", interval="1m", prepost=True)
+    if d.empty:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    d = d.reset_index()
+    d.columns = [c.lower() for c in d.columns]
+    tcol = [c for c in d.columns if "date" in c or "time" in c][0]
+    d["ts"] = pd.to_datetime(d[tcol], utc=True)
+    d = d.set_index("ts").sort_index()
+    return d[["open", "high", "low", "close", "volume"]]
+
+
+FEED = os.environ.get("GLITCH_FEED", "yahoo")  # "yahoo" (gratis, delayed) | "projectx" (real, requiere cuenta)
+
+
+def get_latest_bars(lookback_bars: int = 150) -> pd.DataFrame:
+    if FEED == "projectx":
+        return get_latest_bars_projectx(lookback_bars)
+    return get_latest_bars_yahoo(days=5)
 
 
 def check_open_signals(latest_bars: pd.DataFrame):
@@ -183,6 +220,15 @@ def main():
             "Los Terminos de Uso de Topstep prohiben correr automatizacion de trading "
             "real desde un VPS/servidor remoto. Si estas en tu Mac/Raspberry Pi personal, "
             "vuelve a correr agregando --confirm-personal-device."
+        )
+        sys.exit(1)
+
+    if args.mode == "live" and FEED != "projectx":
+        print(
+            "[glitch] ABORTADO: --mode live requiere GLITCH_FEED=projectx (feed real de "
+            "Topstep). El feed de Yahoo Finance esta delayed/no garantizado -- usarlo para "
+            "ejecutar ordenes reales es peligroso (entras tarde contra un precio viejo). "
+            "Yahoo solo es valido con --mode paper."
         )
         sys.exit(1)
 

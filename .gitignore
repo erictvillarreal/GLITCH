@@ -8,3 +8,4 @@ __pycache__/
 .tradovate_creds.json
 glitch/Downloads/
 statistics/
+glitch/data_cache/*.parquet
