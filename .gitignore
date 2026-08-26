@@ -1,0 +1,17 @@
+*.csv
+*.log
+*.json
+__pycache__/
+*.pyc
+.glitch_*.json
+.projectx_creds.json
+.tradovate_creds.json
+glitch/Downloads/
+statistics/
+glitch/data_cache/*.parquet
+
+# Excepcion (25-ago-2026): resultados del grid de Camino B por producto --
+# se versionan a pedido explicito, no son output efimero.
+!glitch/data_cache/camino_b_products_grid.csv
+!glitch/data_cache/camino_b_products_overfit.csv
+!glitch/data_cache/camino_b_products_final.csv
