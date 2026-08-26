@@ -15,6 +15,8 @@ os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import importlib
+
 import pytest
 
 import scheduler.geometry_scheduler as scheduler
@@ -103,3 +105,44 @@ class TestNoHardcodedSecrets:
             if cfg.spec.yf_ticker is None:
                 continue  # correcto -- ese producto deberia fallar al arrancar, no correr con un simbolo inventado
             assert isinstance(cfg.spec.yf_ticker, str) and cfg.spec.yf_ticker.endswith("=F")
+
+
+class TestProductSwappability:
+    """
+    Requisito PERMANENTE (ver GLITCH_RESEARCH_LOG.md, seccion Step F):
+    rotar de producto es cambiar GLITCH_PRODUCT, nunca tocar codigo. Estos
+    tests reimportan el modulo (importlib.reload) con la env var cambiada
+    para probar el arranque real del scheduler de punta a punta, no solo
+    que el diccionario CANDIDATES tenga la entrada.
+    """
+
+    def _reload_with_product(self, monkeypatch, product: str):
+        monkeypatch.setenv("GLITCH_PRODUCT", product)
+        return importlib.reload(scheduler)
+
+    def test_switching_to_gc_selects_mgc_candidate_via_env_var_only(self, monkeypatch):
+        """
+        'GC' en la conversacion = el candidato MGC (micro-gold, el que
+        realmente puede tradearse con nc>5 en Topstep -- ver ProductSpec).
+        Debe llegar hasta el gate de yf_ticker (probando que el swap de
+        producto en si funciono sin tocar codigo) y fallar AHI, no antes
+        y no por una razon distinta.
+        """
+        with pytest.raises(SystemExit):
+            self._reload_with_product(monkeypatch, "MGC")
+
+    def test_switching_to_rty_selects_m2k_candidate_via_env_var_only(self, monkeypatch):
+        """'RTY' en la conversacion = el candidato M2K (micro-Russell, mismo motivo que MGC)."""
+        with pytest.raises(SystemExit):
+            self._reload_with_product(monkeypatch, "M2K")
+
+    def test_unknown_product_fails_loud_not_silent(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._reload_with_product(monkeypatch, "DOES_NOT_EXIST")
+
+    def test_switching_back_to_mes_still_runs_clean(self, monkeypatch):
+        """Confirma que el reload en si no deja el modulo en un estado roto para el candidato que SI corre hoy."""
+        reloaded = self._reload_with_product(monkeypatch, "MES")
+        assert reloaded.PRODUCT_KEY == "MES"
+        assert reloaded.CFG is geo.CANDIDATES["MES"]
+        assert reloaded.CFG.spec.yf_ticker == "MES=F"

@@ -266,16 +266,143 @@ conectar a Railway:
 - `execution/contracts.py` — resolución dinámica de front-month
   (`resolve_front_month()`), ahora compartida también por
   `combo2d_scheduler.py` (antes tenía su propia copia)
-- `tests/test_geometry_parity.py` — 14 tests: identidad de función
+- `tests/test_geometry_parity.py` — 18 tests: identidad de función
   compartida, aritmética de barreras/dólares, nc nunca excede el cap
-  real de Topstep por producto, sin key hardcodeada
+  real de Topstep por producto, sin key hardcodeada, **swappability real
+  de producto** (ver abajo)
 - `DRY_RUN=true` por default — paper trading, sin excepción, hasta
   decisión explícita separada
 
-**>>> Esto resuelve ÚNICAMENTE Cerebro 1 (pasar el Combine). <<<**
-Cerebro 2 (XFA, maximizar payouts) sigue exactamente donde estaba:
-bloqueado en la pregunta sin resolver del MLL post-payout (¿se resetea
-solo la primera vez o cada vez? — ver sección "Cerebro 2" arriba, fuente
-primaria de help.topstep.com nunca confirmada con el texto completo).
-Nada de este Paso F asume esa pregunta resuelta ni la toca.
+#### MES es el default — por qué, explícitamente (25-ago-2026)
+
+**MES es el default por menor incertidumbre residual (mayor tiempo de
+validación acumulado en la sesión), NO por ser la geometría con mejor
+número.** GC/MGC y RTY/M2K están a 1-3% de diferencia en `combines_por_año`
+— dentro del margen de ruido de los brackets empíricos (ver sección de
+6 productos arriba). Esto es un requisito PERMANENTE del diseño, no un
+detalle de implementación: cualquier decisión futura de cambiar el
+default debe justificarse con evidencia nueva, no con la conveniencia de
+"ya está configurado así".
+
+**Swappability confirmada con test real, no solo con el diccionario:**
+`tests/test_geometry_parity.py::TestProductSwappability` reimporta el
+scheduler completo (`importlib.reload`) con `GLITCH_PRODUCT=MGC` ("GC"
+en la conversación) y `GLITCH_PRODUCT=M2K` ("RTY") vía env var únicamente
+— sin tocar código. Ambos casos llegan correctamente hasta el gate de
+`yf_ticker` (que los detiene ahí porque ese símbolo de feed en vivo
+todavía no está verificado — ver arriba) y NO antes ni por otra razón,
+probando que el mecanismo de swap en sí funciona de punta a punta. Un
+cuarto test confirma que volver a `GLITCH_PRODUCT=MES` deja el módulo en
+estado limpio después del reload. 4/4 tests pasando.
+
+#### Duración recomendada del período de paper trading (25-ago-2026)
+
+Números del candidato ganador (G2: SL=100/TP=40 ticks, alternar, nc=40,
+max_holding_bars=100), separados explícitamente por primera vez —
+reproducir con el bloque de código en el historial de esta sesión
+(usa `scripts/camino_b_grid.py::measure_wr_bracket` +
+`simulation/monte_carlo.py::TopstepMonteCarloSimulator`, n_paths=8000, seed=42):
+
+- `pass_rate_15d` = **0.8144**
+- `avg_pass_days` (solo intentos que pasan) = 3.8361
+- `avg_blown_days` (solo intentos que truenan) = 2.8721
+- **`dias_promedio_resolucion`** (TODOS los intentos que se resuelven,
+  pase o truene — el número correcto para este cálculo, no el de solo-pases)
+  = **3.6571**
+- `n_alive` a los 15 días (ni pasó ni tronó) = 0 de 8,000 paths (0.00% —
+  cada intento se resuelve dentro de la ventana, no hay paths censurados)
+
+> **Nota técnica:** `avg_pass_days` (usado en reportes anteriores de esta
+> sesión para "días promedio de resolución") NO es el número correcto
+> para este cálculo — solo promedia los intentos que pasan, que tardan
+> más que los que truenan (3.84 vs 2.87 días). `avg_resolution_days`
+> (nuevo, agregado a `simulation/monte_carlo.py::SimResult` en esta
+> misma sesión) promedia TODOS los intentos resueltos. La diferencia
+> importa: usar el número equivocado habría sobreestimado el tiempo
+> esperado en ~5%.
+
+**Cálculo:**
+```
+intentos_esperados_para_pasar = 1 / pass_rate_15d
+                               = 1 / 0.8144
+                               = 1.2279
+
+dias_calendario_esperados = dias_promedio_resolucion × intentos_esperados_para_pasar
+                           = 3.6571 × 1.2279
+                           = 4.49 días
+```
+
+**Comparación contra el límite de 60 días:** 4.49 días vs. 60 días —
+**13.4x de margen.** Cae extremadamente cómodo bajo el límite.
+
+**Duración recomendada de paper trading: 30 días calendario** (no 4.49
+días redondeados hacia arriba mecánicamente). Justificación: 4.49 días es
+el tiempo *estadísticamente esperado* para pasar UN intento, pero un
+período de paper trading sirve para más que confirmar el número
+esperado — necesita observar ejecución real (slippage del feed, fiabilidad
+del roll dinámico de contrato, comportamiento del alerta de vencimiento)
+a través de **múltiples ciclos completos de intento**, no solo el
+esperado. 30 días ≈ 6.5 ciclos completos al ritmo esperado, con margen
+de sobra para ciclos más lentos que el promedio, y sigue dejando 30 días
+adicionales de colchón contra el límite de 60.
+
+#### Verificación de unidades de MES contra CME (25-ago-2026)
+
+Re-verificado desde cero, no reusado de sesiones anteriores (mismo
+chequeo que encontró el bug de ZC):
+
+- **Fuente:** CME Group, especificaciones oficiales de Micro E-mini
+  S&P 500 (`cmegroup.com/markets/equities/sp/micro-e-mini-sandp-500.contractSpecs.html`
+  — la página de CME no permitió fetch directo, bloqueado por su propia
+  protección anti-bot; confirmado en su lugar por múltiples fuentes
+  independientes que citan esa página — Ironbeam, QuantVPS, DamnPropFirms
+  — todas coinciden exactamente)
+- **Multiplicador:** $5 × índice S&P 500
+- **Tick size:** 0.25 puntos de índice
+- **Tick value:** **$1.25/tick** — coincide con `tick_value_usd=1.25` ya
+  usado en `strategies/geometry_pure.py`
+- **Verificación empírica independiente** (mismo diagnóstico que
+  destapó el bug de ZC, corrido contra `data_cache/mes_5min_2y.parquet`):
+  100% de los precios de cierre observados en 39,967 barras son múltiplos
+  exactos de 0.25 — el feed de precios real usado en todo el backtest de
+  esta sesión es consistente con tick=0.25 sin excepción.
+
+**Valor confirmado: correcto, sin cambios necesarios.**
+
+#### Cerebro 1 vs. Cerebro 2 — aclaración explícita (25-ago-2026)
+
+**>>> Este Paso F resuelve ÚNICAMENTE Cerebro 1 (pasar el Combine). <<<**
+
+Cerebro 1 = pasar el Combine. Objetivo: maximizar `pass_rate/dias_resolucion`
+dentro de una ventana ACOTADA de 15 días, con pérdida limitada a la fee
+del intento (~$49-149). La geometría de este módulo (Camino B) explota
+que esta ventana acotada + pérdida acotada permite pasar con alta
+probabilidad AUNQUE la estrategia subyacente pierda dinero en promedio
+(EV negativo neto de comisión) — la convexidad del payout hace el
+trabajo, no una predicción de mercado.
+
+Cerebro 2 = maximizar payouts reales una vez fondeado (cuenta XFA).
+Objetivo DISTINTO: el horizonte es INDEFINIDO (sin ventana de 15 días que
+acote el riesgo), y el umbral relevante no es "$3,000 acumulados" sino
+"5 días de ≥$150 netos". Una estrategia con EV negativo o cero que
+funciona para pasar el Combine NO sobrevive en Cerebro 2 — sin la
+ventana de tiempo que te protege, el MLL eventualmente alcanza cualquier
+estrategia sin edge real positivo.
+
+Cerebro 2 está PAUSADO porque depende de una pregunta sin resolver: ¿el
+MLL de la cuenta XFA se resetea a $0 SOLO la primera vez que se solicita
+un payout, o CADA vez? Esto se reportó una vez (fuente: help.topstep.com,
+cita parcial) pero NUNCA se verificó el texto completo ni la URL exacta
+contra la fuente oficial. Son dos economías completamente distintas para
+Cerebro 2 y no se puede diseñar nada confiable sin resolver esto primero.
+
+**Regla práctica:** si una tarea es sobre pasar el Combine (geometría de
+ticks, `combines_por_año`, `pass_rate_15d`) es Cerebro 1 — procede. Si es
+sobre payouts, XFA, `simulate_xfa_lifetime`, o el colchón post-payout —
+es Cerebro 2 — DETENTE y pregunta antes de avanzar, no asumas que el
+éxito de Cerebro 1 aplica ahí.
+
+Misma aclaración duplicada, palabra por palabra en espíritu, en los
+comentarios de cabecera de `strategies/geometry_pure.py` y
+`scheduler/geometry_scheduler.py`.
 

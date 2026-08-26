@@ -6,13 +6,37 @@ señal predictiva, barreras fijas en ticks) -- importada tanto por
 scheduler/geometry_scheduler.py (produccion/paper) como por cualquier
 backtest futuro. Mismo patron que strategies/combo2d.py.
 
->>> ESTO RESUELVE UNICAMENTE CEREBRO 1 (pasar el Combine). <<<
-Cerebro 2 (maximizar payouts en la cuenta fondeada XFA) sigue bloqueado
-en la pregunta sin resolver del MLL post-payout (ver GLITCH_RESEARCH_LOG.md,
-seccion Cerebro 2) -- NO usar nada de este modulo para Cerebro 2 sin
-resolver eso primero. La geometria que funciona para el Combine (ventana
-acotada de ~15 dias, perdida acotada a la fee) NO se traduce directo a
-una cuenta fondeada de horizonte indefinido.
+CEREBRO 1 (lo que este modulo resuelve) vs. CEREBRO 2 (pausado, NO
+tocar) — diferencia critica:
+
+Cerebro 1 = pasar el Combine. Objetivo: maximizar pass_rate/dias_resolucion
+dentro de una ventana ACOTADA de 15 dias, con perdida limitada a la fee
+del intento (~$49-149). La geometria de este modulo (Camino B) explota
+que esta ventana acotada + perdida acotada permite pasar con alta
+probabilidad AUNQUE la estrategia subyacente pierda dinero en promedio
+(EV negativo neto de comision) -- la convexidad del payout hace el
+trabajo, no una prediccion de mercado.
+
+Cerebro 2 = maximizar payouts reales una vez fondeado (cuenta XFA).
+Objetivo DISTINTO: el horizonte es INDEFINIDO (sin ventana de 15 dias que
+acote el riesgo), y el umbral relevante no es "$3,000 acumulados" sino
+"5 dias de >=$150 netos". Una estrategia con EV negativo o cero que
+funciona para pasar el Combine NO sobrevive en Cerebro 2 -- sin la
+ventana de tiempo que te protege, el MLL eventualmente alcanza cualquier
+estrategia sin edge real positivo.
+
+Cerebro 2 esta PAUSADO porque depende de una pregunta sin resolver: ¿el
+MLL de la cuenta XFA se resetea a $0 SOLO la primera vez que se solicita
+un payout, o CADA vez? Esto se reporto una vez (fuente: help.topstep.com,
+cita parcial) pero NUNCA se verifico el texto completo ni la URL exacta
+contra la fuente oficial. Son dos economias completamente distintas para
+Cerebro 2 y no se puede diseñar nada confiable sin resolver esto primero.
+
+Regla practica: si una tarea es sobre pasar el Combine (geometria de
+ticks, combines_por_año, pass_rate_15d) es Cerebro 1 -- procede. Si es
+sobre payouts, XFA, simulate_xfa_lifetime, o el colchon post-payout -- es
+Cerebro 2 -- DETENTE y pregunta antes de avanzar, no asumas que el exito
+de Cerebro 1 aplica ahi.
 
 DISEÑO: agnostico de producto a proposito. Un ProductSpec + un
 GeometryConfig describen TODO lo necesario para tradear cualquier
