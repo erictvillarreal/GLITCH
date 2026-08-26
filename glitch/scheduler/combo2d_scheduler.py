@@ -11,13 +11,13 @@ Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 import os, sys, json, logging, time, datetime as dt_module
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-import numpy as np
 from massive import RESTClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scheduler.telegram_bot import send
 from strategies.combo2d import decide_side
 from simulation.triple_barrier import compute_atr as _shared_compute_atr
+from execution.contracts import MASSIVE_API_KEY, get_front_month, check_expiry_alerts
 
 CT = ZoneInfo("America/Chicago")
 logging.basicConfig(
@@ -36,15 +36,6 @@ ATR_SL_MULT   = 1.5                                 # SL = 1.5 * ATR
 ATR_WINDOW    = 20                                  # barras para ATR
 LOG_FILE      = "combo2d_log.json"
 POLL_INTERVAL = 60  # segundos entre polls
-
-# SEGURIDAD (25-ago-2026): NUNCA un default literal aqui. Si falta la key,
-# el proceso debe morir ruidosamente al arrancar, no seguir en silencio con
-# una key hardcodeada en el repo (ver auditoria — la key vieja ya se filtro
-# al codigo fuente una vez).
-MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
-if not MASSIVE_API_KEY:
-    log.error("FATAL: falta MASSIVE_API_KEY (o POLYGON_API_KEY) en el entorno. Sin fallback -- abortando.")
-    sys.exit(1)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def ct_now(): return datetime.now(CT)
@@ -67,59 +58,16 @@ def is_trading_day():
     }
     return (now.year, now.month, now.day) not in holidays
 
-FRONT_MONTH_EXPIRY_ALERT_DAYS = 10  # dias habiles minimos antes de avisar por Telegram
-
-# REFACTOR (25-ago-2026): FRONT_MONTH ya no es un dict hardcodeado que
-# alguien tiene que acordarse de actualizar cada trimestre. Se resuelve
-# dinamicamente al arrancar cada corrida de run() via resolve_front_month()
-# (misma metodologia point-in-time date=+active=true+excluir-spreads que
-# scripts/fetch_mes_2y.py) y se cachea aqui para el resto de la corrida.
+# REFACTOR (25-ago-2026): resolucion de front-month movida a
+# execution/contracts.py -- unica fuente de verdad, compartida con
+# scheduler/geometry_scheduler.py. Ya no hay dict hardcodeado ni logica
+# duplicada aqui.
 _front_month_cache: dict[str, tuple[str, str]] = {}  # product -> (ticker, last_trade_date)
-
-def resolve_front_month(product: str) -> tuple[str, str]:
-    """
-    Contrato outright (no spread) con vencimiento mas cercano, vigente HOY.
-    Devuelve (ticker, last_trade_date_iso). Lanza si no encuentra ninguno --
-    fallar ruidosamente es preferible a tradear un ticker adivinado.
-    """
-    client = RESTClient(MASSIVE_API_KEY)
-    today_str = date.today().isoformat()
-    results = list(client.list_futures_contracts(
-        product_code=product, date=today_str, active=True, limit=100,
-    ))
-    candidates = []
-    for c in results:
-        ticker = getattr(c, "ticker", None) or c.get("ticker")
-        ltd = getattr(c, "last_trade_date", None) or c.get("last_trade_date")
-        if ticker and "-" not in ticker and ltd:
-            candidates.append((ticker, ltd))
-    if not candidates:
-        raise RuntimeError(f"resolve_front_month: sin contratos activos para {product} en {today_str}")
-    candidates.sort(key=lambda x: x[1])
-    return candidates[0]
-
-def get_front_month(product: str) -> str:
-    """Resuelve (con cache de una corrida) y devuelve solo el ticker."""
-    if product not in _front_month_cache:
-        _front_month_cache[product] = resolve_front_month(product)
-    return _front_month_cache[product][0]
-
-def check_front_month_expiry_alerts():
-    """Avisa por Telegram si algun contrato en uso vence en <10 dias habiles."""
-    for product, (ticker, ltd_str) in _front_month_cache.items():
-        ltd = datetime.strptime(ltd_str, "%Y-%m-%d").date()
-        days_left = int(np.busday_count(date.today(), ltd))
-        if days_left < FRONT_MONTH_EXPIRY_ALERT_DAYS:
-            log.warning(f"Contrato {ticker} ({product}) vence en {days_left} dias habiles ({ltd_str})")
-            send(f"""⚠️ GLITCH - COMBO2D | CONTRATO PROXIMO A VENCER
-{product}: {ticker}
-Vence: {ltd_str} ({days_left} dias habiles restantes)
-ACCION: verificar que el roll dinamico tome el siguiente contrato automaticamente""")
 
 def fetch_daily(product, n_days=15):
     """Descarga n_days de datos diarios via Massive."""
     try:
-        ticker = get_front_month(product)
+        ticker = get_front_month(product, _front_month_cache)
         client = RESTClient(MASSIVE_API_KEY)
         end   = date.today().isoformat()
         start = (date.today() - timedelta(days=n_days*2)).isoformat()
@@ -225,7 +173,7 @@ def run():
     direction_str = {1: "LONG", -1: "SHORT", 0: "NO_TRADE"}[side]
     log.info(f"Señal: {direction_str} | {reason}")
     log.info(f"Contratos en uso: {_front_month_cache}")
-    check_front_month_expiry_alerts()
+    check_expiry_alerts(_front_month_cache, send, "COMBO2D")
 
     if side == 0:
         msg = f"""GLITCH - COMBO2D

@@ -250,3 +250,32 @@ donde cero "edges" sobrevivieron escrutinio), Camino B dejaría de ser
 "sin necesidad de edge" para ESE producto específico. No se ha
 construido nada sobre esto — queda anotado, no usado.
 
+### Paso F — módulo de producción (25-ago-2026)
+
+Construido, agnóstico de producto, pendiente de revisión antes de
+conectar a Railway:
+
+- `strategies/geometry_pure.py` — única fuente de verdad de la lógica de
+  decisión (dirección, cálculo de barreras), importada tanto por el
+  scheduler como por cualquier backtest futuro. `CANDIDATES` registra
+  MES (activo, ganador validado), MGC y M2K (specs cargadas, `yf_ticker`
+  sin verificar — el scheduler se niega a correr esos productos hasta
+  que se verifique un símbolo real de feed en vivo, no se adivina)
+- `scheduler/geometry_scheduler.py` — loop de producción/paper. Rotar de
+  producto = cambiar `GLITCH_PRODUCT` (env var), no reescribir código
+- `execution/contracts.py` — resolución dinámica de front-month
+  (`resolve_front_month()`), ahora compartida también por
+  `combo2d_scheduler.py` (antes tenía su propia copia)
+- `tests/test_geometry_parity.py` — 14 tests: identidad de función
+  compartida, aritmética de barreras/dólares, nc nunca excede el cap
+  real de Topstep por producto, sin key hardcodeada
+- `DRY_RUN=true` por default — paper trading, sin excepción, hasta
+  decisión explícita separada
+
+**>>> Esto resuelve ÚNICAMENTE Cerebro 1 (pasar el Combine). <<<**
+Cerebro 2 (XFA, maximizar payouts) sigue exactamente donde estaba:
+bloqueado en la pregunta sin resolver del MLL post-payout (¿se resetea
+solo la primera vez o cada vez? — ver sección "Cerebro 2" arriba, fuente
+primaria de help.topstep.com nunca confirmada con el texto completo).
+Nada de este Paso F asume esa pregunta resuelta ni la toca.
+
