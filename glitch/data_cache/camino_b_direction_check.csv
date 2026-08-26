@@ -1,0 +1,19 @@
+geometria,periodo,direction,wr,pass_rate,blow_rate,avg_days,combines_ano
+G1 (grid winner),FULL (2y),always_short,0.7138,0.7301,0.2699,4.92,37.39
+G1 (grid winner),FULL (2y),always_long,0.7071,0.7169,0.2831,4.94,36.59
+G1 (grid winner),FULL (2y),alternate,0.7105,0.7239,0.2761,4.93,37.02
+G1 (grid winner),H1 (primera mitad),always_short,0.708,0.7185,0.2815,4.94,36.68
+G1 (grid winner),H1 (primera mitad),always_long,0.7032,0.7099,0.2901,4.95,36.16
+G1 (grid winner),H1 (primera mitad),alternate,0.7056,0.7144,0.2856,4.94,36.44
+G1 (grid winner),H2 (segunda mitad),always_short,0.7193,0.7399,0.2601,4.91,37.98
+G1 (grid winner),H2 (segunda mitad),always_long,0.712,0.7264,0.2736,4.92,37.19
+G1 (grid winner),H2 (segunda mitad),alternate,0.7157,0.7334,0.2666,4.92,37.59
+G2 (refinado),FULL (2y),always_short,0.7053,0.8227,0.1772,3.82,54.25
+G2 (refinado),FULL (2y),always_long,0.6959,0.8096,0.1904,3.84,53.12
+G2 (refinado),FULL (2y),alternate,0.7006,0.8155,0.1845,3.83,53.61
+G2 (refinado),H1 (primera mitad),always_short,0.7015,0.8171,0.1829,3.83,53.73
+G2 (refinado),H1 (primera mitad),always_long,0.697,0.8107,0.1893,3.84,53.23
+G2 (refinado),H1 (primera mitad),alternate,0.6992,0.8143,0.1857,3.84,53.49
+G2 (refinado),H2 (segunda mitad),always_short,0.7086,0.8264,0.1736,3.81,54.61
+G2 (refinado),H2 (segunda mitad),always_long,0.6961,0.8103,0.1898,3.84,53.16
+G2 (refinado),H2 (segunda mitad),alternate,0.7024,0.8189,0.1811,3.83,53.86
