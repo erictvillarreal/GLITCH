@@ -406,3 +406,99 @@ Misma aclaración duplicada, palabra por palabra en espíritu, en los
 comentarios de cabecera de `strategies/geometry_pure.py` y
 `scheduler/geometry_scheduler.py`.
 
+#### Criterio de graduación a DRY_RUN=false (25-ago-2026)
+
+30 días sin errores técnicos NO es suficiente por sí solo. Criterio
+agregado — **ambos** deben cumplirse:
+
+1. 30 días calendario transcurridos sin errores técnicos (crashes,
+   fallos de resolución de contrato, fallos de feed no recuperados)
+2. **El `pass_rate` empírico observado en paper** (sobre todos los
+   ciclos que se completen en esos 30 días — a ~3.66 días/ciclo
+   promedio, se esperan ~8 ciclos, N pequeño) **debe estar dentro de
+   ~15-20 puntos porcentuales del 81.4% teórico** (es decir, no bajar de
+   ~61-66% empírico). Si cae más abajo que eso, es señal de que algo en
+   producción real (slippage del feed, timing de ejecución contra el
+   backtest de 5min) está erosionando la geometría — **no se pasa a
+   `DRY_RUN=false` aunque los 30 días ya hayan transcurrido sin errores
+   técnicos.** Revisar la causa antes de reconsiderar.
+
+Este criterio vive por ahora solo en este documento — es una decisión
+humana al final del período de paper, no algo que el scheduler evalúe
+automáticamente todavía.
+
+#### Despliegue a Railway — bloqueado en este ambiente, paquete listo (25-ago-2026)
+
+**No se pudo conectar a Railway desde esta sesión: sin CLI de Railway
+instalado, sin credenciales configuradas, sin git remote apuntando al
+repo que Railway vigila.** Nada de lo que sigue se pudo ejecutar
+directamente — es la preparación para que el usuario (u otra sesión con
+acceso) lo haga.
+
+**Inconsistencia encontrada en la configuración de deploy — 4 archivos,
+3 comandos de arranque distintos:**
+
+| Archivo | Comando de arranque |
+|---|---|
+| `nixpacks.toml` (raíz) | `python glitch/scheduler/glitch_scheduler.py` |
+| `Procfile` (raíz) | `python glitch/scheduler/combo2d_scheduler.py` |
+| `glitch/Procfile` | `python scheduler/glitch_scheduler.py` |
+| `glitch/railway.json` | `python scheduler/glitch_scheduler.py` |
+
+**Cuál gobierna el deploy real de combo2d hoy en Railway: DESCONOCIDO,
+pendiente de confirmar por el usuario en el dashboard.** No se puede
+inferir de forma confiable desde los archivos locales — 3 de los 4
+apuntan a `glitch_scheduler.py` (no `combo2d_scheduler.py`, que es el
+que el usuario confirmó que corre en Railway hoy en DRY_RUN), lo que
+sugiere que el servicio activo probablemente tiene un "Start Command"
+override configurado a mano directamente en el dashboard de Railway,
+ignorando estos 4 archivos por completo. Verificar en Railway →
+servicio combo2d → Settings → Start Command antes de asumir cualquier
+cosa sobre cuál archivo es autoritativo.
+
+**Preparado, sin tocar la configuración de combo2d:**
+
+- `Procfile` (raíz) — agregada una línea nueva, la de combo2d intacta:
+  ```
+  worker: python glitch/scheduler/combo2d_scheduler.py
+  worker-geometry: python glitch/scheduler/geometry_scheduler.py
+  ```
+  Esto por sí solo NO crea un servicio nuevo en Railway — Railway
+  necesita que el usuario cree explícitamente un segundo servicio
+  apuntando a este mismo repo, y le asigne `worker-geometry` (o un
+  Start Command manual equivalente) en su propia configuración. Dado
+  que no se pudo confirmar qué archivo gobierna el deploy real, la
+  ruta más segura para el usuario es fijar el Start Command a mano en
+  el nuevo servicio, no confiar en que Railway detecte el Procfile
+  automáticamente.
+
+- **Variables de entorno requeridas para el servicio nuevo** (mismos
+  nombres que combo2d, mismo patrón fail-loud si faltan — ver
+  `execution/contracts.py` y `scheduler/telegram_bot.py`):
+  - `MASSIVE_API_KEY` (o `POLYGON_API_KEY`)
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_CHAT_ID`
+  - `DRY_RUN=true` (default del código si no se setea, pero fijarla
+    explícita en Railway evita ambigüedad)
+  - `GLITCH_PRODUCT=MES` (default del código, mismo motivo)
+
+- **Cron sugerido:** `25 14 * * 1-5` (9:25 AM CT L-V) — mismo horario
+  que combo2d, punto de partida razonable dado que la entrada espera a
+  las 9:30 CT internamente igual que combo2d. Ajustar si en algún
+  momento ambos servicios necesitan coordinarse contra la MISMA cuenta
+  real (no aplica todavía — los dos siguen en DRY_RUN).
+
+**Confirmado antes de dejar esto listo para push:** suite completa
+(96/96) pasando, `grep` de secretos limpio en todo el checkout (ver
+comando abajo, repetir antes de cualquier push real).
+
+```bash
+grep -rn "6F2vDNs8WtwPJLl_TtnWSksMzYPFtdYs\|AAHdGlnbM0ACf6HvUS67f74tWaNowuUtsY" . 2>/dev/null | grep -v "assert\|not in src"
+```
+
+**No se hizo push a ningún remote — no hay remote configurado.**
+Cuando el usuario conecte Railway (o dé acceso a esta sesión), el
+siguiente paso es: confirmar el Start Command real de combo2d en el
+dashboard, crear el servicio nuevo con las env vars de arriba, y
+recién ahí evaluar el push.
+
