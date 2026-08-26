@@ -47,7 +47,13 @@ HOLD = 100
 
 PRODUCTS = {
     # label: (parquet_stem, tick_size, tick_value_usd, commission_rt, nc_cap, familia)
-    "ZC (Corn)":        ("zc",  0.0025,    12.50,  5.28, 5,  "Agricola"),
+    # BUG FIX (25-ago-2026): ZC (grano) se cotiza en CENTAVOS/bushel (close~437 =
+    # 437 centavos = $4.37) pero el tick_size original (0.0025) estaba en
+    # DOLARES/bushel -- mismatch de unidades de 100x contra el feed de precios,
+    # que corrompia la economia en $ (WR/labeling de barras no se vio afectado,
+    # se cancelaba internamente, pero avg_win_usd/avg_loss_usd si). Tick real:
+    # 1/4 de centavo = 0.25 en las mismas unidades que el feed (centavos).
+    "ZC (Corn)":        ("zc",  0.25,      12.50,  5.28, 5,  "Agricola"),
     "ZN (10Y Note)":    ("zn",  0.015625,  15.625, 2.62, 5,  "Tasas"),
     "GC/MGC (Gold)":    ("mgc", 0.10,      1.00,   1.92, 30, "Metales"),
     "6E/M6E (Euro FX)": ("m6e", 0.0001,    1.25,   1.00, 50, "FX mayor"),

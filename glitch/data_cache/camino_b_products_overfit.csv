@@ -1,5 +1,5 @@
 producto,gap_h1,gap_h2,veredicto
-ZC (Corn),-0.2,-1.9,direccion consistente ambas mitades
+ZC (Corn),0.64,-0.84,"NO consistente -- sobreajuste, usar alternar"
 ZN (10Y Note),2.82,-0.42,"NO consistente -- sobreajuste, usar alternar"
 GC/MGC (Gold),0.16,0.3,direccion consistente ambas mitades
 6E/M6E (Euro FX),4.43,3.29,direccion consistente ambas mitades

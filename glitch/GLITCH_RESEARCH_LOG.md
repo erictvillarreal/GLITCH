@@ -189,15 +189,31 @@ como edge real. No se usó para el candidato final.
 ### Extensión a 6 productos (7 pedidos, MBT excluido por hueco de datos
 de 13 meses — ver `scripts/camino_b_products.py`)
 
+> **BUG encontrado y corregido (25-ago-2026, mismo día):** el primer
+> corrido de esta tabla tenía ZC con `tick_size=0.0025` (dólares/bushel)
+> aplicado a un feed de precios cotizado en CENTAVOS/bushel (close~437 =
+> $4.37) — mismatch de unidades de 100x, específico de ZC porque es el
+> único de los 6 productos cotizado en centavos en vez de dólares/puntos/
+> indice directamente. El labeling de win/loss de barras no se vio
+> afectado (se cancelaba internamente en términos de distancia de
+> precio), pero `avg_win_usd`/`avg_loss_usd` sí — inflados 100x, lo que
+> hacía que un solo trade casi siempre pasara o quebrara la cuenta de
+> inmediato. Eso es lo que producía el 55.7 combines/año original y el
+> "ZC lidera" — un artefacto de bug, no una señal real. Corregido
+> (`tick_size=0.25`) y re-corrido. Los otros 5 productos se verificaron
+> contra su unidad de cotización natural (ZN en puntos, MGC en $/oz, M6E
+> en tasa decimal, M2K en puntos de índice, MCL en $/barril) — todos
+> consistentes, sin el mismo problema.
+
 | Producto | Familia | RR | nc | combines/año | Lectura |
 |---|---|---|---|---|---|
-| ZC (Corn) | Agrícola | 0.33 | 5 | 55.7 | consistente, sesgo direccional despreciable (<4%) |
-| GC/MGC (Gold) | Metales | 0.33 | 30 | 52.7 | consistente, sesgo despreciable |
-| RTY/M2K (Russell) | Equity index (control) | 0.40 | 50 | 51.9 | consistente, sesgo despreciable |
+| MES/MNQ | Equity index | 0.40 | 40 | **53.6** | consistente, sesgo despreciable (~1%) |
+| GC/MGC (Gold) | Metales | 0.33 | 30 | **52.7** | consistente, sesgo despreciable |
+| RTY/M2K (Russell) | Equity index (control) | 0.40 | 50 | **51.9** | consistente, sesgo despreciable — a 1.4% de Gold, esencialmente empatados |
 | CL/MCL (Crude) | Energía | 0.40 | 30 | 48.2 | consistente, sesgo moderado (4-8%) |
 | 6E/M6E (Euro FX) | FX mayor | 0.50 | 50 | 37.4 | consistente, sesgo **~10% — el más grande de la sesión, marcar para escrutinio futuro** |
-| ZN (10Y Note) | Tasas | 0.50 | 5 | 21.4 | **dirección NO consistente entre mitades — usar alternar, no direccional** |
-| MES/MNQ | Equity index | 0.40 | 40 | 53.6 | consistente, sesgo despreciable (~1%) |
+| ZN (10Y Note) | Tasas | 0.50 | 5 | 21.4 | dirección NO consistente entre mitades — usar alternar |
+| ZC (Corn) | Agrícola | 0.48 | 5 | 14.1 | **último lugar, ya corregido** — dirección tampoco consistente. Handicap estructural: nc≤5 (sin micro-contrato) no genera suficiente velocidad de $ contra el profit target fijo de $3,000, igual que ZN |
 
 Reproducir: `scripts/camino_b_products.py` → `data_cache/camino_b_products_grid.csv`,
 `_overfit.csv`, `_final.csv` (versionados en git, no son output efímero).
@@ -205,15 +221,26 @@ Reproducir: `scripts/camino_b_products.py` → `data_cache/camino_b_products_gri
 ### Conclusión explícita
 
 **Camino B queda validado como fenómeno de geometría/estructura de
-payout del Combine, NO de microestructura específica de un instrumento.**
-Seis familias de activos completamente distintas — equity index, tasas,
-metales, FX, energía, agrícolas — con drivers, horarios de liquidez y
-comportamiento de participantes totalmente diferentes entre sí, caen
-todas en la misma banda de 37-56 combines/año bajo la misma regla de
-barrera fija sin señal predictiva. Eso es exactamente lo que predice la
-premisa original de Camino B (WR≈SL/(SL+TP) por geometría de gambler's
-ruin, no por edge de ningún activo particular) y es evidencia en contra
-de que el resultado sea un artefacto propio de MES/MNQ.
+payout del Combine, NO de microestructura específica de un instrumento
+— con una salvedad importante que el bug de ZC dejó más clara, no
+menos.** Cuatro familias de activos completamente distintas — equity
+index (control), metales, energía, y el propio MES/MNQ — con drivers,
+horarios de liquidez y comportamiento de participantes totalmente
+diferentes entre sí, caen todas en la misma banda de 48-54 combines/año
+bajo la misma regla de barrera fija sin señal predictiva. Eso es
+exactamente lo que predice la premisa original de Camino B (WR≈SL/(SL+TP)
+por geometría de gambler's ruin, no por edge de ningún activo particular).
+
+La salvedad: ZN y ZC (los dos con nc≤5, sin micro-contrato disponible)
+quedan bien por debajo de esa banda (21.4 y 14.1) — no porque la
+geometría falle ahí, sino porque el profit target de $3,000 es fijo en
+dólares mientras el tamaño de posición disponible no escala con el
+instrumento. La conclusión correcta no es "la geometría funciona en
+cualquier producto" sino **"la geometría funciona en cualquier producto
+con suficiente nc disponible (vía micro-contrato o point-value alto) para
+generar velocidad de $ comparable al profit target fijo"** — un matiz
+que el bug original (que hacía ver a ZC como ganador) habría escondido
+por completo.
 
 La única grieta real: 6E muestra un sesgo direccional (~10%,
 consistente en ambas mitades) más grande que cualquier otro producto,

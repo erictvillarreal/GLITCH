@@ -1,7 +1,7 @@
 producto,sl_ticks,tp_ticks,rr,nc,wr_alternate,pass_rate,blow_rate,combines_ano,veredicto_temporal
-ZC (Corn),920,304,0.33,5,0.6963,0.909,0.091,55.72,direccion consistente ambas mitades
 GC/MGC (Gold),136,45,0.331,30,0.6997,0.7835,0.2165,52.66,direccion consistente ambas mitades
 RTY/M2K (Russell),200,80,0.4,50,0.6865,0.7954,0.2046,51.92,direccion consistente ambas mitades
 CL/MCL (Crude),94,38,0.404,30,0.6645,0.7286,0.2714,48.16,direccion consistente ambas mitades
 6E/M6E (Euro FX),34,17,0.5,50,0.5786,0.5879,0.4121,37.39,direccion consistente ambas mitades
 ZN (10Y Note),20,10,0.5,5,0.5636,0.4469,0.5531,21.41,"NO consistente -- sobreajuste, usar alternar"
+ZC (Corn),25,12,0.48,5,0.5652,0.3675,0.6325,14.12,"NO consistente -- sobreajuste, usar alternar"
