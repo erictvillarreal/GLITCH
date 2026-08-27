@@ -11,11 +11,13 @@ Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 import os, sys, json, logging, time, datetime as dt_module
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-import numpy as np
 from massive import RESTClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scheduler.telegram_bot import send
+from strategies.combo2d import decide_side
+from simulation.triple_barrier import compute_atr as _shared_compute_atr
+from execution.contracts import MASSIVE_API_KEY, get_front_month, check_expiry_alerts
 
 CT = ZoneInfo("America/Chicago")
 logging.basicConfig(
@@ -56,18 +58,17 @@ def is_trading_day():
     }
     return (now.year, now.month, now.day) not in holidays
 
-# Front month map — actualizar trimestralmente
-FRONT_MONTH = {
-    "MES": "MESU6",
-    "MNQ": "MNQU6",
-}
+# REFACTOR (25-ago-2026): resolucion de front-month movida a
+# execution/contracts.py -- unica fuente de verdad, compartida con
+# scheduler/geometry_scheduler.py. Ya no hay dict hardcodeado ni logica
+# duplicada aqui.
+_front_month_cache: dict[str, tuple[str, str]] = {}  # product -> (ticker, last_trade_date)
 
 def fetch_daily(product, n_days=15):
     """Descarga n_days de datos diarios via Massive."""
     try:
-        ticker = FRONT_MONTH[product]
-        key    = os.getenv("POLYGON_API_KEY", "6F2vDNs8WtwPJLl_TtnWSksMzYPFtdYs")
-        client = RESTClient(key)
+        ticker = get_front_month(product, _front_month_cache)
+        client = RESTClient(MASSIVE_API_KEY)
         end   = date.today().isoformat()
         start = (date.today() - timedelta(days=n_days*2)).isoformat()
         bars  = list(client.list_futures_aggregates(
@@ -104,17 +105,27 @@ def fetch_intraday(ticker):
         return None
 
 def compute_atr(bars, window=20):
-    """ATR simple sobre barras recientes."""
+    """
+    ATR simple sobre barras recientes.
+    REFACTOR (25-ago-2026): delega a simulation.triple_barrier.compute_atr
+    (unica fuente de verdad) en vez de reimplementar el true-range aqui.
+    atr_series[-1] es exactamente equivalente a la formula original
+    (mean(tr[-window:])), porque rolling(window, min_periods=1).mean() en
+    la ultima posicion promedia las mismas ultimas `window` barras.
+    """
     if bars is None or len(bars) < 3: return None
     h = bars['high'].values; l = bars['low'].values; c = bars['close'].values
-    tr = np.maximum(h-l, np.maximum(np.abs(h-np.roll(c,1)), np.abs(l-np.roll(c,1))))
-    tr[0] = h[0]-l[0]
-    return float(np.mean(tr[-window:]))
+    atr_series = _shared_compute_atr(h, l, c, window)
+    return float(atr_series[-1])
 
 def compute_signal():
     """
     Genera la señal combo_2d usando Yahoo datos diarios.
     Retorna: (side, reason) donde side = 1 (long) / -1 (short) / 0 (no trade)
+
+    REFACTOR (25-ago-2026): la decision (dado ret_prev/ret_2d de MES y MNQ)
+    delega a strategies.combo2d.decide_side() -- unica fuente de verdad,
+    compartida con el backtest (ver tests/test_combo2d_parity.py).
     """
     mes = fetch_daily("MES", n_days=15)
     mnq = fetch_daily("MNQ", n_days=15)
@@ -134,23 +145,7 @@ def compute_signal():
     log.info(f"MES: ret_prev={mes_ret_prev:.4f} ret_2d={mes_ret_2d:.4f}")
     log.info(f"MNQ: ret_prev={mnq_ret_prev:.4f} ret_2d={mnq_ret_2d:.4f}")
 
-    # Condicion combo_2d: sign(ret_2d) != sign(ret_prev) en ambos
-    mes_ok = np.sign(mes_ret_2d) != np.sign(mes_ret_prev) and abs(mes_ret_prev) > 0.0001
-    mnq_ok = np.sign(mnq_ret_2d) != np.sign(mnq_ret_prev) and abs(mnq_ret_prev) > 0.0001
-
-    if not mes_ok:
-        return 0, f"mes_no_signal (ret_2d={mes_ret_2d:.4f} ret_prev={mes_ret_prev:.4f})"
-    if not mnq_ok:
-        return 0, f"mnq_no_confirm (ret_2d={mnq_ret_2d:.4f} ret_prev={mnq_ret_prev:.4f})"
-
-    # Ambos confirman — la direccion es la de T-2 (esperamos que T hoy revierta T-1)
-    mes_side = 1 if mes_ret_2d > 0 else -1
-    mnq_side = 1 if mnq_ret_2d > 0 else -1
-
-    if mes_side != mnq_side:
-        return 0, f"direccion_discrepante (mes={mes_side} mnq={mnq_side})"
-
-    return mes_side, f"combo_2d_confirmed (mes_2d={mes_ret_2d:.4f} mes_prev={mes_ret_prev:.4f})"
+    return decide_side(mes_ret_prev, mes_ret_2d, mnq_ret_prev, mnq_ret_2d)
 
 def run():
     import pandas as pd  # import aqui para no requerir en el top si falla
@@ -177,6 +172,8 @@ def run():
     side, reason = compute_signal()
     direction_str = {1: "LONG", -1: "SHORT", 0: "NO_TRADE"}[side]
     log.info(f"Señal: {direction_str} | {reason}")
+    log.info(f"Contratos en uso: {_front_month_cache}")
+    check_expiry_alerts(_front_month_cache, send, "COMBO2D")
 
     if side == 0:
         msg = f"""GLITCH - COMBO2D

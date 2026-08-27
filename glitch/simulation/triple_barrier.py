@@ -108,20 +108,28 @@ def label_triple_barrier(
         exit_price   = entry_price
         exit_i       = min(entry_i + cfg.max_holding_bars, n - 1)
 
-        # Walk bars forward to find first barrier touch
+        # Walk bars forward to find first barrier touch.
+        # BUGFIX (25-ago-2026): si una sola barra toca TP y SL a la vez (barra
+        # ambigua -- el bar es mas ancho que la distancia entre barreras), el
+        # orden de los checks decidia el resultado, y el orden anterior
+        # chequeaba el WIN primero para AMBOS lados (long y short), inflando
+        # el win rate artificialmente en cualquier config con barreras
+        # angostas relativas al rango de la barra (ver quantify_ambiguous_bars.py).
+        # Fix (metodologia de Lopez de Prado): en caso ambiguo, asumir la
+        # PERDIDA -- chequear el SL primero.
         for j in range(entry_i + 1, exit_i + 1):
             h, l = high[j], low[j]
 
             if side == 1:   # Long
-                if h >= upper:
-                    label = 1;  exit_price = upper; exit_i = j; break
                 if l <= lower:
                     label = -1; exit_price = lower; exit_i = j; break
-            else:            # Short
-                if l <= upper:
+                if h >= upper:
                     label = 1;  exit_price = upper; exit_i = j; break
+            else:            # Short
                 if h >= lower:
                     label = -1; exit_price = lower; exit_i = j; break
+                if l <= upper:
+                    label = 1;  exit_price = upper; exit_i = j; break
         else:
             # BUGFIX (12-ago-2026): si el loop termina SIN hacer break (no toco
             # ni TP ni SL dentro de max_holding_bars), exit_price se quedaba

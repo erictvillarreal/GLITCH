@@ -13,31 +13,43 @@
 - Fuente: Massive/Polygon, Futures Starter plan ($29/mes, vence sep-2026)
 - Cache: `data_cache/mes_5min_2y.parquet`
 
+> **AUDITORIA (25-ago-2026):** el `data_cache/mes_5min_2y.parquet` que existe
+> HOY en el checkout fue re-descargado el 25-ago-2026 (39,256 barras RTH,
+> distinto conteo al 34,619 citado arriba) — es un dataset DISTINTO al que
+> produjo los numeros de esta pagina, no una confirmacion de que sigan
+> vigentes. Ningun numero de esta pagina tiene un script en este checkout
+> que lo reproduzca exactamente. Regla aplicada sin excepciones (hubo un
+> caso confirmado de un numero fabricado por otra sesion de IA colandose
+> como real -- $134,174 en el analisis de Cerebro 2): todo numero abajo
+> queda marcado **[NO VERIFICADO — posible contaminación de otra sesión,
+> no usar hasta reproducir]** hasta que exista un comando/script en este
+> repo que lo reproduzca.
+
 ### Señales con base estadística real (correlaciones brutas, sin estrategia)
-| Factor | r | p-val | Interpretación |
-|--------|---|-------|----------------|
-| ret_prev día→día | -0.224 | 0.0000 | Mean-reversion diaria real |
-| ret_2d_atras | +0.177 | 0.0001 | Continuación T-2 |
-| Autocorr intradiaria lag-1 | -0.012 | 0.031 | MR intradía débil |
-| 14:xx lag-1 | -0.063 | 0.0002 | MR fuerte en última hora |
-| 9:xx lag-1 | -0.046 | 0.021 | MR apertura |
-| 12:xx lag-1 | +0.061 | 0.0000 | MOMENTUM mediodía |
+| Factor | r | p-val | Interpretación | Estado |
+|--------|---|-------|----------------|--------|
+| ret_prev día→día | -0.224 | 0.0000 | Mean-reversion diaria real | [NO VERIFICADO] |
+| ret_2d_atras | +0.177 | 0.0001 | Continuación T-2 | [NO VERIFICADO] |
+| Autocorr intradiaria lag-1 | -0.012 | 0.031 | MR intradía débil | [NO VERIFICADO] |
+| 14:xx lag-1 | -0.063 | 0.0002 | MR fuerte en última hora | [NO VERIFICADO] |
+| 9:xx lag-1 | -0.046 | 0.021 | MR apertura | [NO VERIFICADO] |
+| 12:xx lag-1 | +0.061 | 0.0000 | MOMENTUM mediodía | [NO VERIFICADO] |
 
 ### Estrategias probadas y descartadas
-| Estrategia | Walk-forward p | mean_pass (15d) | Veredicto |
-|-----------|---------------|-----------------|-----------|
-| S10 ORB Fade | ~0.50 (no testado limpio) | 4.1% | Descartado |
-| ORB Breakout | EV negativo todas configs | <47% | Descartado |
-| MR día-a-día (base) | p=0.165 | 56.2% (15d) | Insuficiente |
-| MR día-a-día (combo_2d) | p=0.081 | 64.8% (15d) / 55.9% (25d) | Candidato débil |
-| Fade intradía multi-ventana | Bug en WF, EV<0 muestra limpia | Inválido | Descartado |
+| Estrategia | Walk-forward p | mean_pass (15d) | Veredicto | Estado |
+|-----------|---------------|-----------------|-----------|--------|
+| S10 ORB Fade | ~0.50 (no testado limpio) | 4.1% | Descartado | [NO VERIFICADO] |
+| ORB Breakout | EV negativo todas configs | <47% | Descartado | [NO VERIFICADO] |
+| MR día-a-día (base) | p=0.165 | 56.2% (15d) | Insuficiente | [NO VERIFICADO — ver scripts/wf_mr_pure.py, reproduccion fresca del 25-ago-2026 dio p=0.4444, no 0.165, causa aun sin resolver] |
+| MR día-a-día (combo_2d) | p=0.081 | 64.8% (15d) / 55.9% (25d) | Candidato débil | [NO VERIFICADO — ver scripts/wf_combo2d.py, reproduccion fresca del 25-ago-2026 dio p=0.4537, no 0.081, causa aun sin resolver] |
+| Fade intradía multi-ventana | Bug en WF, EV<0 muestra limpia | Inválido | Descartado | [NO VERIFICADO] |
 
 ### Lecciones metodológicas críticas
-1. **Nunca reportar muestra completa sin walk-forward** — combo_2d dio 77% en muestra, 56% en WF
-2. **Verificar EV simple antes de triple barrier** — el fade intradía tenía EV=-0.000409 simple, el bug de WF lo ocultó
-3. **La correlación bruta no implica PnL** — r=-0.063 en 14:xx es real pero no se convierte en estrategia rentable directamente
-4. **La geometría del video (RR=0.33, WR=75%) es EV=0 sin edge** — solo funciona si la señal tiene esa geometría natural
-5. **p<0.05 en WF con N_trades>200 es el criterio mínimo** — no negociable
+1. **Nunca reportar muestra completa sin walk-forward** — combo_2d dio 77% en muestra, 56% en WF *(cifras [NO VERIFICADO] — no reproducidas en este checkout, 25-ago-2026)*
+2. **Verificar EV simple antes de triple barrier** — el fade intradía tenía EV=-0.000409 simple, el bug de WF lo ocultó *(cifra [NO VERIFICADO])*
+3. **La correlación bruta no implica PnL** — r=-0.063 en 14:xx es real pero no se convierte en estrategia rentable directamente *(cifra [NO VERIFICADO], ver tabla de arriba)*
+4. **La geometría del video (RR=0.33, WR=75%) es EV=0 sin edge** — solo funciona si la señal tiene esa geometría natural. *(Este principio SI fue re-verificado el 25-ago-2026 contra MES real con el bug de barreras ambiguas corregido — ver scripts/revalidate_geometry_table.py: WR empirico para RR=0.33 fue 71.7%, no exactamente 75%, con sesgo sistematico documentado abajo. El principio cualitativo se sostiene; el numero exacto no.)*
+5. **p<0.05 en WF con N_trades>200 es el criterio mínimo** — no negociable *(regla metodologica, no un numero a verificar — sigue vigente; ninguno de los dos candidatos reproducidos el 25-ago-2026 la cumple: combo_2d N=193, MR-pura N=501 pero p=0.44 en ambos)*
 
 ---
 
@@ -141,4 +153,365 @@
 - Criterio de éxito: EV simple >0 con t-test p<0.05
 - Si pasa: proceder a triple barrier y walk-forward
 - Si falla: descartar señal 14:xx definitivamente
+
+---
+
+## Consolidación — Camino B: geometría pura (25-ago-2026)
+
+A diferencia de todo lo demás en este log, lo que sigue **SÍ tiene script
+reproducible en este checkout** (listado en cada sección) y fue corrido
+sobre datos reales descargados el mismo 25-ago-2026 — no hereda el
+`[NO VERIFICADO]` del resto del documento. Contexto completo: bug de
+barreras ambiguas (`simulation/triple_barrier.py`) confirmado y
+corregido, `combo_2d`/MR-pura NO reprodujeron el p=0.149 histórico (ver
+tabla de arriba, sigue sin resolver — Camino B no depende de eso, es
+edge-free por diseño).
+
+### Candidato ganador MES/MNQ
+
+- **Geometría:** SL=100/TP=40 ticks (RR=0.40), triple-barrier ATR NO
+  aplica aquí — son ticks fijos, no ATR-escalados
+- **Dirección:** alternar (no direccional — el sesgo direccional
+  encontrado es ruido, ver abajo)
+- **nc=40** (no 50 — doble margen de seguridad: límite duro de Topstep
+  + sospecha de sobreajuste en la dimensión dirección)
+- **Resultado:** WR≈70.6% (punto medio del bracket empírico
+  optimista/conservador), pass_rate≈81.6%, blow_rate≈18.5%,
+  **53.6 combines/año**, ~3.8 días promedio de resolución
+- Reproducir: `scripts/camino_b_direction_check.py` (geometría "G2")
+
+**Sesgo direccional (always_short vs. alternar):** +0.24 a +0.75
+combines/año (0.6-1.4% relativo), consistente en ambas mitades
+temporales, pero del mismo orden que el error estándar del WR a ese N de
+trades (~0.32pp) — se lee como ruido con signo consistente por azar, no
+como edge real. No se usó para el candidato final.
+
+### Extensión a 6 productos (7 pedidos, MBT excluido por hueco de datos
+de 13 meses — ver `scripts/camino_b_products.py`)
+
+> **BUG encontrado y corregido (25-ago-2026, mismo día):** el primer
+> corrido de esta tabla tenía ZC con `tick_size=0.0025` (dólares/bushel)
+> aplicado a un feed de precios cotizado en CENTAVOS/bushel (close~437 =
+> $4.37) — mismatch de unidades de 100x, específico de ZC porque es el
+> único de los 6 productos cotizado en centavos en vez de dólares/puntos/
+> indice directamente. El labeling de win/loss de barras no se vio
+> afectado (se cancelaba internamente en términos de distancia de
+> precio), pero `avg_win_usd`/`avg_loss_usd` sí — inflados 100x, lo que
+> hacía que un solo trade casi siempre pasara o quebrara la cuenta de
+> inmediato. Eso es lo que producía el 55.7 combines/año original y el
+> "ZC lidera" — un artefacto de bug, no una señal real. Corregido
+> (`tick_size=0.25`) y re-corrido. Los otros 5 productos se verificaron
+> contra su unidad de cotización natural (ZN en puntos, MGC en $/oz, M6E
+> en tasa decimal, M2K en puntos de índice, MCL en $/barril) — todos
+> consistentes, sin el mismo problema.
+
+| Producto | Familia | RR | nc | combines/año | Lectura |
+|---|---|---|---|---|---|
+| MES/MNQ | Equity index | 0.40 | 40 | **53.6** | consistente, sesgo despreciable (~1%) |
+| GC/MGC (Gold) | Metales | 0.33 | 30 | **52.7** | consistente, sesgo despreciable |
+| RTY/M2K (Russell) | Equity index (control) | 0.40 | 50 | **51.9** | consistente, sesgo despreciable — a 1.4% de Gold, esencialmente empatados |
+| CL/MCL (Crude) | Energía | 0.40 | 30 | 48.2 | consistente, sesgo moderado (4-8%) |
+| 6E/M6E (Euro FX) | FX mayor | 0.50 | 50 | 37.4 | consistente, sesgo **~10% — el más grande de la sesión, marcar para escrutinio futuro** |
+| ZN (10Y Note) | Tasas | 0.50 | 5 | 21.4 | dirección NO consistente entre mitades — usar alternar |
+| ZC (Corn) | Agrícola | 0.48 | 5 | 14.1 | **último lugar, ya corregido** — dirección tampoco consistente. Handicap estructural: nc≤5 (sin micro-contrato) no genera suficiente velocidad de $ contra el profit target fijo de $3,000, igual que ZN |
+
+Reproducir: `scripts/camino_b_products.py` → `data_cache/camino_b_products_grid.csv`,
+`_overfit.csv`, `_final.csv` (versionados en git, no son output efímero).
+
+### Conclusión explícita
+
+**Camino B queda validado como fenómeno de geometría/estructura de
+payout del Combine, NO de microestructura específica de un instrumento
+— con una salvedad importante que el bug de ZC dejó más clara, no
+menos.** Cuatro familias de activos completamente distintas — equity
+index (control), metales, energía, y el propio MES/MNQ — con drivers,
+horarios de liquidez y comportamiento de participantes totalmente
+diferentes entre sí, caen todas en la misma banda de 48-54 combines/año
+bajo la misma regla de barrera fija sin señal predictiva. Eso es
+exactamente lo que predice la premisa original de Camino B (WR≈SL/(SL+TP)
+por geometría de gambler's ruin, no por edge de ningún activo particular).
+
+La salvedad: ZN y ZC (los dos con nc≤5, sin micro-contrato disponible)
+quedan bien por debajo de esa banda (21.4 y 14.1) — no porque la
+geometría falle ahí, sino porque el profit target de $3,000 es fijo en
+dólares mientras el tamaño de posición disponible no escala con el
+instrumento. La conclusión correcta no es "la geometría funciona en
+cualquier producto" sino **"la geometría funciona en cualquier producto
+con suficiente nc disponible (vía micro-contrato o point-value alto) para
+generar velocidad de $ comparable al profit target fijo"** — un matiz
+que el bug original (que hacía ver a ZC como ganador) habría escondido
+por completo.
+
+La única grieta real: 6E muestra un sesgo direccional (~10%,
+consistente en ambas mitades) más grande que cualquier otro producto,
+incluyendo MES. Si eso se llegara a confirmar como edge real (no se ha
+intentado romperlo todavía — mismo estándar que el resto de la sesión,
+donde cero "edges" sobrevivieron escrutinio), Camino B dejaría de ser
+"sin necesidad de edge" para ESE producto específico. No se ha
+construido nada sobre esto — queda anotado, no usado.
+
+### Paso F — módulo de producción (25-ago-2026)
+
+Construido, agnóstico de producto, pendiente de revisión antes de
+conectar a Railway:
+
+- `strategies/geometry_pure.py` — única fuente de verdad de la lógica de
+  decisión (dirección, cálculo de barreras), importada tanto por el
+  scheduler como por cualquier backtest futuro. `CANDIDATES` registra
+  MES (activo, ganador validado), MGC y M2K (specs cargadas, `yf_ticker`
+  sin verificar — el scheduler se niega a correr esos productos hasta
+  que se verifique un símbolo real de feed en vivo, no se adivina)
+- `scheduler/geometry_scheduler.py` — loop de producción/paper. Rotar de
+  producto = cambiar `GLITCH_PRODUCT` (env var), no reescribir código
+- `execution/contracts.py` — resolución dinámica de front-month
+  (`resolve_front_month()`), ahora compartida también por
+  `combo2d_scheduler.py` (antes tenía su propia copia)
+- `tests/test_geometry_parity.py` — 18 tests: identidad de función
+  compartida, aritmética de barreras/dólares, nc nunca excede el cap
+  real de Topstep por producto, sin key hardcodeada, **swappability real
+  de producto** (ver abajo)
+- `DRY_RUN=true` por default — paper trading, sin excepción, hasta
+  decisión explícita separada
+
+#### MES es el default — por qué, explícitamente (25-ago-2026)
+
+**MES es el default por menor incertidumbre residual (mayor tiempo de
+validación acumulado en la sesión), NO por ser la geometría con mejor
+número.** GC/MGC y RTY/M2K están a 1-3% de diferencia en `combines_por_año`
+— dentro del margen de ruido de los brackets empíricos (ver sección de
+6 productos arriba). Esto es un requisito PERMANENTE del diseño, no un
+detalle de implementación: cualquier decisión futura de cambiar el
+default debe justificarse con evidencia nueva, no con la conveniencia de
+"ya está configurado así".
+
+**Swappability confirmada con test real, no solo con el diccionario:**
+`tests/test_geometry_parity.py::TestProductSwappability` reimporta el
+scheduler completo (`importlib.reload`) con `GLITCH_PRODUCT=MGC` ("GC"
+en la conversación) y `GLITCH_PRODUCT=M2K` ("RTY") vía env var únicamente
+— sin tocar código. Ambos casos llegan correctamente hasta el gate de
+`yf_ticker` (que los detiene ahí porque ese símbolo de feed en vivo
+todavía no está verificado — ver arriba) y NO antes ni por otra razón,
+probando que el mecanismo de swap en sí funciona de punta a punta. Un
+cuarto test confirma que volver a `GLITCH_PRODUCT=MES` deja el módulo en
+estado limpio después del reload. 4/4 tests pasando.
+
+#### Duración recomendada del período de paper trading (25-ago-2026)
+
+Números del candidato ganador (G2: SL=100/TP=40 ticks, alternar, nc=40,
+max_holding_bars=100), separados explícitamente por primera vez —
+reproducir con el bloque de código en el historial de esta sesión
+(usa `scripts/camino_b_grid.py::measure_wr_bracket` +
+`simulation/monte_carlo.py::TopstepMonteCarloSimulator`, n_paths=8000, seed=42):
+
+- `pass_rate_15d` = **0.8144**
+- `avg_pass_days` (solo intentos que pasan) = 3.8361
+- `avg_blown_days` (solo intentos que truenan) = 2.8721
+- **`dias_promedio_resolucion`** (TODOS los intentos que se resuelven,
+  pase o truene — el número correcto para este cálculo, no el de solo-pases)
+  = **3.6571**
+- `n_alive` a los 15 días (ni pasó ni tronó) = 0 de 8,000 paths (0.00% —
+  cada intento se resuelve dentro de la ventana, no hay paths censurados)
+
+> **Nota técnica:** `avg_pass_days` (usado en reportes anteriores de esta
+> sesión para "días promedio de resolución") NO es el número correcto
+> para este cálculo — solo promedia los intentos que pasan, que tardan
+> más que los que truenan (3.84 vs 2.87 días). `avg_resolution_days`
+> (nuevo, agregado a `simulation/monte_carlo.py::SimResult` en esta
+> misma sesión) promedia TODOS los intentos resueltos. La diferencia
+> importa: usar el número equivocado habría sobreestimado el tiempo
+> esperado en ~5%.
+
+**Cálculo:**
+```
+intentos_esperados_para_pasar = 1 / pass_rate_15d
+                               = 1 / 0.8144
+                               = 1.2279
+
+dias_calendario_esperados = dias_promedio_resolucion × intentos_esperados_para_pasar
+                           = 3.6571 × 1.2279
+                           = 4.49 días
+```
+
+**Comparación contra el límite de 60 días:** 4.49 días vs. 60 días —
+**13.4x de margen.** Cae extremadamente cómodo bajo el límite.
+
+**Duración recomendada de paper trading: 30 días calendario** (no 4.49
+días redondeados hacia arriba mecánicamente). Justificación: 4.49 días es
+el tiempo *estadísticamente esperado* para pasar UN intento, pero un
+período de paper trading sirve para más que confirmar el número
+esperado — necesita observar ejecución real (slippage del feed, fiabilidad
+del roll dinámico de contrato, comportamiento del alerta de vencimiento)
+a través de **múltiples ciclos completos de intento**, no solo el
+esperado. 30 días ≈ 6.5 ciclos completos al ritmo esperado, con margen
+de sobra para ciclos más lentos que el promedio, y sigue dejando 30 días
+adicionales de colchón contra el límite de 60.
+
+#### Verificación de unidades de MES contra CME (25-ago-2026)
+
+Re-verificado desde cero, no reusado de sesiones anteriores (mismo
+chequeo que encontró el bug de ZC):
+
+- **Fuente:** CME Group, especificaciones oficiales de Micro E-mini
+  S&P 500 (`cmegroup.com/markets/equities/sp/micro-e-mini-sandp-500.contractSpecs.html`
+  — la página de CME no permitió fetch directo, bloqueado por su propia
+  protección anti-bot; confirmado en su lugar por múltiples fuentes
+  independientes que citan esa página — Ironbeam, QuantVPS, DamnPropFirms
+  — todas coinciden exactamente)
+- **Multiplicador:** $5 × índice S&P 500
+- **Tick size:** 0.25 puntos de índice
+- **Tick value:** **$1.25/tick** — coincide con `tick_value_usd=1.25` ya
+  usado en `strategies/geometry_pure.py`
+- **Verificación empírica independiente** (mismo diagnóstico que
+  destapó el bug de ZC, corrido contra `data_cache/mes_5min_2y.parquet`):
+  100% de los precios de cierre observados en 39,967 barras son múltiplos
+  exactos de 0.25 — el feed de precios real usado en todo el backtest de
+  esta sesión es consistente con tick=0.25 sin excepción.
+
+**Valor confirmado: correcto, sin cambios necesarios.**
+
+#### Cerebro 1 vs. Cerebro 2 — aclaración explícita (25-ago-2026)
+
+**>>> Este Paso F resuelve ÚNICAMENTE Cerebro 1 (pasar el Combine). <<<**
+
+Cerebro 1 = pasar el Combine. Objetivo: maximizar `pass_rate/dias_resolucion`
+dentro de una ventana ACOTADA de 15 días, con pérdida limitada a la fee
+del intento (~$49-149). La geometría de este módulo (Camino B) explota
+que esta ventana acotada + pérdida acotada permite pasar con alta
+probabilidad AUNQUE la estrategia subyacente pierda dinero en promedio
+(EV negativo neto de comisión) — la convexidad del payout hace el
+trabajo, no una predicción de mercado.
+
+Cerebro 2 = maximizar payouts reales una vez fondeado (cuenta XFA).
+Objetivo DISTINTO: el horizonte es INDEFINIDO (sin ventana de 15 días que
+acote el riesgo), y el umbral relevante no es "$3,000 acumulados" sino
+"5 días de ≥$150 netos". Una estrategia con EV negativo o cero que
+funciona para pasar el Combine NO sobrevive en Cerebro 2 — sin la
+ventana de tiempo que te protege, el MLL eventualmente alcanza cualquier
+estrategia sin edge real positivo.
+
+Cerebro 2 está PAUSADO porque depende de una pregunta sin resolver: ¿el
+MLL de la cuenta XFA se resetea a $0 SOLO la primera vez que se solicita
+un payout, o CADA vez? Esto se reportó una vez (fuente: help.topstep.com,
+cita parcial) pero NUNCA se verificó el texto completo ni la URL exacta
+contra la fuente oficial. Son dos economías completamente distintas para
+Cerebro 2 y no se puede diseñar nada confiable sin resolver esto primero.
+
+**Regla práctica:** si una tarea es sobre pasar el Combine (geometría de
+ticks, `combines_por_año`, `pass_rate_15d`) es Cerebro 1 — procede. Si es
+sobre payouts, XFA, `simulate_xfa_lifetime`, o el colchón post-payout —
+es Cerebro 2 — DETENTE y pregunta antes de avanzar, no asumas que el
+éxito de Cerebro 1 aplica ahí.
+
+Misma aclaración duplicada, palabra por palabra en espíritu, en los
+comentarios de cabecera de `strategies/geometry_pure.py` y
+`scheduler/geometry_scheduler.py`.
+
+#### Criterio de graduación a DRY_RUN=false (25-ago-2026)
+
+30 días sin errores técnicos NO es suficiente por sí solo. Criterio
+agregado — **ambos** deben cumplirse:
+
+1. 30 días calendario transcurridos sin errores técnicos (crashes,
+   fallos de resolución de contrato, fallos de feed no recuperados)
+2. **El `pass_rate` empírico observado en paper** (sobre todos los
+   ciclos que se completen en esos 30 días — a ~3.66 días/ciclo
+   promedio, se esperan ~8 ciclos, N pequeño) **debe estar dentro de
+   ~15-20 puntos porcentuales del 81.4% teórico** (es decir, no bajar de
+   ~61-66% empírico). Si cae más abajo que eso, es señal de que algo en
+   producción real (slippage del feed, timing de ejecución contra el
+   backtest de 5min) está erosionando la geometría — **no se pasa a
+   `DRY_RUN=false` aunque los 30 días ya hayan transcurrido sin errores
+   técnicos.** Revisar la causa antes de reconsiderar.
+
+Este criterio vive por ahora solo en este documento — es una decisión
+humana al final del período de paper, no algo que el scheduler evalúe
+automáticamente todavía.
+
+#### Despliegue a Railway — bloqueado en este ambiente, paquete listo (25-ago-2026)
+
+**No se pudo conectar a Railway desde esta sesión: sin CLI de Railway
+instalado, sin credenciales configuradas, sin git remote apuntando al
+repo que Railway vigila.** Nada de lo que sigue se pudo ejecutar
+directamente — es la preparación para que el usuario (u otra sesión con
+acceso) lo haga.
+
+**Inconsistencia encontrada en la configuración de deploy — 4 archivos,
+3 comandos de arranque distintos:**
+
+| Archivo | Comando de arranque |
+|---|---|
+| `nixpacks.toml` (raíz) | `python glitch/scheduler/glitch_scheduler.py` |
+| `Procfile` (raíz) | `python glitch/scheduler/combo2d_scheduler.py` |
+| `glitch/Procfile` | `python scheduler/glitch_scheduler.py` |
+| `glitch/railway.json` | `python scheduler/glitch_scheduler.py` |
+
+**Cuál gobierna el deploy real de combo2d hoy en Railway: DESCONOCIDO,
+pendiente de confirmar por el usuario en el dashboard.** No se puede
+inferir de forma confiable desde los archivos locales — 3 de los 4
+apuntan a `glitch_scheduler.py` (no `combo2d_scheduler.py`, que es el
+que el usuario confirmó que corre en Railway hoy en DRY_RUN).
+
+**Corrección (25-ago-2026, mismo día):** la especulación original de
+arriba — que el servicio activo probablemente tiene un Start Command
+manual configurado en el dashboard, ignorando estos 4 archivos — quedó
+DESCARTADA por el usuario al revisar directamente: **el Start Command
+del servicio combo2d en Railway está VACÍO.** Eso significa que Railway
+sí está leyendo alguno de los 4 archivos de config del repo, no un
+override manual. Con 3 de 4 apuntando al script viejo
+(`glitch_scheduler.py`) y siendo `combo2d_scheduler.py` el que
+realmente corre, hay una discrepancia sin explicar — pendiente de que
+el usuario confirme el **Root Directory** configurado en el dashboard
+de Railway antes de cualquier push (si el Root Directory del servicio
+está fijado a `glitch/`, por ejemplo, cambia por completo cuál de estos
+4 archivos ve Railway y con qué rutas relativas). **No modificar
+`nixpacks.toml` ni `glitch/Procfile` todavía** — solo el `Procfile` raíz
+fue tocado (línea `worker-geometry` agregada, la de combo2d intacta).
+**No proceder con push ni con la creación del segundo servicio hasta
+que esto se resuelva.**
+
+**Preparado, sin tocar la configuración de combo2d:**
+
+- `Procfile` (raíz) — agregada una línea nueva, la de combo2d intacta:
+  ```
+  worker: python glitch/scheduler/combo2d_scheduler.py
+  worker-geometry: python glitch/scheduler/geometry_scheduler.py
+  ```
+  Esto por sí solo NO crea un servicio nuevo en Railway — Railway
+  necesita que el usuario cree explícitamente un segundo servicio
+  apuntando a este mismo repo, y le asigne `worker-geometry` (o un
+  Start Command manual equivalente) en su propia configuración. Dado
+  que no se pudo confirmar qué archivo gobierna el deploy real, la
+  ruta más segura para el usuario es fijar el Start Command a mano en
+  el nuevo servicio, no confiar en que Railway detecte el Procfile
+  automáticamente.
+
+- **Variables de entorno requeridas para el servicio nuevo** (mismos
+  nombres que combo2d, mismo patrón fail-loud si faltan — ver
+  `execution/contracts.py` y `scheduler/telegram_bot.py`):
+  - `MASSIVE_API_KEY` (o `POLYGON_API_KEY`)
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_CHAT_ID`
+  - `DRY_RUN=true` (default del código si no se setea, pero fijarla
+    explícita en Railway evita ambigüedad)
+  - `GLITCH_PRODUCT=MES` (default del código, mismo motivo)
+
+- **Cron sugerido:** `25 14 * * 1-5` (9:25 AM CT L-V) — mismo horario
+  que combo2d, punto de partida razonable dado que la entrada espera a
+  las 9:30 CT internamente igual que combo2d. Ajustar si en algún
+  momento ambos servicios necesitan coordinarse contra la MISMA cuenta
+  real (no aplica todavía — los dos siguen en DRY_RUN).
+
+**Confirmado antes de dejar esto listo para push:** suite completa
+(96/96) pasando, `grep` de secretos limpio en todo el checkout (ver
+comando abajo, repetir antes de cualquier push real).
+
+```bash
+grep -rn "6F2vDNs8WtwPJLl_TtnWSksMzYPFtdYs\|AAHdGlnbM0ACf6HvUS67f74tWaNowuUtsY" . 2>/dev/null | grep -v "assert\|not in src"
+```
+
+**No se hizo push a ningún remote — no hay remote configurado.**
+Cuando el usuario conecte Railway (o dé acceso a esta sesión), el
+siguiente paso es: confirmar el Start Command real de combo2d en el
+dashboard, crear el servicio nuevo con las env vars de arriba, y
+recién ahí evaluar el push.
 

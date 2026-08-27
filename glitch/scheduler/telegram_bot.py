@@ -1,14 +1,23 @@
 """
 Glitch Telegram Bot — Brain 1 + Brain 2 notifications
 """
+import os
+import sys
 import requests
 from datetime import datetime, timezone, date
 from zoneinfo import ZoneInfo
 
 CT      = ZoneInfo("America/Chicago")
 UTC     = timezone.utc
-TOKEN   = "8996694212:AAHdGlnbM-0ACf6HvUS67f74tWaNowuUtsY"
-CHAT_ID = "5154940894"
+
+# SEGURIDAD (25-ago-2026): mismo criterio que MASSIVE_API_KEY -- nunca un
+# default literal hardcodeado. Fallar ruidosamente si falta el env var.
+TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+if not TOKEN or not CHAT_ID:
+    print("FATAL: falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en el entorno. Sin fallback -- abortando.",
+          file=sys.stderr)
+    sys.exit(1)
 BASE    = f"https://api.telegram.org/bot{TOKEN}"
 
 def send(msg: str):

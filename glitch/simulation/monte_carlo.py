@@ -122,6 +122,7 @@ class SimResult:
     n_alive:      int = 0   # Still running at max_days
 
     pass_days:    Optional[np.ndarray] = None   # Days to pass (passed paths only)
+    blown_days:   Optional[np.ndarray] = None   # Days to blow (blown paths only)
     final_balances: Optional[np.ndarray] = None
 
     @property
@@ -150,6 +151,30 @@ class SimResult:
         if self.pass_days is not None and len(self.pass_days) > 0:
             return float(np.mean(self.pass_days))
         return None
+
+    @property
+    def avg_blown_days(self) -> Optional[float]:
+        if self.blown_days is not None and len(self.blown_days) > 0:
+            return float(np.mean(self.blown_days))
+        return None
+
+    @property
+    def avg_resolution_days(self) -> Optional[float]:
+        """
+        Dias promedio para que UN intento se resuelva, pase O truene --
+        NO solo los que pasaron (avg_pass_days). Paths que siguen "alive"
+        al llegar a max_days (ni pasaron ni tronaron) quedan excluidos --
+        no se resolvieron dentro de la ventana, no hay un "dia de
+        resolucion" que asignarles.
+        """
+        days = []
+        if self.pass_days is not None and len(self.pass_days) > 0:
+            days.append(self.pass_days)
+        if self.blown_days is not None and len(self.blown_days) > 0:
+            days.append(self.blown_days)
+        if not days:
+            return None
+        return float(np.mean(np.concatenate(days)))
 
     @property
     def system_ev(self) -> float:
@@ -224,6 +249,7 @@ class TopstepMonteCarloSimulator:
         blown      = np.zeros(N, dtype=bool)
         cons_gated = np.zeros(N, dtype=bool)
         pass_day   = np.full(N, -1, dtype=np.int32)
+        blown_day  = np.full(N, -1, dtype=np.int32)
 
         for day in range(1, self.max_days + 1):
             if not alive.any():
@@ -252,6 +278,7 @@ class TopstepMonteCarloSimulator:
             # ── Hard blow check ──
             just_blown = alive & (balance <= mll_floor)
             blown |= just_blown
+            blown_day = np.where(just_blown & (blown_day < 0), day, blown_day)
             alive &= ~just_blown
 
             # ── Cumulative profit + best day (only profitable days count) ──
@@ -280,6 +307,7 @@ class TopstepMonteCarloSimulator:
             n_cons_gated=int(cons_gated.sum() - passed.sum() * 0),  # only still-gated
             n_alive=int(alive.sum()),
             pass_days=pass_day[pass_day > 0],
+            blown_days=blown_day[blown_day > 0],
             final_balances=balance,
         )
         # Correct cons_gated count: paths gated but never passed

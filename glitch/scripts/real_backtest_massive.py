@@ -16,7 +16,7 @@ client = RESTClient(API_KEY)
 TICKER = "MESH7"
 START = "2025-12-19"
 END = datetime.date.today().isoformat()
-CONTRACT_VALUE_PER_PCT = 25000.0
+POINT_VALUE_USD = 5.0   # MES = $5/point (ver INSTRUMENT_SPECS en data/loader.py)
 N_CONTRACTS = 10
 
 print(f"Descargando {TICKER} 5min {START} -> {END}...")
@@ -57,14 +57,14 @@ if labels.empty:
     sys.exit(0)
 
 wr = (labels["label"] == 1).mean()
-wins = labels.loc[labels.label == 1, "pnl_pct"]
-losses = labels.loc[labels.label == -1, "pnl_pct"].abs()
-daily_pnl = extract_daily_pnl_from_labels(labels, prices, contract_value_per_pct=CONTRACT_VALUE_PER_PCT * N_CONTRACTS)
+wins = labels.loc[labels.label == 1, "pnl_usd"] * POINT_VALUE_USD * N_CONTRACTS
+losses = (labels.loc[labels.label == -1, "pnl_usd"] * POINT_VALUE_USD * N_CONTRACTS).abs()
+daily_pnl = extract_daily_pnl_from_labels(labels, prices, point_value_usd=POINT_VALUE_USD, n_contracts=N_CONTRACTS)
 
 print(f"\nMuestra: {len(labels)} trades en {len(daily_pnl)} dias")
 print(f"Win rate: {wr:.1%}")
-print(f"Avg win:  ${wins.mean()*CONTRACT_VALUE_PER_PCT*N_CONTRACTS:.0f}" if len(wins) else "sin wins")
-print(f"Avg loss: ${losses.mean()*CONTRACT_VALUE_PER_PCT*N_CONTRACTS:.0f}" if len(losses) else "sin losses")
+print(f"Avg win:  ${wins.mean():.0f}" if len(wins) else "sin wins")
+print(f"Avg loss: ${losses.mean():.0f}" if len(losses) else "sin losses")
 
 if len(daily_pnl) >= 15:
     dist = DailyReturnDist.from_trade_log(daily_pnl, name="ORB_MESH7_real")
