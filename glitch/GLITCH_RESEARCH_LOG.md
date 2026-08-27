@@ -449,12 +449,25 @@ acceso) lo haga.
 pendiente de confirmar por el usuario en el dashboard.** No se puede
 inferir de forma confiable desde los archivos locales — 3 de los 4
 apuntan a `glitch_scheduler.py` (no `combo2d_scheduler.py`, que es el
-que el usuario confirmó que corre en Railway hoy en DRY_RUN), lo que
-sugiere que el servicio activo probablemente tiene un "Start Command"
-override configurado a mano directamente en el dashboard de Railway,
-ignorando estos 4 archivos por completo. Verificar en Railway →
-servicio combo2d → Settings → Start Command antes de asumir cualquier
-cosa sobre cuál archivo es autoritativo.
+que el usuario confirmó que corre en Railway hoy en DRY_RUN).
+
+**Corrección (25-ago-2026, mismo día):** la especulación original de
+arriba — que el servicio activo probablemente tiene un Start Command
+manual configurado en el dashboard, ignorando estos 4 archivos — quedó
+DESCARTADA por el usuario al revisar directamente: **el Start Command
+del servicio combo2d en Railway está VACÍO.** Eso significa que Railway
+sí está leyendo alguno de los 4 archivos de config del repo, no un
+override manual. Con 3 de 4 apuntando al script viejo
+(`glitch_scheduler.py`) y siendo `combo2d_scheduler.py` el que
+realmente corre, hay una discrepancia sin explicar — pendiente de que
+el usuario confirme el **Root Directory** configurado en el dashboard
+de Railway antes de cualquier push (si el Root Directory del servicio
+está fijado a `glitch/`, por ejemplo, cambia por completo cuál de estos
+4 archivos ve Railway y con qué rutas relativas). **No modificar
+`nixpacks.toml` ni `glitch/Procfile` todavía** — solo el `Procfile` raíz
+fue tocado (línea `worker-geometry` agregada, la de combo2d intacta).
+**No proceder con push ni con la creación del segundo servicio hasta
+que esto se resuelva.**
 
 **Preparado, sin tocar la configuración de combo2d:**
 
