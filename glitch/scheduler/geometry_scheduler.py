@@ -247,17 +247,35 @@ def run():
     send(kickoff)
     log.info(kickoff.replace("\n", " | "))
 
-    # ── 3. Espera apertura RTH (9:30 CT, misma convencion del resto del repo) ──
-    while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 30:
+    # ── 3. Espera apertura RTH + margen de propagacion de Yahoo.
+    #        CAMBIO (27-ago-2026): 9:30 -> 9:32 CT. Confirmado con el log de
+    #        Railway del 27-ago-2026 (9:30:02-9:33:34 CT, servicio GEOMETRY):
+    #        "fetch_intraday {ticker}: {e}" NUNCA aparecio en los 8 intentos
+    #        -- fetch_intraday() nunca lanzo excepcion, siempre volvio con un
+    #        DataFrame vacio tras el filtro RTH. Descarta fallo de API
+    #        (hipotesis a), confirma lag de propagacion de la barra de
+    #        apertura de MES=F en Yahoo (hipotesis b). Ver
+    #        GLITCH_RESEARCH_LOG.md para el diagnostico completo. ──
+    while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 32:
         log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura RTH...")
         time.sleep(15)
 
+    # CAMBIO (27-ago-2026): 8 -> 12 reintentos (4min -> 6min de presupuesto
+    # total). Logging por intento ahora distingue None (fetch_intraday()
+    # lanzo excepcion -- esa excepcion ya se loguea aparte dentro de la
+    # funcion) de "DataFrame vacio" (fetch OK, pero el filtro RTH no dejo
+    # filas) -- si esto vuelve a fallar, el log ya dice cual de los 2 casos
+    # es, sin tener que repetir esta investigacion.
     entry_bars = None
-    for attempt in range(8):
+    for attempt in range(12):
         entry_bars = fetch_intraday(CFG.spec.yf_ticker)
-        if entry_bars is not None and len(entry_bars) >= 1:
+        n_rows = len(entry_bars) if entry_bars is not None else 0
+        if entry_bars is not None and n_rows >= 1:
+            log.info(f"  {CFG.spec.yf_ticker}: {n_rows} filas RTH recibidas en intento {attempt+1}/12")
             break
-        log.info(f"  Esperando datos {CFG.spec.yf_ticker} ({attempt+1}/8)...")
+        estado = "fetch devolvio None (ver linea de excepcion arriba, si la hay)" if entry_bars is None \
+            else f"{n_rows} filas (fetch OK, vacio tras filtro RTH)"
+        log.info(f"  Esperando datos {CFG.spec.yf_ticker} ({attempt+1}/12) -- {estado}")
         time.sleep(30)
 
     if entry_bars is None or entry_bars.empty:
