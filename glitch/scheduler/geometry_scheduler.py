@@ -91,7 +91,48 @@ if CFG.spec.yf_ticker is None:
 LOG_FILE = f"geometry_{PRODUCT_KEY.lower()}_log.json"
 POLL_INTERVAL = 60  # segundos entre polls
 
+# Benchmark teorico para el reporte diario de pass_rate -- ver
+# GLITCH_RESEARCH_LOG.md, "Duracion recomendada del periodo de paper
+# trading": G2 (SL=100/TP=40, alternar, nc=40) da pass_rate_15d=0.8144
+# via Monte Carlo (n_paths=8000, seed=42). El criterio de graduacion a
+# DRY_RUN=false exige que el pass_rate EMPIRICO de paper no caiga mas de
+# ~15-20pp por debajo de esto -- esa evaluacion la hace un humano al
+# cierre del periodo, este reporte solo la deja visible dia a dia.
+THEORETICAL_PASS_RATE = 0.8144
+
 _front_month_cache: dict[str, tuple[str, str]] = {}
+
+
+def _paper_progress(paper_log: list, today_str: str) -> dict:
+    """
+    Deriva el progreso del periodo de paper SIN estado separado -- la
+    fecha de la primera entrada en paper_log ES el dia 1, no hay que
+    llevar un contador aparte que se pueda desincronizar del log real.
+    """
+    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
+    dates_seen = sorted({e["date"] for e in paper_log if e.get("date")})
+
+    if dates_seen:
+        first_date = datetime.strptime(dates_seen[0], "%Y-%m-%d").date()
+        today = datetime.strptime(today_str, "%Y-%m-%d").date()
+        days_elapsed = (today - first_date).days + 1
+    else:
+        days_elapsed = 1  # primera corrida de la vida del scheduler
+
+    n_cycles = len(resolved)
+    wins = sum(1 for e in resolved if e.get("result") == "TP")
+    pass_rate_empirico = wins / n_cycles if n_cycles > 0 else None
+
+    # Entrada mas reciente ANTERIOR a hoy con resultado -- "el dia anterior"
+    prior_resolved = [e for e in resolved if e.get("date") != today_str]
+    yesterday = prior_resolved[-1] if prior_resolved else None
+
+    return {
+        "days_elapsed": days_elapsed,
+        "n_cycles": n_cycles,
+        "pass_rate_empirico": pass_rate_empirico,
+        "yesterday": yesterday,
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -177,6 +218,34 @@ def run():
     side = decide_side(day_idx, CFG.direction)
     direction_str = {1: "LONG", -1: "SHORT"}[side]
     log.info(f"Direccion (day_index={day_idx}, mode={CFG.direction}): {direction_str}")
+
+    # ── 2b. Reporte de arranque: señal de hoy + resultado de ayer + progreso
+    #         del periodo de paper. Se manda YA, sin esperar a que resuelva
+    #         el trade de hoy -- el usuario necesita esto para juzgar el
+    #         criterio de graduacion sin tener que revisar logs a mano. ──
+    progress = _paper_progress(paper_log, today_str)
+
+    if progress["yesterday"] is not None:
+        y = progress["yesterday"]
+        yesterday_line = f"{y['date']}: {y.get('direction', '?')} → {y['result']}  PnL=${y.get('pnl', 0):+,.2f}"
+    else:
+        yesterday_line = "(sin ciclo previo registrado)"
+
+    if progress["pass_rate_empirico"] is not None:
+        gap_pp = (progress["pass_rate_empirico"] - THEORETICAL_PASS_RATE) * 100
+        pass_rate_line = (f"{progress['pass_rate_empirico']:.1%} empirico vs "
+                           f"{THEORETICAL_PASS_RATE:.1%} teorico ({gap_pp:+.1f}pp)")
+    else:
+        pass_rate_line = "sin ciclos resueltos todavia"
+
+    kickoff = (f"GLITCH - GEOMETRY-{PRODUCT_KEY} | INICIO DE DIA\n"
+               f"Dia {progress['days_elapsed']} de paper  |  Ciclos completados: {progress['n_cycles']}\n"
+               f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={CFG.direction})\n"
+               f"Resultado de ayer: {yesterday_line}\n"
+               f"Pass rate acumulado: {pass_rate_line}\n"
+               f"{datetime.now(CT).strftime('%Y-%m-%d %H:%M CT')}")
+    send(kickoff)
+    log.info(kickoff.replace("\n", " | "))
 
     # ── 3. Espera apertura RTH (9:30 CT, misma convencion del resto del repo) ──
     while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 30:
@@ -279,13 +348,18 @@ def run():
     save_log(paper_log)
 
     total_pnl = sum(e.get('pnl', 0) for e in paper_log)
-    wins  = sum(1 for e in paper_log if e.get('result') == 'TP')
-    total = sum(1 for e in paper_log if e.get('result') in ('TP', 'SL', 'FLATTEN'))
-    wr    = wins / total if total > 0 else 0
+    progress = _paper_progress(paper_log, today_str)  # recalculado -- incluye el ciclo de hoy
+
+    if progress["pass_rate_empirico"] is not None:
+        gap_pp = (progress["pass_rate_empirico"] - THEORETICAL_PASS_RATE) * 100
+        pass_rate_line = (f"{progress['pass_rate_empirico']:.1%} empirico vs "
+                           f"{THEORETICAL_PASS_RATE:.1%} teorico ({gap_pp:+.1f}pp)")
+    else:
+        pass_rate_line = "sin ciclos resueltos todavia"
 
     summary = (f"GLITCH - GEOMETRY-{PRODUCT_KEY} | DAILY SUMMARY\n"
-               f"Trades: {total}\n"
-               f"Win Rate: {wr:.1%}\n"
+               f"Dia {progress['days_elapsed']} de paper  |  Ciclos: {progress['n_cycles']}\n"
+               f"Pass Rate: {pass_rate_line}\n"
                f"PnL Total: ${total_pnl:+,.2f} USD")
     send(summary)
     log.info("Done — saliendo")

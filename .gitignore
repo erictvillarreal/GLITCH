@@ -9,3 +9,11 @@ __pycache__/
 glitch/Downloads/
 statistics/
 glitch/data_cache/*.parquet
+
+# Excepcion (26-ago-2026): resultados del grid de Camino B -- se
+# versionan a pedido explicito, no son output efimero.
+!glitch/data_cache/camino_b_products_grid.csv
+!glitch/data_cache/camino_b_products_overfit.csv
+!glitch/data_cache/camino_b_products_final.csv
+!glitch/data_cache/camino_b_grid_results.csv
+!glitch/data_cache/camino_b_direction_check.csv
