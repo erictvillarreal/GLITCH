@@ -121,3 +121,35 @@ class TestTPSLDollarParity:
         assert sl_price_sched == pytest.approx(lower_back)
         assert tp_dollar_sched == pytest.approx(tp_dollar_back)
         assert sl_dollar_sched == pytest.approx(sl_dollar_back)
+
+
+class TestLoadSaveLogDelegatesToGistStore:
+    """
+    27-ago-2026: load_log()/save_log() ya no tocan el filesystem local
+    (los servicios Cron Schedule de Railway no tienen volumen
+    persistente). Confirma que la delegacion a execution/gist_store.py
+    esta cableada con el filename correcto -- si esto se rompe, el
+    scheduler seguiria arrancando sin error pero perdiendo el estado
+    otra vez, en silencio.
+    """
+
+    def test_load_log_calls_gist_store_with_combo2d_filename(self, monkeypatch):
+        captured = {}
+
+        def _fake_load(filename):
+            captured["filename"] = filename
+            return [{"sentinel": True}]
+
+        monkeypatch.setattr(scheduler, "_gist_load_log", _fake_load)
+        result = scheduler.load_log()
+        assert captured["filename"] == "combo2d_log.json"
+        assert result == [{"sentinel": True}]
+
+    def test_save_log_calls_gist_store_with_combo2d_filename_and_data(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(scheduler, "_gist_save_log",
+                             lambda filename, data: captured.update(filename=filename, data=data))
+        payload = [{"date": "2026-08-27", "result": "TP"}]
+        scheduler.save_log(payload)
+        assert captured["filename"] == "combo2d_log.json"
+        assert captured["data"] == payload

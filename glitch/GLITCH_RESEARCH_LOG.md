@@ -515,3 +515,80 @@ siguiente paso es: confirmar el Start Command real de combo2d en el
 dashboard, crear el servicio nuevo con las env vars de arriba, y
 recién ahí evaluar el push.
 
+### Persistencia de estado — hallazgo crítico (27-ago-2026)
+
+**Confirmado en el dashboard de Railway: los servicios "Cron Schedule"
+(GEOMETRY y, casi con certeza, COMBO2D — mismo tipo de servicio) no
+tienen sección de Volumes disponible. El filesystem es efímero entre
+ejecuciones del cron.**
+
+Ambos schedulers guardaban su historial de trades (`combo2d_log.json`,
+`geometry_{producto}_log.json`) en un archivo JSON local, leído/escrito
+con `open()` plano. Con filesystem efímero, ese archivo se reseteaba a
+cero en **cada** ejecución del cron — nunca acumuló nada entre días.
+
+**Consecuencia — leer con cuidado antes de confiar en cualquier reporte
+histórico de Telegram de cualquiera de los dos schedulers:**
+- Cualquier "Día X de paper" reportado por GEOMETRY antes de este fix
+  siempre fue "Día 1" en la práctica, sin importar cuántos días
+  llevara corriendo.
+- Cualquier "Resultado de ayer" reportado por GEOMETRY antes de este
+  fix siempre fue "(sin ciclo previo registrado)".
+- Cualquier "pass_rate acumulado" (GEOMETRY) o "Win Rate"/"PnL Total"
+  (COMBO2D) reportado por Telegram antes de este fix reflejaba **como
+  máximo el ciclo de un solo día**, nunca una acumulación real —
+  aunque el mensaje se leyera como si fuera un total histórico.
+- Para COMBO2D esto es especialmente relevante dado que ha estado
+  corriendo "desde hace meses" (confirmado por el usuario) — cualquier
+  cifra de "Win Rate" o "PnL Total" que se haya visto en Telegram
+  durante ese tiempo **debe considerarse no confiable como serie
+  histórica**, sin importar cuán razonable se viera cada mensaje
+  individual. Esto NO se verificó revisando los mensajes históricos
+  reales de combo2d uno por uno — es una inferencia por equivalencia
+  de patrón de código (mismo `load_log()`/`save_log()` basado en
+  filesystem local, mismo tipo de servicio Cron Schedule) que se dio
+  por confirmada según lo indicado por el usuario, no observada
+  directamente.
+
+**Fix aplicado:** `execution/gist_store.py` (nuevo, única fuente de
+verdad de persistencia para ambos schedulers) reemplaza el filesystem
+local por un Gist privado de GitHub vía la API REST. Mismo
+`load_log()`/`save_log()`, mismos call sites en `combo2d_scheduler.py`
+y `geometry_scheduler.py` — solo cambia el mecanismo de I/O. Requiere
+dos variables de entorno nuevas por servicio:
+- `GITHUB_GIST_TOKEN` — Personal Access Token **nuevo y separado**,
+  scope **únicamente** `gist` (nunca `repo`, nunca reusar el token de
+  push al repo)
+- `GIST_ID` — id del gist privado ya creado, con dos archivos
+  (`combo2d_log.json`, `geometry_mes_log.json`)
+
+Filosofía de fallos (deliberadamente asimétrica, ver docstring del
+módulo): configuración ausente → `RuntimeError` inmediato, no debe
+arrancar un scheduler creyendo en silencio que está en su día 1. Fallo
+de red/API transitorio en una corrida bien configurada → se loguea
+pero no tumba el scheduler (el trade del día ya se ejecutó y notificó
+para cuando se llama `save_log()`).
+
+**Alternativas evaluadas y descartadas antes de elegir Gist** (ver
+turno anterior de esta sesión para el detalle completo):
+- Volumes de Railway: confirmado que no está disponible para este tipo
+  de servicio, no hay botón que se nos haya pasado.
+- Leer el historial propio del bot vía Telegram `getUpdates`:
+  **técnicamente inviable**, no una alternativa "frágil" — la API de
+  Bots de Telegram nunca devuelve al bot sus propios mensajes enviados
+  vía `getUpdates`, confirmado contra documentación/discusión oficial.
+
+**Tests:** `tests/test_gist_store.py` (10 tests, sin red real —
+`requests.get`/`requests.patch` mockeados) + tests de integración en
+`test_combo2d_parity.py`/`test_geometry_parity.py` confirmando que
+`load_log()`/`save_log()` de cada scheduler delegan al filename
+correcto dentro del gist compartido. Suite completa: 110/110 pasando.
+
+**Pendiente antes de confiar en esto en producción — NO pusheado
+todavía:** el usuario va a generar el token nuevo y crear el gist
+privado; después de eso, correr una prueba manual conjunta antes de
+confiar en que funciona (ver `scripts/setup_gist_store.py` para crear
+el gist con la estructura correcta). El conteo de 30 días de paper de
+Cerebro 1 sigue bloqueado hasta que esto quede confirmado funcionando
+de punta a punta.
+

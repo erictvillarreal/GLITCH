@@ -8,7 +8,7 @@ Entrada: apertura RTH (9:30 CT)
 Salida: via triple-barrier ATR (pt=2.5x, sl=1.5x) o fin de sesion (14:30 CT)
 Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 """
-import os, sys, json, logging, time, datetime as dt_module
+import os, sys, logging, time, datetime as dt_module
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from massive import RESTClient
@@ -18,6 +18,7 @@ from scheduler.telegram_bot import send
 from strategies.combo2d import decide_side
 from simulation.triple_barrier import compute_atr as _shared_compute_atr
 from execution.contracts import MASSIVE_API_KEY, get_front_month, check_expiry_alerts
+from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
 
 CT = ZoneInfo("America/Chicago")
 logging.basicConfig(
@@ -34,20 +35,23 @@ MNQ_POINT     = 2.0                                 # $2 por punto MNQ
 ATR_PT_MULT   = 2.5                                 # TP = 2.5 * ATR
 ATR_SL_MULT   = 1.5                                 # SL = 1.5 * ATR
 ATR_WINDOW    = 20                                  # barras para ATR
-LOG_FILE      = "combo2d_log.json"
+LOG_FILE      = "combo2d_log.json"  # nombre del archivo DENTRO del gist compartido -- ver execution/gist_store.py
 POLL_INTERVAL = 60  # segundos entre polls
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def ct_now(): return datetime.now(CT)
 
+# REFACTOR (27-ago-2026): load_log()/save_log() ya NO leen/escriben el
+# filesystem local -- los servicios "Cron Schedule" de Railway no tienen
+# volumen persistente (confirmado en el dashboard), asi que un archivo
+# local se reseteaba en CADA corrida. Delegan a execution/gist_store.py
+# (persistencia via GitHub Gist) -- misma firma, mismos call sites, solo
+# cambia el mecanismo de I/O. Ver GLITCH_RESEARCH_LOG.md.
 def load_log():
-    try:
-        with open(LOG_FILE) as f: return json.load(f)
-    except: return []
+    return _gist_load_log(LOG_FILE)
 
 def save_log(l):
-    with open(LOG_FILE, "w") as f:
-        json.dump(l, f, indent=2, default=str)
+    _gist_save_log(LOG_FILE, l)
 
 def is_trading_day():
     now = ct_now()

@@ -51,7 +51,6 @@ producto elegido y su horario RTH real).
 """
 import os
 import sys
-import json
 import logging
 import time
 from datetime import datetime, date
@@ -63,6 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
 from execution.contracts import get_front_month, check_expiry_alerts
+from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
 
 CT = ZoneInfo("America/Chicago")
 logging.basicConfig(
@@ -88,7 +88,7 @@ if CFG.spec.yf_ticker is None:
               f"Verificar y setear ProductSpec.yf_ticker antes de correr este producto.")
     sys.exit(1)
 
-LOG_FILE = f"geometry_{PRODUCT_KEY.lower()}_log.json"
+LOG_FILE = f"geometry_{PRODUCT_KEY.lower()}_log.json"  # nombre del archivo DENTRO del gist compartido -- ver execution/gist_store.py
 POLL_INTERVAL = 60  # segundos entre polls
 
 # Benchmark teorico para el reporte diario de pass_rate -- ver
@@ -139,15 +139,14 @@ def _paper_progress(paper_log: list, today_str: str) -> dict:
 def ct_now(): return datetime.now(CT)
 
 
+# REFACTOR (27-ago-2026): ya NO leen/escriben el filesystem local -- ver
+# el mismo cambio en combo2d_scheduler.py y execution/gist_store.py.
 def load_log():
-    try:
-        with open(LOG_FILE) as f: return json.load(f)
-    except Exception: return []
+    return _gist_load_log(LOG_FILE)
 
 
 def save_log(l):
-    with open(LOG_FILE, "w") as f:
-        json.dump(l, f, indent=2, default=str)
+    _gist_save_log(LOG_FILE, l)
 
 
 def is_trading_day():

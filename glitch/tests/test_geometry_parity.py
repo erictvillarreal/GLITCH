@@ -146,3 +146,31 @@ class TestProductSwappability:
         assert reloaded.PRODUCT_KEY == "MES"
         assert reloaded.CFG is geo.CANDIDATES["MES"]
         assert reloaded.CFG.spec.yf_ticker == "MES=F"
+
+
+class TestLoadSaveLogDelegatesToGistStore:
+    """
+    27-ago-2026: mismo cambio y mismo motivo que en combo2d_scheduler.py
+    -- ver tests/test_combo2d_parity.py::TestLoadSaveLogDelegatesToGistStore.
+    """
+
+    def test_load_log_calls_gist_store_with_product_specific_filename(self, monkeypatch):
+        captured = {}
+
+        def _fake_load(filename):
+            captured["filename"] = filename
+            return [{"sentinel": True}]
+
+        monkeypatch.setattr(scheduler, "_gist_load_log", _fake_load)
+        result = scheduler.load_log()
+        assert captured["filename"] == "geometry_mes_log.json"
+        assert result == [{"sentinel": True}]
+
+    def test_save_log_calls_gist_store_with_product_specific_filename_and_data(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(scheduler, "_gist_save_log",
+                             lambda filename, data: captured.update(filename=filename, data=data))
+        payload = [{"date": "2026-08-27", "result": "SL"}]
+        scheduler.save_log(payload)
+        assert captured["filename"] == "geometry_mes_log.json"
+        assert captured["data"] == payload
