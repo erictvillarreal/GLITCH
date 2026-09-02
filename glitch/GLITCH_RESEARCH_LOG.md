@@ -538,17 +538,39 @@ histórico de Telegram de cualquiera de los dos schedulers:**
   (COMBO2D) reportado por Telegram antes de este fix reflejaba **como
   máximo el ciclo de un solo día**, nunca una acumulación real —
   aunque el mensaje se leyera como si fuera un total histórico.
-- Para COMBO2D esto es especialmente relevante dado que ha estado
-  corriendo "desde hace meses" (confirmado por el usuario) — cualquier
-  cifra de "Win Rate" o "PnL Total" que se haya visto en Telegram
-  durante ese tiempo **debe considerarse no confiable como serie
-  histórica**, sin importar cuán razonable se viera cada mensaje
-  individual. Esto NO se verificó revisando los mensajes históricos
-  reales de combo2d uno por uno — es una inferencia por equivalencia
-  de patrón de código (mismo `load_log()`/`save_log()` basado en
-  filesystem local, mismo tipo de servicio Cron Schedule) que se dio
-  por confirmada según lo indicado por el usuario, no observada
-  directamente.
+- **CORRECCIÓN (01-sep-2026), con evidencia de `git log`/`git show` y del
+  historial real de Cron Runs de Railway — reemplaza la nota anterior,
+  que subestimaba el problema:** no es solo que los datos de COMBO2D
+  sean "no confiables como serie histórica" por el filesystem efímero.
+  **El servicio COMBO2D no ha ejecutado exitosamente NI UNA VEZ desde
+  el 2026-08-13 — 12 ejecuciones consecutivas fallidas confirmadas en
+  Railway, del 2026-08-14 al 2026-09-01, cada una crasheando en 3-4
+  segundos (falla de importación, antes de llegar a `run()`).** No hay
+  "datos contaminados" que reinterpretar — no hay datos en absoluto
+  para ese período. Cronología completa reconstruida:
+
+  | Fecha (UTC) | Commit | Qué pasó |
+  |---|---|---|
+  | Jul 8 – Aug 13 | — | El servicio corría `glitch_scheduler.py` — un script **distinto y anterior**, no combo2d. Confirmado via `git show e0b1ea3:Procfile`. Las corridas exitosas de 15-19 min de este período no tienen relación con combo2d. |
+  | Aug 13, 21:31 | `1a3b714` | `combo2d_scheduler.py` creado; Procfile apuntado a él por primera vez |
+  | Aug 13, 23:58 | `cb070a5` | Cambia a `massive`/`RESTClient` para datos — pero `massive` NUNCA estuvo en el `requirements.txt` de la raíz |
+  | Aug 17, 14:45 | `321c747` | "fix: add massive to scheduler requirements" — agregó `massive` a `glitch/scheduler/requirements.txt` (confirmado via `git show 321c747`), el archivo QUE ESTE SERVICIO (Railpack) no lee. El fix nunca tuvo efecto real. |
+  | Aug 17 – Aug 26 | — | **9 días sin ningún commit** — el servicio fallando en silencio, sin que nadie lo notara |
+  | Aug 26-27 | `99497ec` | Merge del hardening de seguridad de esta sesión (sin fallback hardcodeado de Massive/Telegram) — pero `massive` seguía faltando del archivo correcto, así que la ejecución seguía muriendo ANTES de llegar al nuevo chequeo de Telegram |
+  | Aug 28 | `44f07cf` | Fix del archivo correcto (`requirements.txt` de la raíz) — primera vez desde el 13-ago que el import de `massive` se resuelve |
+  | Aug 31 | (deploy en curso) | Con el import resuelto, la ejecución llega por primera vez al siguiente requisito sin cumplir — el token de Telegram — y ahí aparece el error nuevo |
+
+  **Conclusión explícita: el hardening de seguridad de esta sesión (que
+  removió los fallbacks hardcodeados) NO es la causa original de esta
+  falla — es una causa preexistente desde el 17-ago (un fix que tocó el
+  archivo equivocado), sin relación con nada hecho en esta sesión hasta
+  el 26-ago. Lo que el hardening sí hizo fue apilar un segundo requisito
+  (variables de Telegram) detrás del primero, que solo se volvió visible
+  una vez que el primer bloqueo (el import de `massive`) se resolvió de
+  verdad el 28-ago.** Cualquier "Win Rate" o "PnL Total" de COMBO2D
+  reportado por Telegram entre el 14-ago y hoy debe tratarse como
+  **inexistente, no como dato contaminado** — el servicio simplemente no
+  corrió.
 
 **Fix aplicado:** `execution/gist_store.py` (nuevo, única fuente de
 verdad de persistencia para ambos schedulers) reemplaza el filesystem
