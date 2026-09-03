@@ -261,34 +261,37 @@ def run():
     log.info(kickoff.replace("\n", " | "))
 
     # ── 3. Espera apertura RTH + margen de propagacion de Yahoo.
-    #        CAMBIO (27-ago-2026): 9:30 -> 9:32 CT. Confirmado con el log de
-    #        Railway del 27-ago-2026 (9:30:02-9:33:34 CT, servicio GEOMETRY):
-    #        "fetch_intraday {ticker}: {e}" NUNCA aparecio en los 8 intentos
-    #        -- fetch_intraday() nunca lanzo excepcion, siempre volvio con un
-    #        DataFrame vacio tras el filtro RTH. Descarta fallo de API
-    #        (hipotesis a), confirma lag de propagacion de la barra de
-    #        apertura de MES=F en Yahoo (hipotesis b). Ver
-    #        GLITCH_RESEARCH_LOG.md para el diagnostico completo. ──
-    while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 32:
+    #        CAMBIO (03-sep-2026): 9:32 -> 9:35 CT. La ventana anterior
+    #        (9:32 + 12x30s = se rinde ~9:37:34 CT real) se rindio 2
+    #        minutos ANTES del umbral confirmado de 9:40:09 CT donde
+    #        Yahoo SI tiene datos reales para MES=F (confirmado por
+    #        scripts/probe_mes_open.py Y por el exito real del "dia 3",
+    #        que entro a las 9:40 CT). El dia 4 (03-sep-2026) fallo
+    #        exactamente por esto -- no era delay variable/no confiable,
+    #        era una ventana ya conocida como insuficiente que nunca se
+    #        habia ampliado en el codigo pese a la evidencia. Ver
+    #        GLITCH_RESEARCH_LOG.md para el detalle completo. ──
+    while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 35:
         log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura RTH...")
         time.sleep(15)
 
-    # CAMBIO (27-ago-2026): 8 -> 12 reintentos (4min -> 6min de presupuesto
-    # total). Logging por intento ahora distingue None (fetch_intraday()
-    # lanzo excepcion -- esa excepcion ya se loguea aparte dentro de la
-    # funcion) de "DataFrame vacio" (fetch OK, pero el filtro RTH no dejo
-    # filas) -- si esto vuelve a fallar, el log ya dice cual de los 2 casos
-    # es, sin tener que repetir esta investigacion.
+    # CAMBIO (03-sep-2026): 12 -> 20 reintentos (6min -> 10min de
+    # presupuesto). Desde el gate de 9:35, 20x30s cubre comodamente hasta
+    # ~9:45 CT -- pasa el umbral confirmado de 9:40:09 CT con margen real,
+    # no al límite como la ventana anterior. Logging por intento distingue
+    # None (fetch_intraday() lanzo excepcion -- esa excepcion ya se
+    # loguea aparte dentro de la funcion) de "DataFrame vacio" (fetch OK,
+    # pero el filtro RTH no dejo filas).
     entry_bars = None
-    for attempt in range(12):
+    for attempt in range(20):
         entry_bars = fetch_intraday(CFG.spec.yf_ticker)
         n_rows = len(entry_bars) if entry_bars is not None else 0
         if entry_bars is not None and n_rows >= 1:
-            log.info(f"  {CFG.spec.yf_ticker}: {n_rows} filas RTH recibidas en intento {attempt+1}/12")
+            log.info(f"  {CFG.spec.yf_ticker}: {n_rows} filas RTH recibidas en intento {attempt+1}/20")
             break
         estado = "fetch devolvio None (ver linea de excepcion arriba, si la hay)" if entry_bars is None \
             else f"{n_rows} filas (fetch OK, vacio tras filtro RTH)"
-        log.info(f"  Esperando datos {CFG.spec.yf_ticker} ({attempt+1}/12) -- {estado}")
+        log.info(f"  Esperando datos {CFG.spec.yf_ticker} ({attempt+1}/20) -- {estado}")
         time.sleep(30)
 
     if entry_bars is None or entry_bars.empty:
