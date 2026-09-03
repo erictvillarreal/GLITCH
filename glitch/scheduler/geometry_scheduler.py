@@ -292,10 +292,21 @@ def run():
         time.sleep(30)
 
     if entry_bars is None or entry_bars.empty:
-        msg = f"GLITCH - GEOMETRY-{PRODUCT_KEY}\nSTATUS: ERROR\nERROR: no entry data available"
+        gave_up_at = ct_now().strftime("%H:%M:%S")
+        msg = (f"GLITCH - GEOMETRY-{PRODUCT_KEY}\nSTATUS: ERROR\n"
+               f"ERROR: no entry data available\n"
+               f"Se rindio tras {attempt + 1} intentos a las {gave_up_at} CT")
         send(msg)
+        # CAMBIO (03-sep-2026): registrar cuantos intentos se hicieron y a
+        # que hora CT se rindio -- no solo que fallo. Con el retraso de
+        # Yahoo confirmado como VARIABLE dia a dia (dia 3 entro a las
+        # 9:40 CT, dia 4 no entro ni tras 12/12), esto es el dato que
+        # permite calcular que tan seguido pasa esto y decidir si Yahoo
+        # sigue siendo viable como fuente de precio en vivo, en vez de
+        # solo un contador binario de "fallo". Ver GLITCH_RESEARCH_LOG.md.
         paper_log.append({"date": today_str, "signal": True, "side": side,
-                          "pnl": 0, "note": "no_data_entry"})
+                          "pnl": 0, "note": "no_data_entry",
+                          "attempts_made": attempt + 1, "gave_up_at_ct": gave_up_at})
         save_log(paper_log)
         return
 
