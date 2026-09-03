@@ -673,3 +673,31 @@ pudo completar.
 **No se pausó el Cron Schedule de COMBO2D** — decisión explícita del
 usuario: se queda activo mientras se termina este fix, no antes.
 
+#### Cierre confirmado con corrida manual real (02-sep-2026)
+
+**Resuelto el punto que había quedado sin evidencia:** el usuario
+disparó manualmente "Run now" para COMBO2D desde el dashboard de
+Railway. Log real, 2026-09-02 19:58:24–27 CT: arrancó, pasó el
+chequeo unificado de `execution/env_check.py` sin reportar ninguna
+variable faltante, calculó la señal, determinó correctamente
+`NO_TRADE` (razón: `mes_no_signal` — condición normal de la estrategia,
+no un fallo), y terminó limpio sin traceback.
+
+**Conclusión: el traceback de `MASSIVE_API_KEY` faltante pegado el
+01-sep era un log viejo (de antes de que la variable se guardara en
+Railway), no un fallo nuevo o distinto.** El fix del `requirements.txt`
+de la raíz (`44f07cf`) más el chequeo unificado (`a24400f`) resuelven
+la cadena completa de fallos de infraestructura que empezó el 13-ago.
+**El cron automático de COMBO2D puede reactivarse/mantenerse activo
+con confianza — no queda pendiente de blindaje de infraestructura.**
+
+**Recordatorio explícito, para no confundir higiene con viabilidad:**
+COMBO2D ahora está técnicamente sano (no crashea, corre de principio a
+fin) — **pero sigue siendo la estrategia ya descartada por edge no
+significativo** (walk-forward p=0.44–0.45, ver sección de arriba sobre
+la reproducción fresca del 25-ago-2026 que no logró acercarse al
+p=0.149 histórico citado). Este fix es higiene de infraestructura —
+que el proceso no truene — no evidencia de que la señal de
+mean-reversión día-a-día con doble confirmación MES+MNQ tenga edge
+real. Nada de lo arreglado en esta ronda cambia esa conclusión.
+
