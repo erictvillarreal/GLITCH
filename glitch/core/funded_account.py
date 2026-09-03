@@ -110,6 +110,16 @@ class XFAAccount:
     """
     spec: XFASpec = field(default_factory=lambda: XFA_50K)
 
+    # SIN RESOLVER contra fuente primaria completa (01-sep-2026): ¿el MLL
+    # se fija en $0 SOLO en el primer payout, o EN CADA payout? El codigo
+    # anterior a este cambio asumia "cada payout" de forma hardcodeada,
+    # sin exponer la alternativa -- eso NO es lo mismo que "confirmado".
+    # "every_payout" preserva el comportamiento anterior (default, para no
+    # romper nada que ya dependiera de el); "first_payout_only" es la
+    # alternativa sin probar. NUNCA reportar un numero de negocio usando
+    # solo uno de los dos sin el otro al lado como sensibilidad.
+    mll_reset_policy: str = "every_payout"  # "every_payout" | "first_payout_only"
+
     balance: float           = field(init=False)
     mll_floor: float         = field(init=False)
     status: XFAStatus        = field(init=False)
@@ -120,6 +130,7 @@ class XFAAccount:
     lifetime_payout_usd: float = field(default=0.0, init=False)
     days_since_last_trade: int = field(default=0, init=False)
     day_log: List[DayRecord] = field(default_factory=list, init=False)
+    _has_had_first_payout: bool = field(default=False, init=False)
 
     def __post_init__(self):
         self.balance   = 0.0
@@ -181,9 +192,16 @@ class XFAAccount:
         trader_take = gross * self.spec.profit_split_trader
 
         self.balance -= gross
-        # CONFIRMADO via help.topstep.com: despues del primer payout el MLL
-        # se fija en $0 permanentemente. Ya no hace trailing.
-        self.mll_floor = 0.0
+        # SIN RESOLVER (ver mll_reset_policy arriba): la cita original de
+        # help.topstep.com decia "el MLL se fija en $0 tras el primer
+        # payout" -- pero nunca se verifico si eso aplica SOLO la primera
+        # vez o CADA vez. "every_payout" fuerza el floor a 0 siempre (el
+        # comportamiento que este codigo tenia hardcodeado antes de esto);
+        # "first_payout_only" solo lo fuerza la primera vez, dejando que
+        # el trailing normal de end_of_day() gobierne despues.
+        if self.mll_reset_policy == "every_payout" or not self._has_had_first_payout:
+            self.mll_floor = 0.0
+        self._has_had_first_payout = True
         self.winning_days_count = 0
         self.lifetime_payouts += 1
         self.lifetime_payout_usd += trader_take
@@ -267,4 +285,76 @@ def simulate_xfa_paths(dist, spec: XFASpec = XFA_50K, n_paths: int = 5000,
         "prob_neither_yet": 1 - (n_eligible + n_blown) / n_paths,
         "avg_days_to_eligible": float(np.mean(days_to_eligible)) if days_to_eligible else None,
         "payout": payouts_usd,
+    }
+
+
+def simulate_xfa_lifetime(dist, spec: XFASpec = XFA_50K, mll_reset_policy: str = "every_payout",
+                           n_paths: int = 5000, max_days: int = 756, seed: int = 7) -> dict:
+    """
+    Simula la VIDA COMPLETA de N cuentas XFA -- a diferencia de
+    simulate_xfa_paths() (que se detiene en el primer payout o blow),
+    esto encadena payouts sucesivos: la cuenta sigue operando despues de
+    cada payout (balance reducido, NO reseteado a cero) hasta que truena
+    (BLOWN_MLL) o se acaba max_days sin haber truenado (right-censored --
+    ver prob_still_alive_at_horizon, un promedio que ignora esto
+    SUBESTIMA el verdadero valor esperado).
+
+    max_days=756 (~3 años habiles) por default -- horizonte largo a
+    proposito, no un numero de negocio en si.
+
+    mll_reset_policy: "every_payout" o "first_payout_only" -- ver
+    XFAAccount.mll_reset_policy. SIEMPRE correr ambos y reportarlos
+    lado a lado, nunca uno solo como respuesta final (pregunta sin
+    resolver contra fuente primaria completa -- ver docstring del modulo
+    y GLITCH_RESEARCH_LOG.md).
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    lifetime_payouts = []
+    lifetime_days = []
+    lifetime_payout_usd = []
+    n_never_eligible = 0
+    n_still_alive_at_horizon = 0
+
+    for _ in range(n_paths):
+        acct = XFAAccount(spec, mll_reset_policy=mll_reset_policy)
+        daily_pnls = dist.sample(max_days, rng)
+        reached_first_payout = False
+        for day_pnl in daily_pnls:
+            acct.start_day()
+            acct.record_trade_pnl(float(day_pnl))
+            acct.end_of_day()
+            if acct.status == XFAStatus.PAYOUT_ELIGIBLE:
+                acct.request_payout()
+                reached_first_payout = True
+            if not acct.is_alive:
+                break
+
+        if not reached_first_payout:
+            n_never_eligible += 1
+        if acct.is_alive:
+            n_still_alive_at_horizon += 1
+
+        lifetime_payouts.append(acct.lifetime_payouts)
+        lifetime_days.append(acct.day_number)
+        lifetime_payout_usd.append(acct.lifetime_payout_usd)
+
+    payouts_arr = np.array(lifetime_payouts)
+    days_arr = np.array(lifetime_days)
+    usd_arr = np.array(lifetime_payout_usd)
+
+    return {
+        "n_paths": n_paths,
+        "mll_reset_policy": mll_reset_policy,
+        "max_days_horizon": max_days,
+        "prob_still_alive_at_horizon": n_still_alive_at_horizon / n_paths,
+        "prob_never_reached_first_payout": n_never_eligible / n_paths,
+        "avg_lifetime_payouts": float(payouts_arr.mean()),
+        "median_lifetime_payouts": float(np.median(payouts_arr)),
+        "payouts_p10_p90": (float(np.percentile(payouts_arr, 10)), float(np.percentile(payouts_arr, 90))),
+        "avg_lifetime_days": float(days_arr.mean()),
+        "median_lifetime_days": float(np.median(days_arr)),
+        "avg_lifetime_payout_usd": float(usd_arr.mean()),
+        "median_lifetime_payout_usd": float(np.median(usd_arr)),
+        "payout_usd_p10_p90": (float(np.percentile(usd_arr, 10)), float(np.percentile(usd_arr, 90))),
     }
