@@ -59,6 +59,20 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# CHEQUEO UNIFICADO DE ARRANQUE (01-sep-2026) -- mismo motivo y mismo
+# patron que combo2d_scheduler.py, ver ese archivo y
+# GLITCH_RESEARCH_LOG.md para el contexto completo. Debe correr ANTES
+# de telegram_bot/execution.contracts/execution.gist_store.
+from execution.env_check import require_env
+
+_PRODUCT_KEY_FOR_STARTUP_CHECK = os.getenv("GLITCH_PRODUCT", "MES")  # plain os.getenv, sin dependencias -- seguro de leer aqui
+require_env(
+    [("MASSIVE_API_KEY", "POLYGON_API_KEY"), "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+     "GITHUB_GIST_TOKEN", "GIST_ID"],
+    f"GEOMETRY-{_PRODUCT_KEY_FOR_STARTUP_CHECK}",
+)
+
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
 from execution.contracts import get_front_month, check_expiry_alerts
@@ -75,7 +89,7 @@ log = logging.getLogger("geometry")
 # ── Config ────────────────────────────────────────────────────────────────
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 
-PRODUCT_KEY = os.getenv("GLITCH_PRODUCT", "MES")
+PRODUCT_KEY = _PRODUCT_KEY_FOR_STARTUP_CHECK  # ya calculado arriba, antes del chequeo unificado
 if PRODUCT_KEY not in CANDIDATES:
     log.error(f"FATAL: GLITCH_PRODUCT={PRODUCT_KEY!r} no esta en CANDIDATES "
               f"({sorted(CANDIDATES)}). Ver strategies/geometry_pure.py.")

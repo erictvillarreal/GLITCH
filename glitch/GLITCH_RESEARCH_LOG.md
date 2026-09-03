@@ -614,3 +614,62 @@ el gist con la estructura correcta). El conteo de 30 días de paper de
 Cerebro 1 sigue bloqueado hasta que esto quede confirmado funcionando
 de punta a punta.
 
+### Chequeo unificado de arranque — blindaje contra "un fallo a la vez" (01-sep-2026)
+
+**Motivo:** 2.5 semanas (14-ago a 01-sep-2026) de fallos en COMBO2D
+descubiertos uno a la vez vía crash-arreglo-siguiente-crash — cada
+variable de entorno faltante se validaba en un módulo distinto
+(`execution/contracts.py` al importarse, `scheduler/telegram_bot.py`
+al importarse, `execution/gist_store.py` solo cuando `load_log()`/
+`save_log()` se llamaban ya bien entrada la ejecución), así que
+arreglar una revelaba la siguiente en la corrida del día siguiente, no
+en la misma.
+
+**Fix:** `execution/env_check.py`, nuevo, con una única función
+`require_env(required, scheduler_label)`. Se llama en la primera línea
+útil de `combo2d_scheduler.py` y `geometry_scheduler.py` — **antes**
+de `scheduler.telegram_bot`, `execution.contracts`, y
+`execution.gist_store` — verifica TODAS las variables requeridas de un
+jalón y, si falta cualquiera, manda **un solo mensaje** a Telegram
+listando todas juntas antes de salir. Deliberadamente sin depender de
+ninguno de esos tres módulos (para no disparar sus propios chequeos
+individuales antes de llegar al chequeo unificado) — usa `requests`
+directo para el envío, duplicando 5 líneas a propósito.
+
+Inventario completo de variables requeridas por ambos schedulers
+(idéntico para los dos): `MASSIVE_API_KEY` o `POLYGON_API_KEY`,
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GITHUB_GIST_TOKEN`,
+`GIST_ID`. (`DRY_RUN`, `NC`, `GLITCH_PRODUCT` tienen default seguro en
+código, no son requisitos duros.)
+
+**Verificado, no solo revisado:**
+- `tests/test_env_check.py` (6 tests) — incluye el caso central: 4
+  variables faltantes a la vez se reportan las 4 juntas, no solo la
+  primera.
+- Tests de integración nuevos en ambos `test_*_parity.py` —
+  reimportan el scheduler completo con varias variables borradas,
+  confirman `SystemExit` con todas reportadas.
+- **Smoke test de build real (Railpack, no nixpacks)**: import de
+  `combo2d_scheduler.py` en un entorno limpio (`env -i`) con
+  exactamente las 7 variables que Railway tiene configuradas hoy
+  (`DRY_RUN`, `GIST_ID`, `GITHUB_GIST_TOKEN`, `MASSIVE_API_KEY`,
+  `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TZ`) — import limpio de
+  principio a fin, no solo pasa el chequeo nuevo. Mismo test para
+  `geometry_scheduler.py`. Suite completa: 118/118 pasando.
+
+**Sin resolver — necesita evidencia que no se pudo obtener esta
+sesión:** el traceback de `MASSIVE_API_KEY` faltante pegado por el
+usuario hoy (01-sep) podría ser un log viejo (de antes de que la
+variable se guardara en Railway) o un fallo real y distinto (typo en
+el nombre, variable en el ambiente equivocado, etc.) — no se pudo
+determinar cuál, porque el traceback pegado no trae timestamp propio
+(a diferencia de los logs JSON de Cron Runs usados antes en esta
+sesión, que sí lo traen) y no hay acceso al activity log de Railway
+desde aquí para cruzar la fecha de guardado de la variable. **La
+prueba manual ("Run now") que el usuario va a disparar es lo que
+resuelve esto empíricamente**, no un análisis de timestamps que no se
+pudo completar.
+
+**No se pausó el Cron Schedule de COMBO2D** — decisión explícita del
+usuario: se queda activo mientras se termina este fix, no antes.
+

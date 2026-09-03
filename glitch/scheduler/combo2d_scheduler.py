@@ -11,9 +11,23 @@ Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 import os, sys, logging, time, datetime as dt_module
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-from massive import RESTClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# CHEQUEO UNIFICADO DE ARRANQUE (01-sep-2026) -- debe correr ANTES de
+# cualquier import de este proyecto que dependa de variables de entorno
+# (telegram_bot, execution.contracts, execution.gist_store), para que si
+# faltan VARIAS a la vez se reporten TODAS juntas en un solo mensaje, no
+# una por corrida via crash-arreglo-siguiente-crash (ver
+# GLITCH_RESEARCH_LOG.md -- 2.5 semanas asi, 14-ago a 01-sep-2026).
+from execution.env_check import require_env
+require_env(
+    [("MASSIVE_API_KEY", "POLYGON_API_KEY"), "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+     "GITHUB_GIST_TOKEN", "GIST_ID"],
+    "COMBO2D",
+)
+
+from massive import RESTClient
 from scheduler.telegram_bot import send
 from strategies.combo2d import decide_side
 from simulation.triple_barrier import compute_atr as _shared_compute_atr

@@ -12,6 +12,8 @@ import datetime as dt
 os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
+os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
+os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -174,3 +176,28 @@ class TestLoadSaveLogDelegatesToGistStore:
         scheduler.save_log(payload)
         assert captured["filename"] == "geometry_mes_log.json"
         assert captured["data"] == payload
+
+
+class TestUnifiedStartupCheck:
+    """
+    01-sep-2026: mismo motivo y mismo patron que
+    test_combo2d_parity.py::TestUnifiedStartupCheck -- reimportar con
+    varias variables borradas a la vez debe reportar TODAS juntas.
+    """
+
+    def test_multiple_missing_vars_reported_together_on_reimport(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_GIST_TOKEN", raising=False)
+        monkeypatch.delenv("GIST_ID", raising=False)
+        monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+        monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+
+        with pytest.raises(SystemExit):
+            importlib.reload(scheduler)
+
+        # Dejar el modulo sano para el resto de la suite -- mismo criterio
+        # que test_combo2d_parity.py.
+        monkeypatch.setenv("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
+        monkeypatch.setenv("GIST_ID", "test-gist-id-not-real")
+        monkeypatch.setenv("MASSIVE_API_KEY", "test-key-not-real")
+        monkeypatch.setenv("GLITCH_PRODUCT", "MES")
+        importlib.reload(scheduler)

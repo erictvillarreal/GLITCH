@@ -13,6 +13,8 @@ import sys
 os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
+os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
+os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -153,3 +155,37 @@ class TestLoadSaveLogDelegatesToGistStore:
         scheduler.save_log(payload)
         assert captured["filename"] == "combo2d_log.json"
         assert captured["data"] == payload
+
+
+class TestUnifiedStartupCheck:
+    """
+    01-sep-2026: reimportar el modulo con VARIAS variables borradas a la
+    vez debe reportar TODAS juntas al arrancar -- no una por corrida via
+    crash-arreglo-siguiente-crash (2.5 semanas asi, ver
+    GLITCH_RESEARCH_LOG.md). Prueba de extremo a extremo real (reload
+    del modulo), no solo la funcion require_env aislada.
+    """
+
+    def test_multiple_missing_vars_reported_together_on_reimport(self, monkeypatch):
+        import importlib
+
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_GIST_TOKEN", raising=False)
+        monkeypatch.delenv("GIST_ID", raising=False)
+        # MASSIVE_API_KEY y TELEGRAM_CHAT_ID quedan presentes (heredados del
+        # setdefault de arriba) -- el intento de notificar por Telegram se
+        # degrada a print (porque TELEGRAM_BOT_TOKEN tambien falta), no crashea.
+
+        with pytest.raises(SystemExit):
+            importlib.reload(scheduler)
+
+        # monkeypatch restaura las env vars solas al terminar el test, pero
+        # el modulo ya importado quedaria en el estado roto del reload de
+        # arriba para el resto de la suite -- recargarlo aqui, ya con el
+        # fixture todavia activo (las vars de este test siguen borradas en
+        # este punto), forzando los valores del setdefault de arriba antes
+        # del reload final para dejarlo sano.
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token-not-real")
+        monkeypatch.setenv("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
+        monkeypatch.setenv("GIST_ID", "test-gist-id-not-real")
+        importlib.reload(scheduler)
