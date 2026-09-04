@@ -883,3 +883,76 @@ de la simulación" — asume nc fijo toda la vida de la cuenta.
    una vez disponible. La versión fija queda solo como referencia
    histórica de "qué tan optimista era el mapa original".
 
+#### Incidente: el grid exhaustivo (nc fijo) se lanzó, ETA saltó de ~2h a ~70h, diagnóstico y fix (04-sep-2026)
+
+**El grid de nc fijo se lanzó en background tras el preflight aprobado.**
+A los 44 minutos, con solo 1.0% completado, el ETA reportado por el
+propio script había subido de forma sostenida hasta ~4,200min (~70h) —
+lejos de las ~2h estimadas. Se detuvo el proceso (`TaskStop`) antes de
+seguir quemando cómputo sin supervisión, siguiendo la regla ya
+establecida de "avisar si es inviable, no recortar en silencio".
+
+**Hipótesis inicial del usuario:** que el rediseño de `nc` dinámico
+había roto la vectorización. **Descartada con evidencia** — no existía
+ningún código de `nc` dinámico en ese momento (el rediseño se pausó
+explícitamente hasta después de este grid, ver arriba); el proceso
+detenido corría la version original, sin modificar, de
+`simulate_xfa_lifetime()`.
+
+**Causa real, confirmada con benchmark dirigido:** `simulate_xfa_lifetime()`
+NUNCA estuvo vectorizada — loop Python escalar `for path in
+range(n_paths): for day in range(max_days): ...` con `break` temprano
+al tronar. Su costo real depende de cuántos días corre cada path antes
+de tronar, y ese costo varía **~75x** entre regiones del grid:
+
+| Caso | tiempo/corrida | avg_lifetime_days |
+|---|---|---|
+| RR=1.0, WR=0.35 (blow rate alto) | 12ms | 4.1 |
+| RR=1.0, WR=0.50 (= WR_natural) | 16ms | 6.4 |
+| RR=2.0, WR=0.75 (blow rate bajo) | 744ms | 400.9 |
+| RR=8.0, WR=0.75 (esquina extrema) | 868ms | 467.6 |
+| 150K, RR=2.0, WR=0.75 | 903ms | 491.7 |
+
+El benchmark original del preflight muestreó un solo punto (WR=0.5,
+cerca de WR_natural, blow rate alto) — exactamente el extremo rápido de
+esta distribución. La mayoría del grid exhaustivo (RR hasta 8.0, WR
+hasta 0.80) cae del lado lento (alta supervivencia, corre casi el
+horizonte completo de 500 días para casi los 1000 paths).
+
+**Fix aplicado:** reescrita `simulate_xfa_lifetime()` en
+`core/funded_account.py` para vectorizar sobre el eje de paths — un
+solo loop Python de `max_days` iteraciones (no `n_paths × max_days`),
+con arrays de numpy de forma `(n_paths,)` para balance/floor/contador
+de días ganadores/etc., actualizados con `np.where`/masks en vez de
+objetos `XFAAccount` por path. **Validado bit-a-bit contra la versión
+escalar anterior en 32 casos** (distribuciones deterministas y
+estocásticas, las 3 cuentas, ambas políticas de MLL, WR/RR bajos y
+altos, mismo seed) — coincidencia exacta en todos los campos del dict
+de retorno. Suite completa: 134/134 tests siguen pasando sin
+modificar ningún test existente.
+
+**Resultado del fix** (mismos 5 casos del benchmark de arriba):
+
+| Caso | antes | después |
+|---|---|---|
+| RR=1.0, WR=0.35 | 12ms | 6.7ms |
+| RR=1.0, WR=0.50 | 16ms | 6.4ms |
+| RR=2.0, WR=0.75 | 744ms | 14.2ms |
+| RR=8.0, WR=0.75 | 868ms | 14.5ms |
+| 150K, RR=2.0, WR=0.75 | 903ms | 14.9ms |
+
+Rango de variación: de ~75x a ~2.3x. Benchmark agregado (60 muestras
+aleatorias representativas de todo el espacio k/RR/WR/cuenta real):
+**10.5ms/corrida promedio** → estimado revisado para las 292,050
+corridas del grid exhaustivo: **~51 minutos** (antes: ~70 horas).
+
+**Nota para el futuro rediseño de `nc` dinámico (Scaling Plan):** dado
+que el loop ahora ya está vectorizado sobre paths, agregar el lookup
+de `nc`/contratos por balance (tabla de umbrales de la sección de
+arriba) es agregar un `np.searchsorted`/`np.digitize` vectorizado sobre
+el array `balance` DENTRO del loop de `max_days` ya existente — no
+requiere volver a un loop escalar. La preocupación original del
+usuario (que un lookup condicional por día rompiera la vectorización)
+es válida como riesgo a evitar, no como algo ya ocurrido — hay que
+implementarlo vectorizado desde el inicio cuando llegue ese paso.
+

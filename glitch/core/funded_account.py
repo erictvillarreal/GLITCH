@@ -307,41 +307,86 @@ def simulate_xfa_lifetime(dist, spec: XFASpec = XFA_50K, mll_reset_policy: str =
     lado a lado, nunca uno solo como respuesta final (pregunta sin
     resolver contra fuente primaria completa -- ver docstring del modulo
     y GLITCH_RESEARCH_LOG.md).
+
+    Vectorizado sobre el eje de paths (04-sep-2026): la version anterior
+    era un loop Python escalar path-por-path/dia-por-dia -- su costo
+    real depende de cuantos dias corre cada path antes de tronar
+    (`break` temprano), y ese costo varia ~75x entre combinaciones de
+    bajo blow-rate (WR cerca de WR_natural, ~12ms/corrida) y alto
+    blow-rate cercano a 0 -- osea alta supervivencia, RR/WR altos, que
+    corren el horizonte casi completo (~900ms/corrida). Un benchmark de
+    un solo punto no representa ese rango. Validado bit-a-bit contra la
+    version escalar anterior en 32 casos (deterministas y estocasticos,
+    las 3 cuentas, ambas politicas, WR/RR bajos y altos) antes de
+    reemplazarla -- ver GLITCH_RESEARCH_LOG.md.
     """
     import numpy as np
     rng = np.random.default_rng(seed)
-    lifetime_payouts = []
-    lifetime_days = []
-    lifetime_payout_usd = []
-    n_never_eligible = 0
-    n_still_alive_at_horizon = 0
+    pnls = dist.sample(n_paths * max_days, rng).reshape(n_paths, max_days)
 
-    for _ in range(n_paths):
-        acct = XFAAccount(spec, mll_reset_policy=mll_reset_policy)
-        daily_pnls = dist.sample(max_days, rng)
-        reached_first_payout = False
-        for day_pnl in daily_pnls:
-            acct.start_day()
-            acct.record_trade_pnl(float(day_pnl))
-            acct.end_of_day()
-            if acct.status == XFAStatus.PAYOUT_ELIGIBLE:
-                acct.request_payout()
-                reached_first_payout = True
-            if not acct.is_alive:
-                break
+    mll_distance = spec.mll_distance
+    floor_lock_level = spec.floor_lock_level
+    min_winning_day_usd = spec.min_winning_day_usd
+    winning_days_required = spec.winning_days_required
+    payout_pct = spec.payout_pct_of_balance
+    payout_cap = spec.payout_cap_usd
+    split = spec.profit_split_trader
 
-        if not reached_first_payout:
-            n_never_eligible += 1
-        if acct.is_alive:
-            n_still_alive_at_horizon += 1
+    balance = np.zeros(n_paths)
+    mll_floor = np.full(n_paths, spec.floor_start)
+    alive = np.ones(n_paths, dtype=bool)
+    winning_days_count = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payouts = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payout_usd = np.zeros(n_paths)
+    has_had_first_payout = np.zeros(n_paths, dtype=bool)
+    day_number = np.zeros(n_paths, dtype=np.int64)
 
-        lifetime_payouts.append(acct.lifetime_payouts)
-        lifetime_days.append(acct.day_number)
-        lifetime_payout_usd.append(acct.lifetime_payout_usd)
+    for day in range(max_days):
+        active_at_start = alive
+        day_pnl = pnls[:, day]
 
-    payouts_arr = np.array(lifetime_payouts)
-    days_arr = np.array(lifetime_days)
-    usd_arr = np.array(lifetime_payout_usd)
+        balance = np.where(active_at_start, balance + day_pnl, balance)
+        day_number = np.where(active_at_start, day + 1, day_number)
+
+        new_floor_candidate = balance - mll_distance
+        floor_should_update = active_at_start & (new_floor_candidate > mll_floor)
+        mll_floor = np.where(floor_should_update, np.minimum(new_floor_candidate, floor_lock_level), mll_floor)
+
+        newly_blown = active_at_start & (balance <= mll_floor)
+        alive = alive & ~newly_blown
+
+        still_active_today = active_at_start & ~newly_blown
+        counted = still_active_today & (day_pnl >= min_winning_day_usd)
+        winning_days_count = np.where(counted, winning_days_count + 1, winning_days_count)
+
+        eligible = still_active_today & (winning_days_count >= winning_days_required)
+        if eligible.any():
+            gross = np.minimum(balance[eligible] * payout_pct, payout_cap)
+            trader_take = gross * split
+            balance = balance.copy()
+            balance[eligible] -= gross
+            if mll_reset_policy == "every_payout":
+                mll_floor = mll_floor.copy()
+                mll_floor[eligible] = 0.0
+            else:
+                reset_now = eligible & (~has_had_first_payout)
+                if reset_now.any():
+                    mll_floor = mll_floor.copy()
+                    mll_floor[reset_now] = 0.0
+            has_had_first_payout = has_had_first_payout.copy()
+            has_had_first_payout[eligible] = True
+            winning_days_count = winning_days_count.copy()
+            winning_days_count[eligible] = 0
+            lifetime_payouts = lifetime_payouts.copy()
+            lifetime_payouts[eligible] += 1
+            lifetime_payout_usd = lifetime_payout_usd.copy()
+            lifetime_payout_usd[eligible] += trader_take
+
+    n_never_eligible = int((lifetime_payouts == 0).sum())
+    n_still_alive_at_horizon = int(alive.sum())
+    payouts_arr = lifetime_payouts.astype(float)
+    days_arr = day_number.astype(float)
+    usd_arr = lifetime_payout_usd
 
     return {
         "n_paths": n_paths,
