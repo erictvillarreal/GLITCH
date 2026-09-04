@@ -1146,3 +1146,94 @@ de Massive/Polygon, 2 años). Ninguna de las tres se aplicó aquí.
 reporta este primer resultado (negativo, con rigor completo) antes de
 seguir, tal como se pidió explícitamente.
 
+### Límites reales del plan de Massive (04-sep-2026)
+
+Confirmado contra fuente primaria (massive.com/futures,
+massive.com/business-futures) — **NO asumido**: extender la historia
+NO es gratis bajo el plan actual.
+
+| Tier | Precio | Historia | Acceso |
+|---|---|---|---|
+| Futures Starter (el que ya se paga) | $29/mes | 2 años | Self-serve |
+| Futures Developer | $79/mes (+$50/mes) | 5 años | Self-serve |
+| Futures CME/COMEX/etc. (enterprise) | $999/mes **por exchange** | 7+ años | Solo contacto de ventas |
+
+El tier enterprise se descarta por desproporcionado (MES=CME +
+MGC=COMEX = $1,998/mes). Proyección lineal (2 años reales → 5 años, no
+garantizada, régimen de volatilidad no necesariamente estacionario):
+los 6 configs individuales pasarían de N=83-126 a N≈208-315, cruzando
+N>200 sin necesidad de pool. **Decisión del usuario: NO aprobar el
+upgrade todavía — Camino 3, probar pool de productos primero
+(costo cero), sólo re-preguntar sobre el upgrade si el pool no
+alcanza o si revela algo genuinamente prometedor que amerite más
+datos para confirmar.**
+
+### Pool MES+MGC, con verificación de consistencia de dirección PREVIA (04-sep-2026)
+
+**Verificación de consistencia (obligatoria antes de poolear nada) —
+signo de EV por producto, en las 6 combinaciones (config × dirección)
+ya probadas en la dirección 1:**
+
+| Config | Dirección | EV% MES | EV% MGC | Consistente |
+|---|---|---|---|---|
+| daily hold=3d | fade | -0.149 | +0.133 | **NO** |
+| daily hold=3d | momentum | +0.110 | +0.025 | SÍ |
+| daily hold=5d | fade | +0.065 | +0.167 | SÍ |
+| daily hold=5d | momentum | -0.046 | -0.155 | SÍ |
+| weekly hold=5d | fade | +0.312 | +0.140 | SÍ |
+| weekly hold=5d | momentum | -0.397 | +0.143 | **NO** |
+
+**2 de 6 son inconsistentes — reportado como hallazgo, NO se poolean**
+(tal como se pidió): `daily hold=3d/fade` y `weekly hold=5d/momentum`
+muestran signos opuestos entre MES y MGC. Esto en sí mismo es
+información real — el patrón no generaliza entre estos dos productos
+en esas dos configuraciones, no es solo "falta de N".
+
+**Pool de los 4 configs consistentes** (`scripts/wf_slow_mr_pool.py`):
+trades de MES y MGC concatenados por fecha real de entrada, agrupados
+en folds cronológicos por calendario (no por índice de barra, que
+difiere en 1 entre productos):
+
+| Config | N pooled | p (one-sided) | N>200 | Mitad 1 EV% | Mitad 2 EV% | Mismo signo ambas mitades |
+|---|---|---|---|---|---|---|
+| daily hold=3d / momentum | **257** | 0.398 | **SÍ** | -0.020 | +0.096 | No (cambia de signo) |
+| daily hold=5d / fade | 172 | 0.365 | No | +0.186 | -0.051 | No (cambia de signo) |
+| daily hold=5d / momentum | 172 | 1.000 | No | -0.162 | +0.043 | No (cambia de signo) |
+| **weekly hold=5d / fade** | 170 | **0.048** | No | **+0.356** | **+0.189** | **SÍ (ambas positivas)** |
+
+**Resultado 1 — `daily hold=3d/momentum` alcanza N>200 (257) con
+potencia real, y el resultado es NULO (p=0.398), consistente en ambas
+mitades solo en el sentido de que ninguna es significativa por sí
+sola pero cambia de signo entre mitades — esta hipótesis queda
+descartada con confianza real, no por falta de muestra.**
+
+**Resultado 2 — `weekly hold=5d/fade` es el caso más prometedor
+encontrado hasta ahora en esta búsqueda de edge real:** p=0.048 en
+muestra completa (por debajo de 0.05), y las DOS mitades temporales
+tienen el MISMO signo (ambas positivas, +0.356% y +0.189%) — a
+diferencia de los otros 3 configs pooled, que cambian de signo entre
+mitades. Pero **NO cumple el criterio combinado no negociable de esta
+sesión (N>200 Y p<0.05, no uno solo)** — N=170, por debajo de 200.
+Ninguna mitad por separado alcanza significancia individual (p=0.117 y
+p=0.220), lo cual es esperable con la mitad de los folds, no
+necesariamente una alarma — pero tampoco es la confirmación
+independiente fuerte que el estándar de esta sesión exige antes de
+confiar en un número (recordar: los 2 candidatos históricos con
+p<0.20 de esta sesión nunca se reprodujeron frescos — un p=0.048 con
+N por debajo del umbral amerita el mismo escepticismo, no menos).
+
+**Conclusión operativa — dispara la condición #4 del usuario
+explícitamente:** `weekly hold=5d/fade` (MES+MGC, fade del retorno de
+la última semana, holding 5 días) es un candidato genuinamente
+prometedor (dirección consistente entre productos Y entre mitades
+temporales) pero insuficientemente probado (N=170<200, p en el límite).
+Corresponde volver a preguntar sobre el upgrade de Massive
+específicamente para este candidato — más años de historia (o más
+productos) resolverían si es real o ruido, en vez de decidir con la
+potencia estadística actual, que es insuficiente por diseño propio de
+esta sesión.
+
+Los otros 3 configs pooled (incluido el que sí alcanzó N>200) no
+muestran nada que amerite gastar más en datos — son resultados
+negativos ya bien establecidos con la muestra actual.
+
