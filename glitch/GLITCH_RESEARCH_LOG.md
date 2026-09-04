@@ -811,3 +811,75 @@ para 100K/150K en curso en paralelo a esta corrida (no bloqueante); si
 se confirma, son esas filas (no todo el CSV) las que ameritarían
 re-correrse.
 
+#### Hallazgo crítico: `nc_cap` NO es el límite real de la XFA — es (probablemente) el del Combine (04-sep-2026)
+
+**La búsqueda de arriba encontró algo más grave que "falta el número de
+100K/150K".** Confirmado contra fuente primaria (help.topstep.com,
+artículo "What is the Scaling Plan?"): la Express Funded Account (XFA)
+**no tiene un cap fijo de contratos por tamaño de cuenta** — usa un
+**Scaling Plan dependiente del BALANCE ACTUAL**, no del tamaño con el
+que se fondeó. Cita textual: *"Your max contracts do not increase
+mid-session"*; ejemplo citado en el artículo: 50K arranca en 2 lotes.
+
+**Tabla completa, verificada por el usuario contra la imagen oficial
+del artículo primario (help.topstep.com, "What is the Scaling Plan?"):**
+
+| Balance de la cuenta | 50K | 100K | 150K |
+|---|---|---|---|
+| < $1,500 | 2 | 3 | 3 |
+| $1,500–$2,000 | 3 | 4 | 4 |
+| $2,000–$3,000 | 5 | 5 | 5 |
+| $3,000–$4,500 | 5 | 5 | 10 |
+| > $3,000 (100K) | — | 10 | — |
+| > $4,500 (150K) | — | — | 15 |
+
+Unidades en **lotes mini-equivalentes** (ratio 10:1 con micros, excepto
+Micro Silver 5:1 y Micro Bitcoin/Micro Ether cap a lot-equivalente de
+mini en vez de escala estándar — aplicar la excepción correspondiente
+por producto al implementar).
+
+**Patrón notable, ya observado por el usuario:** el techo de contratos
+de cada cuenta coincide EXACTAMENTE con su `mll_distance` en dólares
+(50K: techo de 5 lotes en balance=$2,000=mll_distance; 100K: techo de
+10 lotes en balance=$3,000=mll_distance; 150K: techo de 15 lotes en
+balance=$4,500=mll_distance). No parece coincidencia — es
+probablemente el diseño intencional de Topstep para que el riesgo
+máximo por posición esté acotado en términos similares una vez la
+cuenta tiene colchón suficiente.
+
+**Por qué esto invalida (parcialmente) todo el trabajo de Cerebro 2
+hecho hasta ahora:** `SPECS[...].nc_cap` (50 para MES, 30 para MGC, 5
+para ZN/ZC, etc., usado en el experimento base, el grid Pass-1, y el
+grid exhaustivo `cerebro2_grid_exhaustive.py`) es casi con certeza el
+límite del **Combine**, no el Scaling Plan de la XFA. `derive_nc()`
+nunca modeló que el número de contratos permitido depende del balance
+ACTUAL de la cuenta ni que arranca muy bajo (2-3 lotes) cerca de $0 —
+exactamente donde la cuenta pasa la mayor parte del tiempo bajo diseños
+de k bajo (pocas pérdidas consecutivas). `core/funded_account.py`
+tampoco tiene ningún concepto de "nc depende del balance en cada paso
+de la simulación" — asume nc fijo toda la vida de la cuenta.
+
+**Decisión explícita del usuario (04-sep-2026):**
+1. Dejar terminar el grid exhaustivo actual (`nc` FIJO, calculado por
+   `derive_nc()` sin scaling) — se guarda y se documenta como **LÍMITE
+   SUPERIOR OPTIMISTA**, nunca como resultado final. No representa lo
+   que la cuenta real permitiría operar.
+2. NO iniciar el rediseño en paralelo al grid actual, para no duplicar
+   cómputo.
+3. Una vez guardado el CSV del grid actual, revisarlo con el usuario
+   como referencia (aun sabiendo que es optimista) ANTES de empezar el
+   rediseño.
+4. Rediseñar `simulate_xfa_lifetime()` para que `nc` sea DINÁMICO según
+   el balance actual de la cuenta en cada paso, siguiendo la tabla de
+   arriba (por tamaño de cuenta, respetando excepciones SIL/MBT/MET
+   por producto).
+5. Re-correr el MISMO grid (mismos ejes k/RR/WR/producto/cuenta) con
+   `nc` dinámico y comparar contra la versión de `nc` fijo ya guardada
+   — se espera que empeore, dado que el nc dinámico empieza más
+   restringido cerca de $0 de balance, justo donde la cuenta es más
+   frágil.
+6. Documentar cuál de las 2 versiones (fija vs. dinámica) debe usarse
+   para cualquier decisión de negocio futura — **la dinámica, siempre**,
+   una vez disponible. La versión fija queda solo como referencia
+   histórica de "qué tan optimista era el mapa original".
+
