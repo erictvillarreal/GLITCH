@@ -956,3 +956,103 @@ usuario (que un lookup condicional por día rompiera la vectorización)
 es válida como riesgo a evitar, no como algo ya ocurrido — hay que
 implementarlo vectorizado desde el inicio cuando llegue ese paso.
 
+### Cerebro 2 — Tarea 1: validación de los top-5 [P] con nc dinámico (04-sep-2026)
+
+**Implementado** `simulate_xfa_lifetime_dynamic_nc()` y `dynamic_nc_for_balance()`
+en `core/funded_account.py`, vectorizado con `np.searchsorted()` sobre
+el array de balance (no loop escalar), usando la tabla real del
+Scaling Plan confirmada en la sección anterior. Validado bit-a-bit
+contra `simulate_xfa_lifetime()` (nc fijo) en 3 casos con una tabla de
+lookup degenerada de un solo tier — 4 tests nuevos en
+`tests/test_funded_account.py` (20/20 en ese archivo, 138/138 en la
+suite completa).
+
+**Error cometido y corregido en el camino, documentado para no
+repetirlo:** la primera versión de `simulate_xfa_lifetime_dynamic_nc()`
+usaba incondicionalmente `nc_today = dynamic_nc_for_balance(...)` — el
+MÁXIMO legal permitido cada día. Para el candidato ganador
+(MGC/150K/nc=6), eso significa operar con nc=20-30 desde el día 1
+(balance=$0 ya permite 30 contratos para una cuenta 150K) — **5x más
+grande que el candidato diseñado**, una estrategia completamente
+distinta y mucho más riesgosa, no una validación del candidato
+original. Corregido agregando el parámetro `nc_designed`: `nc_today =
+min(nc_designed, nc_legal_del_dia)` — el Scaling Plan es un techo
+LEGAL adicional sobre el diseño de riesgo, no una instrucción de
+operar el máximo. Re-validado bit-a-bit tras el fix.
+
+**Hallazgo real (contrario a la expectativa inicial del punto 5 de la
+instrucción del usuario):** para los 5 mejores candidatos [P] del grid
+exhaustivo (todos 150K, k=2, nc diseñado entre 3 y 6), **el Scaling
+Plan NO es la restricción vinculante.** El piso legal de una cuenta
+150K incluso en balance=$0 es ya 30 contratos micro (3 lotes x 10) —
+muy por encima de los 3-6 contratos que el diseño de riesgo (`k=2`,
+SL en ticks muy ancho) eligió usar. Como el nc diseñado es SIEMPRE
+menor que el piso legal (que además solo sube con el balance, nunca
+baja), `min(nc_designed, nc_legal)` = `nc_designed` en todos los días
+de todos los paths — **los números de nc fijo ya reportados en el CSV
+son válidos sin corrección** para estos 5 candidatos específicamente.
+Confirmado con Monte Carlo a `n_paths=10,000, max_days=756`: fijo y
+dinámico dan resultados IDÉNTICOS (no solo similares) en los 5
+candidatos x 2 políticas de MLL.
+
+**Esto NO generaliza a todo el grid** — es una propiedad de que las
+combinaciones ganadoras en la zona [P] usan `k` muy agresivo (2) y SL
+muy ancho, lo que produce `nc` diseñado pequeño vía `derive_nc()`. Un
+candidato con `k` más conservador o SL más ajustado (nc diseñado más
+grande) sí podría chocar contra el Scaling Plan real, especialmente en
+cuentas 50K/100K o en balances bajos. No se probó esa región todavía.
+
+**Conclusión operativa para la decisión Camino A vs. B:** el mejor
+candidato [P] (MGC/150K, k=2, nc=6, RR=1.0, WR=0.50) sigue siendo
+$2,169 de payout esperado de por vida con 46.2% de probabilidad de
+alcanzar al menos 1 payout (`n_paths=10,000`, ligeramente distinto del
+$2,299/49% reportado con `n_paths=1,000` del grid original — ambos
+dentro del ruido de Monte Carlo esperado, no una discrepancia real).
+
+### Cerebro 2 — Tarea 2 (exploratoria): Camino C — 5 cuentas XFA simultáneas (04-sep-2026)
+
+**Unidad base:** el candidato de la Tarea 1 (MGC/150K, k=2, nc=6,
+RR=1.0, WR=0.50, política `every_payout`), ya validado con nc dinámico.
+
+**Simulación Monte Carlo real** (no solo fórmula cerrada) de 5 cuentas
+con seeds independientes (`n_paths=10,000` cada una, combinadas por
+path para formar 10,000 "meta-paths" de 5 cuentas simultáneas):
+
+| Métrica | 1 cuenta | 5 cuentas independientes |
+|---|---|---|
+| Prob(≥1 payout) | 46.2% | **95.7%** (fórmula cerrada: 95.5%, Monte Carlo confirma) |
+| Payout total esperado | $2,169 | **$11,191** (≈ 5 × $2,169, por linealidad de la esperanza) |
+| Prob(ninguna cuenta paga) | 53.8% | 4.3% |
+
+**Advertencia explícita, tal como se pidió — la asunción de
+independencia es CUESTIONABLE tal como está planteado:** las 5 cuentas
+de este análisis corren el MISMO candidato sobre el MISMO producto
+(MGC) simultáneamente. En la realidad, 5 cuentas operando MGC al mismo
+tiempo estarían expuestas al MISMO movimiento de mercado — altamente
+CORRELACIONADAS, no independientes. Contraste extremo para dimensionar
+el riesgo de esa asunción: si las 5 cuentas estuvieran perfectamente
+correlacionadas (mismo resultado en las 5 siempre), `Prob(≥1 payout)`
+sería igual al de 1 sola cuenta (46.2%, **CERO beneficio de
+diversificación**), aunque el payout total esperado ($10,845) no
+cambia — la suma de esperanzas es válida siempre, independiente de la
+correlación; lo que SÍ depende de la correlación es la probabilidad de
+"al menos una" y la forma de la cola de la distribución conjunta. El
+número real de este mundo está en algún punto entre 46.2% y 95.7%,
+más cerca de 46.2% si las 5 cuentas replican la misma señal/producto
+sin ningún desfase temporal o de instrumento real.
+
+**Lo que SÍ haría la independencia plausible (no probado aquí):**
+usar productos distintos entre las 5 cuentas (ej. los top candidatos
+de MGC, MES, M2K, ZN, MCL en vez de clonar MGC 5 veces) y/o
+desfasarlas en el tiempo — ninguna de las dos cosas se implementó en
+este análisis, que usa literalmente el mismo candidato 5 veces con
+solo el seed de RNG distinto.
+
+**Conclusión operativa, como se pidió explícitamente:** Camino C NO
+reduce el riesgo de ninguna cuenta individual ni mejora la geometría
+en sí — es diversificación de la PROBABILIDAD DE ÉXITO (llegar a
+cualquier payout), no una estrategia distinta ni una fuente de edge.
+Es un paliativo operacional sobre un candidato ya validado, no un
+sustituto de investigar edge real (Camino B en el sentido de la
+discusión previa de esta sesión).
+

@@ -17,9 +17,12 @@ import numpy as np
 import pytest
 
 from core.funded_account import (
-    XFAAccount, XFASpec, XFAStatus, XFA_50K,
+    XFAAccount, XFASpec, XFAStatus, XFA_50K, XFA_100K, XFA_150K,
     simulate_xfa_paths, simulate_xfa_lifetime,
+    simulate_xfa_lifetime_dynamic_nc, dynamic_nc_for_balance,
+    XFA_SCALING_PLAN, RATIO_MINI_TO_MICRO,
 )
+from scripts.camino_b_grid import ExactDayDist
 
 
 class TestXFAAccountBasics:
@@ -205,3 +208,70 @@ class TestSimulateXfaLifetime:
         result = simulate_xfa_lifetime(dist, spec=XFA_50K, n_paths=100, max_days=30, seed=1)
         assert result["prob_never_reached_first_payout"] == 1.0
         assert result["avg_lifetime_payouts"] == 0.0
+
+
+class TestDynamicNcForBalance:
+    """Scaling Plan real de la XFA (confirmado 04-sep-2026 contra
+    help.topstep.com) -- ver GLITCH_RESEARCH_LOG.md. El techo de cada
+    cuenta se alcanza exactamente en su propio mll_distance."""
+
+    def test_50k_thresholds(self):
+        bal = np.array([-2000.0, 500.0, 1_499.0, 1_500.0, 1_999.0, 2_000.0, 10_000.0])
+        nc = dynamic_nc_for_balance(bal, XFA_50K.mll_distance, "MGC")
+        assert list(nc) == [20, 20, 20, 30, 30, 50, 50]  # lotes x10 (MGC = ratio estandar)
+
+    def test_100k_thresholds(self):
+        bal = np.array([500.0, 1_500.0, 2_000.0, 2_999.0, 3_000.0, 10_000.0])
+        nc = dynamic_nc_for_balance(bal, XFA_100K.mll_distance, "MES")
+        assert list(nc) == [30, 40, 50, 50, 100, 100]
+
+    def test_150k_thresholds(self):
+        bal = np.array([500.0, 1_500.0, 2_000.0, 3_000.0, 4_499.0, 4_500.0, 10_000.0])
+        nc = dynamic_nc_for_balance(bal, XFA_150K.mll_distance, "MES")
+        assert list(nc) == [30, 40, 50, 100, 100, 150, 150]
+
+
+class TestSimulateXfaLifetimeDynamicNc:
+    """
+    Paridad mecanica contra simulate_xfa_lifetime(): con una tabla de
+    Scaling Plan degenerada (un solo tier -> nc constante para
+    cualquier balance), el resultado dinamico debe coincidir
+    bit-a-bit con el de nc fijo -- confirma que la aritmetica
+    dia-a-dia del $ dinamico replica exactamente la del $ fijo. No es
+    posible probar paridad con la tabla REAL desde balance=$0 (el nc
+    real cambia de tier necesariamente), asi que esto valida el
+    mecanismo, no un escenario real de principio a fin.
+    """
+
+    def test_matches_fixed_nc_under_degenerate_single_tier_table(self):
+        RATIO_MINI_TO_MICRO["_TEST_RATIO_1"] = 1
+        cases = [
+            (XFA_150K, 6, 364.0, 364.0, 1.92, 0.5, "every_payout"),
+            (XFA_150K, 4, 540.0, 810.0, 1.22, 0.4, "first_payout_only"),
+            (XFA_50K, 6, 100.0, 100.0, 1.92, 0.35, "every_payout"),
+        ]
+        try:
+            for spec, nc, sl_usd, tp_usd, comm, wr, policy in cases:
+                original_plan = XFA_SCALING_PLAN[spec.mll_distance]
+                XFA_SCALING_PLAN[spec.mll_distance] = {"bins": np.array([]), "lots": np.array([nc])}
+                try:
+                    dist = ExactDayDist(wr, tp_usd * nc, sl_usd * nc, comm * nc, trades_per_day=1)
+                    r_fixed = simulate_xfa_lifetime(dist, spec=spec, mll_reset_policy=policy,
+                                                     n_paths=300, max_days=300, seed=11)
+                    r_dyn = simulate_xfa_lifetime_dynamic_nc(
+                        wr, sl_usd, tp_usd, comm, spec=spec, product_code="_TEST_RATIO_1",
+                        mll_reset_policy=policy, n_paths=300, max_days=300, seed=11)
+                finally:
+                    XFA_SCALING_PLAN[spec.mll_distance] = original_plan
+
+                for key in r_fixed:
+                    v1, v2 = r_fixed[key], r_dyn[key]
+                    if isinstance(v1, tuple):
+                        for a, b in zip(v1, v2):
+                            assert a == pytest.approx(b), f"{key}: {v1} != {v2}"
+                    elif isinstance(v1, float):
+                        assert v1 == pytest.approx(v2), f"{key}: {v1} != {v2}"
+                    else:
+                        assert v1 == v2, f"{key}: {v1} != {v2}"
+        finally:
+            RATIO_MINI_TO_MICRO.pop("_TEST_RATIO_1", None)
