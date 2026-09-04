@@ -1237,3 +1237,122 @@ Los otros 3 configs pooled (incluido el que sí alcanzó N>200) no
 muestran nada que amerite gastar más en datos — son resultados
 negativos ya bien establecidos con la muestra actual.
 
+### Decisión del usuario (04-sep-2026): NO aprobar upgrade todavía — ampliar exploración primero
+
+`weekly hold=5d/fade` (MES+MGC) queda documentado explícitamente como
+**"prometedor, N insuficiente, pendiente de confirmación" — NI
+descartado NI confirmado. No construir nada de producción sobre él.**
+Siguiente ronda, en orden: (1) Dirección 3 — spreads/pares, (2)
+extender hold periods (2d/10d/15d) a más productos, (3) mantener una
+tabla centralizada de candidatos "N insuficiente, p prometedor" para
+evaluar el upgrade de Massive como una sola decisión que confirme/
+descarte varios candidatos juntos, no gasto repetido uno por uno.
+
+**Tabla centralizada de candidatos pendientes de confirmación (N
+insuficiente, no descartados) — actualizar aquí cada vez que aparezca
+uno nuevo:**
+
+| Candidato | Producto(s) | N | p | Estado |
+|---|---|---|---|---|
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | Prometedor, N<200, pendiente |
+
+### Dirección 3 — spreads/pares (primer intento, con un fallo metodológico corregido en el camino)
+
+**Bloqueo explícito, no omitido en silencio:** el par oro-vs-plata
+(GC/MGC vs SI/SIL) pedido por el usuario **no se pudo correr** — no
+hay datos de plata (SI/SIL) en `data_cache/`, y obtenerlos requiere
+`MASSIVE_API_KEY`, que vive en Railway y no está disponible en este
+shell local. Solo se corrió el par MES-M2K (equity index, mismo tipo
+de activo).
+
+**Error metodológico capturado y corregido ANTES de reportar
+resultados** (`scripts/wf_slow_spreads.py`): la primera construcción
+del OHLC sintético del spread usaba `high_spread = high_A/low_B` y
+`low_spread = low_A/high_B` — combinando el extremo de una pata con el
+extremo OPUESTO de la otra, que casi nunca ocurren en el mismo
+instante. Esto infla artificialmente el rango intradía aparente del
+spread, produciendo un ATR muchas veces mayor al movimiento real del
+spread. Síntoma detectado antes de confiar en el resultado: **0-1
+trades de 84-126 tocaban TP en TODAS las 6 combinaciones** — un patrón
+mecánico degenerado (barrera prácticamente inalcanzable), no un
+hallazgo económico de "sin edge". Corregido usando únicamente el
+cierre (`close_spread = close_A/close_B`, sin fabricar intradía) y
+`use_atr=False` (rolling std de retornos del cierre) — resultado
+re-corrido con conteos de TP/SL sensatos y comparables a los productos
+individuales.
+
+**Resultado (MES-M2K, N por config, p one-sided, ambas direcciones):**
+
+| Experimento | Dirección | N | p (one-sided) | Signo ambas mitades |
+|---|---|---|---|---|
+| daily hold=3d | fade | 126 | 0.174 | No (cambia) |
+| daily hold=3d | momentum | 126 | 0.120 | No (cambia) |
+| daily hold=5d | fade | 84 | 0.383 | No (cambia) |
+| daily hold=5d | momentum | 84 | 0.109 | Sí (ambas +) |
+| **weekly hold=5d** | **fade** | 84 | **0.062** | **Sí (ambas +, +0.213%/+0.121%)** |
+| weekly hold=5d | momentum | 84 | 1.000 | Sí (ambas -) |
+
+**Ninguna combinación pasa p<0.05.** El caso más cercano
+(`weekly hold=5d/fade`, p=0.062, N=84) muestra el MISMO patrón
+direccional (fade semanal positivo, consistente entre mitades) que el
+hallazgo prometedor de productos individuales pooled (MES+MGC,
+p=0.048) — no es evidencia independiente fuerte (su propio N es
+pequeño y su p no cruza el umbral), pero es una segunda señal
+apuntando en la misma dirección cualitativa (fade semanal), que vale
+la pena tener presente al decidir sobre el upgrade de Massive más
+adelante — NO se agrega todavía a la tabla de candidatos pendientes
+porque no cumple ni siquiera el umbral de p<0.05 por sí solo.
+
+**Pendiente para una ronda futura, no en este pase:** el par
+oro-vs-plata sigue bloqueado por falta de datos.
+
+### Extensión de hold periods y productos (04-sep-2026)
+
+`scripts/wf_slow_mr_grid.py` — misma metodología exacta, sin cambios,
+extendida a: holds 2/3/5/10/15 días (antes solo 3/5), señal diaria Y
+semanal, 6 productos (MES, MGC, M2K/RTY, MCL/CL, M6E/6E, ZN), fade y
+momentum. **96 experimentos totales.** CSV completo en
+`data_cache/cerebro2_slow_mr_grid.csv`.
+
+**Resultado agregado: 0 de 96 alcanza N>200. 2 de 96 pasan p<0.05
+nominal.**
+
+| Producto | Config | N | p (one-sided) | Mismo signo ambas mitades |
+|---|---|---|---|---|
+| MCL (Crude) | daily hold=2d / fade | 168 | 0.028 | Sí (+0.796%, +0.657%) |
+| M6E (6E/EuroFX) | daily hold=3d / fade | 126 | 0.032 | Sí (+0.093%, +0.076%) |
+
+**Advertencia estadística obligatoria, no opcional — comparaciones
+múltiples:** con 96 pruebas independientes a α=0.05, se esperan por
+puro azar **~4.8 falsos positivos** aunque NO exista ningún edge real
+en absoluto. Encontrar solo 2 hits está POR DEBAJO de esa expectativa
+de ruido — este resultado **no constituye evidencia de que haya algo
+real en ninguno de los dos**, es exactamente lo que produciría un
+proceso sin ningún edge verdadero. La consistencia de signo entre
+mitades temporales en ambos casos es un dato mitigante (un falso
+positivo puro por multiple-testing no garantiza esa consistencia,
+aunque tampoco la descarta bajo regímenes autocorrelacionados) — no
+suficiente por sí solo para tratarlos con más confianza que candidatos
+de ruido.
+
+**Tratamiento:** se agregan a la tabla de candidatos pendientes con la
+advertencia de comparaciones múltiples explícita adjunta — MISMO nivel
+de escepticismo que cualquier otro candidato con N insuficiente, ni
+más ni menos solo por venir de un grid más grande.
+
+**Tabla centralizada de candidatos pendientes de confirmación —
+actualizada:**
+
+| Candidato | Producto(s) | N | p | Caveat | Estado |
+|---|---|---|---|---|---|
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | Ninguno adicional — 1 sola prueba dirigida | Prometedor, N<200, pendiente |
+| daily hold=2d / fade | MCL | 168 | 0.028 | De un grid de 96 pruebas (~4.8 falsos esperados por azar) | Prometedor con reserva, N<200, pendiente |
+| daily hold=3d / fade | M6E | 126 | 0.032 | De un grid de 96 pruebas (~4.8 falsos esperados por azar) | Prometedor con reserva, N<200, pendiente |
+
+**Ningún candidato de esta tabla se usa para nada de producción.**
+Los 3 comparten el mismo problema estructural: N insuficiente con solo
+2 años de datos. Con 3 candidatos ahora acumulados (condición que el
+usuario fijó explícitamente como disparador), corresponde volver a
+plantear la decisión del upgrade de Massive como una sola decisión que
+los confirme o descarte a los tres juntos, no antes.
+
