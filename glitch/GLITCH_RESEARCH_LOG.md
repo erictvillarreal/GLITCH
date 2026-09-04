@@ -773,3 +773,41 @@ Ver `data_cache/cerebro2_grid_pass1_relabeled.csv` (gitignored) para
 el detalle fila por fila (`wr_natural`, `edge_required`,
 `ev_r_per_trade`, `needs_real_edge`).
 
+### Cerebro 2 — Grid exhaustivo k×RR×WR×producto×cuenta (04-sep-2026)
+
+**Motivación de esta expansión — documentada explícitamente para no
+perderla de vista:** un video/contenido de marketing de terceros citó
+un payout promedio de **$9,000** en cuenta fondeada, **sin metodología
+mostrada**. Se trata aquí como **hipótesis a explorar, NUNCA como cifra
+validada** — de ahí extender RR hasta 8.0 (más allá de lo que
+cualquier resultado propio de esta sesión sugería) y agregar las
+cuentas 100K/150K. El grid (`scripts/cerebro2_grid_exhaustive.py`) NO
+intenta reproducir ese número específico — es un mapa completo del
+espacio de búsqueda para poder juzgar después, sin re-correr nada, si
+alguna región de él es remotamente compatible con esa cifra o con
+cualquier otra.
+
+**Diseño** (preflight en `scripts/cerebro2_grid_exhaustive_preflight.py`,
+aprobado antes de correr): k (24 valores, 2–100), RR (16 valores,
+0.25–8.0), WR (11 valores, 0.30–0.80, barrido completo en TODO punto de
+k/RR), 7 productos, 3 tamaños de cuenta XFA (50K/100K/150K), 2
+políticas de MLL. 292,050 corridas de `simulate_xfa_lifetime`
+estimadas (~2h), CSV íntegro (no solo top-N) en
+`data_cache/cerebro2_grid_exhaustive.csv` (gitignored).
+
+**Límite pendiente de verificación — `nc_cap` para 100K/150K:**
+`SPECS[...].nc_cap` en `strategies/geometry_pure.py` está documentado
+como límite real de contratos confirmado **solo para la cuenta 50K**
+(help.topstep.com). No existe en este repo una cifra confirmada para
+100K/150K. **Decisión del usuario (04-sep-2026): usar el cap de 50K
+como aproximación conservadora para las 3 cuentas** — nunca sobreestima
+combos viables, pero puede recortar de más justo la región de interés
+para cuentas grandes. Columna `nc_cap_source` en el CSV marca cada fila
+como `50K_confirmed` (cuenta 50K) o
+`50K_cap_applied_as_proxy_unverified` (100K/150K) — cualquier filtrado
+futuro del CSV debe tratar las filas `..._unverified` como una cota
+inferior, no un resultado final. Búsqueda de la cifra real de Topstep
+para 100K/150K en curso en paralelo a esta corrida (no bloqueante); si
+se confirma, son esas filas (no todo el CSV) las que ameritarían
+re-correrse.
+
