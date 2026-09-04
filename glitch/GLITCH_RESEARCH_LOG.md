@@ -701,3 +701,75 @@ que el proceso no truene — no evidencia de que la señal de
 mean-reversión día-a-día con doble confirmación MES+MNQ tenga edge
 real. Nada de lo arreglado en esta ronda cambia esa conclusión.
 
+### Cerebro 2 — Pass 1 (MES + M6E) y corrección crítica del encuadre de WR (03-sep-2026)
+
+**Rama `cerebro2-dev`.** `scripts/cerebro2_grid_pass1.py` (commit
+`8f7a3a4`) corrió un barrido k × RR × WR × 2 políticas de MLL sobre
+MES + M6E (1,044 corridas de `simulate_xfa_lifetime`, pase barato:
+N_PATHS=1000, MAX_DAYS=500). El mensaje de ese commit incluyó la
+afirmación: *"At WR=0.50 (no edge) and RR>=1.5, expected payout is
+already meaningfully positive — a non-edge-dependent direction worth
+prioritizing"*.
+
+**Esa afirmación es INCORRECTA y queda retractada aquí explícitamente**
+(no se reescribe el commit ya pusheado — se documenta la corrección
+hacia adelante, mismo criterio que el resto de esta bitácora).
+
+**El error:** `cerebro2_grid_pass1.py` barre WR como parámetro LIBRE
+(`ExactDayDist.wr`, Bernoulli independiente en
+`scripts/camino_b_grid.py:72`) completamente desacoplado de RR
+(`avg_win_usd = rr * avg_loss_usd`, ambos derivados de `sl_ticks`/`nc`).
+En ningún punto del pipeline se calcula el WR que un proceso SIN sesgo
+produciría dado el RR de esa fila — la misma lógica de gambler's ruin
+ya usada para Camino B (`WR ≈ SL/(SL+TP)`) nunca se conectó a este
+grid. Confundir "cualquier WR que aparece en el barrido" con
+"geometría pura que no requiere señal" es el mismo tipo de error que
+casi se cometió al principio de la sesión con Camino B — evitado ahí,
+cometido aquí.
+
+**Corrección aplicada** (`scripts/cerebro2_wr_natural_relabel.py`,
+post-proceso puro sobre el CSV ya generado — **no se corrió ninguna
+simulación nueva**): `WR_natural = 1/(1+RR)` por fila de RR (mismo nc,
+mismo tick_value en ambos lados, confirmado en el script del grid):
+
+| RR  | WR_natural |
+|-----|-----------|
+| 0.5 | 66.7% |
+| 1.0 | 50.0% |
+| 1.5 | 40.0% |
+| 2.0 | 33.3% |
+| 3.0 | 25.0% |
+
+**Re-etiquetado del cuadrante marcado como "prometedor" (RR≥1.5,
+WR≥0.50):** de las 504 filas de simulación en ese rango, **0 son
+geometría pura — las 504 requieren edge real**, con edge requerido
+entre 10% y 50% de probabilidad por encima del WR natural (promedio
+30.2%; en R-múltiplos, EV requerido entre +0.25R y +2.0R por trade,
+promedio +1.01R). Ese nivel de edge no se ha encontrado en ningún
+candidato de esta sesión (mejor caso histórico p=0.149, nunca
+reproducido en fresco — ver sección de arriba; todo lo demás p>0.4).
+
+**Lo que SÍ sigue siendo geometría pura sin edge** (WR ≤ WR_natural
+para su fila de RR): RR=0.5 hasta WR=0.65, RR=1.0 hasta WR=0.50, RR=1.5
+hasta WR=0.40 — precisamente la región de payout más bajo/negativo de
+la tabla original (consistente con Camino B/G2: SL=100/TP=40 → RR=0.4,
+WR_natural=71.4%, casi idéntico al WR empírico ~70.6% de G2 — edge
+requerido ≈0, que es exactamente por qué Camino B funciona sin señal
+real y por qué NO transfiere directamente a XFA sin ese colchón de
+tiempo/pérdida acotada del Combine).
+
+**Conclusión operativa:** el "hallazgo" de que existía una zona de
+payout alto sin necesidad de edge era un artefacto del desacople
+WR/RR, no un resultado del diseño. Antes de extender el grid a más
+productos o correr el stress test (Paso 4.4), el espacio de búsqueda
+de Cerebro 2 necesita re-diseñarse para que WR sea reportado siempre
+junto a su WR_natural y su edge requerido — no como un eje libre
+independiente — o alternativamente, limitarse desde el diseño a la
+región WR ≤ WR_natural si el objetivo es un resultado sin dependencia
+de señal real (aunque esa región, por lo visto en el pase 1, tiene
+payouts marginales o negativos en el rango de RR probado).
+
+Ver `data_cache/cerebro2_grid_pass1_relabeled.csv` (gitignored) para
+el detalle fila por fila (`wr_natural`, `edge_required`,
+`ev_r_per_trade`, `needs_real_edge`).
+
