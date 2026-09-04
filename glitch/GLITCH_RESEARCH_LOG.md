@@ -1056,3 +1056,93 @@ Es un paliativo operacional sobre un candidato ya validado, no un
 sustituto de investigar edge real (Camino B en el sentido de la
 discusión previa de esta sesión).
 
+## Cerebro 2 — PIVOTE: búsqueda de edge real (04-sep-2026)
+
+**Corrección de rumbo del usuario, no pausa:** Cerebro 2 sigue activo,
+pero pivota de "geometría pura modesta" (Camino A) hacia investigar
+edge real, con un criterio de éxito DISTINTO al de Cerebro 1 — no
+necesita resolver rápido (Cerebro 1 necesitaba pass_rate alto en 15
+días), necesita ser **estadísticamente real** (p<0.05, reproducible,
+N>200) y generar payout suficiente aunque sea con 2-10 eventos/año por
+cuenta. Geometría pura y esta búsqueda de edge real corren en paralelo,
+no son mutuamente excluyentes.
+
+Se mantiene el estándar no negociable de rigor de toda la sesión:
+walk-forward causal, N>200, p<0.05, Y reproducción en fresco antes de
+confiar en cualquier número — recordatorio explícito de que los 2
+únicos candidatos históricos con p<0.20 de esta sesión (p=0.149/0.165
+MR-pura, p=0.081 combo_2d) NUNCA se reprodujeron al re-testear
+(p=0.44-0.45 ambos, ver sección de arriba) — cualquier candidato nuevo
+debe pasar esa misma prueba de fuego.
+
+### Dirección 1 — timeframes lentos en MES/MGC (primer resultado, 04-sep-2026)
+
+**Script:** `scripts/wf_slow_mr.py`. Reutiliza `simulation/triple_barrier.py`
+(mismo `label_triple_barrier`/`BarrierConfig`, fix de barras ambiguas ya
+aplicado) y la misma metodología de walk-forward por folds secuenciales
++ t-test OOS ya validada en `wf_mr_pure.py`/`wf_combo2d.py` (regla FIJA,
+sin fitting — cada fold es una muestra OOS independiente). Resample a
+barras DIARIAS vía agrupación por `session_date` (tz Chicago, mismo
+criterio que `strategies/combo2d.py::session_daily_returns`).
+
+**Hipótesis probadas** (fade Y momentum, ambas direcciones — nunca
+asumir de antemano cuál es la correcta): A) señal diaria
+(lag-1-día) con holding de 3 y 5 días; B) señal semanal (lag-5-días)
+con holding de 5 días. Entradas espaciadas (no solapadas) por
+`hold_days` para no romper la independencia entre trades adyacentes
+que asume el t-test entre folds. Barreras ATR(20) diario, pt=2.5x/sl=1.5x
+(misma convención ya usada intradía).
+
+**Hallazgo intermedio, capturado antes de reportar nada:** la primera
+corrida mostró win_rate de 5-24% en TODAS las combinaciones — muy por
+debajo del piso natural sin edge (~37.5% para RR=2.5/1.5) en AMBAS
+direcciones (fade y momentum), lo cual es matemáticamente sospechoso
+(bajo un proceso simétrico, direcciones espejo no pueden estar ambas
+por debajo del piso natural). Diagnosticado con evidencia antes de
+reportar: **no es un bug ni una señal invertida** — con
+`max_holding_bars` de solo 3-5 barras diarias, la MAYORÍA de los
+trades (43-55%) expiran en la barrera VERTICAL (ni TP ni SL tocado),
+y el "win_rate" clásico (TP limpio / total) diluye su denominador con
+esos time-exits, sin ser comparable al WR de un sistema intradía donde
+casi todo resuelve limpio. La métrica que SÍ es válida pase lo que pase
+es `ev_per_trade` (usa el pnl real de TODOS los trades). Corregido el
+reporte para mostrar `n_tp`/`n_sl`/`n_time_exit` explícitamente en vez
+de solo un win_rate engañoso.
+
+**Resultado (N por experimento, p one-sided, ambas direcciones, MES y MGC):**
+
+| Producto | Experimento | Dirección | N | p (one-sided) |
+|---|---|---|---|---|
+| MES | daily hold=3d | fade | 126 | 1.000 |
+| MES | daily hold=3d | momentum | 126 | 0.215 |
+| MES | daily hold=5d | fade | 84 | 0.370 |
+| MES | daily hold=5d | momentum | 84 | 1.000 |
+| MES | weekly hold=5d | fade | 83 | 0.168 |
+| MES | weekly hold=5d | momentum | 83 | 1.000 |
+| MGC | daily hold=3d | fade | 126 | 0.192 |
+| MGC | daily hold=3d | momentum | 126 | 0.461 |
+| MGC | daily hold=5d | fade | 84 | 0.257 |
+| MGC | daily hold=5d | momentum | 84 | 1.000 |
+| MGC | weekly hold=5d | fade | 84 | 0.411 |
+| MGC | weekly hold=5d | momentum | 84 | 0.413 |
+
+**Conclusión de este primer resultado: NINGUNA combinación pasa p<0.05
+(mejor caso: MES weekly fade, p=0.168, N=83) — sin edge estadísticamente
+real detectado en timeframes lentos (daily-multi-día / semanal) para
+fade NI momentum, en MES ni MGC, con esta especificación de señal.**
+
+**Limitación estructural, no solo "no se encontró todavía":** NINGÚN
+experimento alcanza N>200 (rango real: 83-126) — es consecuencia
+directa de que una señal lenta (1 entrada cada 3-5 días, no solapada)
+sobre solo 2 años de datos disponibles simplemente no puede generar
+más de ~85-130 trades independientes por producto. Alcanzar N>200 con
+este diseño de espaciado requeriría: (a) agrupar (pool) across
+múltiples productos, (b) permitir entradas solapadas (rompe la
+independencia asumida por el t-test — no recomendable sin ajustar la
+metodología), o (c) más historia de datos (limitada por el plan actual
+de Massive/Polygon, 2 años). Ninguna de las tres se aplicó aquí.
+
+**No se extiende a más productos ni a pares/spreads todavía** — se
+reporta este primer resultado (negativo, con rigor completo) antes de
+seguir, tal como se pidió explícitamente.
+
