@@ -1351,8 +1351,157 @@ actualizada:**
 
 **Ningún candidato de esta tabla se usa para nada de producción.**
 Los 3 comparten el mismo problema estructural: N insuficiente con solo
-2 años de datos. Con 3 candidatos ahora acumulados (condición que el
-usuario fijó explícitamente como disparador), corresponde volver a
-plantear la decisión del upgrade de Massive como una sola decisión que
-los confirme o descarte a los tres juntos, no antes.
+2 años de datos.
+
+## Cerebro 2 — decisión del usuario: PAUSAR upgrade de Massive, agotar tier actual primero (04-sep-2026)
+
+El usuario decidió NO evaluar el upgrade todavía — el tier actual (2
+años, ya pagado) no está agotado. Ronda de exploración a costo cero
+antes de volver a plantear el upgrade:
+
+### Bloqueos encontrados, reportados explícitamente (no omitidos)
+
+1. **`diagnostic_range_volume.py` (pedido por el usuario para el
+   filtro de volumen/rango) NO EXISTE en este repo** — búsqueda
+   exhaustiva (`grep`/`find` por nombre y por contenido) no encontró
+   ningún archivo así ni uno equivalente. Se construyó un filtro de
+   volumen/rango PROPIO para esta sesión (mediana móvil de 20 días de
+   volumen diario y de rango diario, umbral por encima/debajo) —
+   **no es una reutilización de código existente**, es una
+   interpretación razonable construida desde cero, declarada como tal.
+2. **Nuevos instrumentos (SI/SIL para oro-plata; otro energético
+   además de MCL; otra divisa además de M6E; ZT/ZF para curva de
+   bonos) requieren `MASSIVE_API_KEY`, que vive en Railway y NO está
+   disponible en este shell local de desarrollo.** Esto es un bloqueo
+   de ACCESO A CREDENCIALES, no de costo de plan — el tier actual
+   (2 años) sí cubre estos símbolos, pero esta sesión no puede
+   ejecutar el fetch sin la key. Pendiente: el usuario corre
+   `python scripts/fetch_mes_2y.py <SIMBOLO>` (ej. `SIL`, `NG`, `M6B`,
+   `ZT`) en un entorno donde la key esté disponible (Railway o su
+   propia máquina con la variable exportada), y comparte los parquet
+   resultantes.
+
+### 1. Día de la semana (calendario) — patrón real encontrado, tratado con la debida cautela
+
+Split por día de entrada en los 3 candidatos pendientes más el spread
+MES-M2K:
+
+| Candidato | Lun-Jue | Viernes |
+|---|---|---|
+| MES weekly/fade | +0.32% a +0.48% (positivo, 4/4 días) | **-0.05%** |
+| MGC weekly/fade | +0.05% a +0.45% (positivo, 3/4 días) | **-0.34%** |
+| MCL daily-2d/fade | mixto (-0.03% a +1.22%) | +1.22% (mejor día, no peor) |
+| M6E daily-3d/fade | mixto, todo cerca de 0 | sin patrón |
+
+**MES y MGC (weekly/fade) comparten el mismo patrón: viernes negativo,
+lunes-jueves positivo — independientemente uno del otro.** Excluir
+viernes del pool MES+MGC: p mejora de 0.048 a **0.033**, pero **N baja
+de 170 a 135** (se aleja de 200, no se acerca) y EV sube de 0.26% a
+0.39% (ambas mitades siguen positivas: +0.29%, +0.46%).
+
+**Advertencia obligatoria — esto es refinamiento IN-SAMPLE, no
+confirmación independiente:** el filtro "excluir viernes" se descubrió
+MIRANDO la misma muestra que ya generó el candidato original. Un
+p-value mejorado después de una búsqueda adicional sobre los mismos
+datos debe tratarse con MÁS escepticismo, no menos — es exactamente el
+tipo de refinamiento post-hoc que ya causó los 2 candidatos históricos
+de esta sesión que nunca se reprodujeron frescos. No se reporta como
+"mejora confirmada", se reporta como "patrón descriptivo interesante,
+pendiente de validación en datos genuinamente nuevos".
+
+### 2. Variación del punto de entrada intradía
+
+Para MES+MGC weekly/fade: en vez de entrar al cierre del mismo día que
+genera la señal (convención original), se probó retrasar 1 día y
+entrar en la apertura RTH, mediodía, o cierre del día siguiente:
+
+| Variante | p (one-sided) | mean EV% |
+|---|---|---|
+| Baseline (cierre mismo día) | 0.048 | 0.26% |
+| Apertura día siguiente | 0.172 | 0.16% |
+| Mediodía día siguiente | 0.181 | 0.14% |
+| Cierre día siguiente | 0.098 | 0.18% |
+
+**Las 3 variantes con retraso son sustancialmente más débiles que el
+baseline.** Esto es informativo aunque no sea lo que se esperaba
+encontrar: el efecto (ya marginal) parece concentrado en la reacción
+inmediata al cierre que genera la señal, y se erosiona con cualquier
+retraso de ejecución — una señal de fragilidad/sensibilidad a
+ejecución real, no solo una curiosidad metodológica. Refuerza tratar
+el p=0.048 original con cautela, no con más confianza.
+
+### 3. Filtro de volumen/rango (construcción propia, ver bloqueo #1)
+
+Aplicado a MES+MGC weekly/fade, partiendo en alto/bajo por mediana
+móvil de 20 días:
+
+| Filtro | N | p (one-sided) |
+|---|---|---|
+| Volumen alto | 85 | 0.172 |
+| Volumen bajo | 85 | 0.121 |
+| Rango alto | 87 | 0.078 |
+| Rango bajo | 83 | 0.396 |
+
+**Ningún filtro mejora sobre el baseline sin filtrar (p=0.048).** Los
+4 subconjuntos son más débiles, consistente con que partir la muestra
+a la mitad reduce potencia sin compensar con una separación real de
+señal/ruido. El filtro de rango/volumen propio no aporta nada aquí.
+
+### 4. Variantes de construcción del spread MES-M2K — HALLAZGO NUEVO, el más fuerte de toda la búsqueda
+
+Se probaron 2 construcciones del spread (ratio de cierres vs. índice
+sintético dollar/beta-neutral acumulando `retA - retB`) × lookback
+{1,5} × hold {2,3,5,10,15} × dirección = 40 combinaciones
+(`use_atr=False`, mismo criterio ya usado para spreads).
+
+**El resultado más fuerte de TODA la búsqueda de edge de esta
+sesión:** `daily (lookback=1d) hold=5d / momentum` en el spread
+MES-M2K da **p=0.0019** con la construcción ratio, y **p=0.0072** con
+la construcción retdiff-index — **confirmado por 2 métodos de
+construcción independientes** (mismo N=86, EV~0.13-0.15% en ambos),
+no un artefacto de una elección arbitraria de cómo construir el
+spread. Split de mitades: ambas positivas (+0.073%, +0.221%) —
+consistente. **También muestra el mismo patrón de viernes negativo**
+(-0.18%) que MES/MGC weekly-fade — tercera aparición independiente de
+ese patrón de calendario, ahora en una construcción totalmente
+distinta (spread intraproducto vs. señal de producto único).
+
+Segundo hallazgo del mismo barrido: `daily hold=10d/fade`, p=0.022
+(ratio) / p=0.024 (retdiff), N=47, también confirmado por ambas
+construcciones.
+
+**Con 40 pruebas, se esperan ~2 falsos positivos por azar a α=0.05 —
+se encontraron 4.** Ligeramente por encima del ruido esperado, pero la
+concordancia cruzada entre 2 construcciones distintas para los 2
+mejores resultados es una forma de validación que los candidatos
+individuales de grids anteriores no tenían — no elimina la necesidad
+de más N, pero es la evidencia más sólida encontrada hasta ahora.
+
+**NINGUNO alcanza N>200** (máximo N=86).
+
+### Tabla centralizada de candidatos pendientes — ACTUALIZADA
+
+| Candidato | Producto(s) | N | p | Caveat | Estado |
+|---|---|---|---|---|---|
+| **daily hold=5d / momentum** | **Spread MES-M2K** | **86** | **0.0019** | Confirmado por 2 construcciones independientes | **Más fuerte hasta ahora, N<200, pendiente** |
+| daily hold=10d / fade | Spread MES-M2K | 47 | 0.022 | Confirmado por 2 construcciones | Prometedor, N muy bajo, pendiente |
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | — | Prometedor, N<200, pendiente |
+| weekly hold=5d / fade, sin viernes | MES+MGC (pooled) | 135 | 0.033 | Refinamiento IN-SAMPLE — más escepticismo, no menos | Descriptivo, no confirmatorio |
+| daily hold=2d / fade | MCL | 168 | 0.028 | De un grid de 96 (~4.8 falsos esperados) | Prometedor con reserva, N<200, pendiente |
+| daily hold=3d / fade | M6E | 126 | 0.032 | De un grid de 96 (~4.8 falsos esperados) | Prometedor con reserva, N<200, pendiente |
+
+**Patrón cruzado a tener presente:** 3 candidatos independientes
+(MES weekly/fade, MGC weekly/fade, spread MES-M2K daily/momentum)
+muestran viernes sistemáticamente peor que el resto de la semana —
+podría ser una regularidad de calendario real (ej. cierre de posición
+antes del fin de semana) o un artefacto compartido de este período
+específico de 2 años (ej. unos pocos viernes de alta volatilidad
+dominando la muestra) — no se puede distinguir sin más historia.
+
+**Ningún candidato de esta tabla se usa para nada de producción.**
+5 candidatos acumulados ahora (incluido el más fuerte de la sesión,
+p=0.0019), todos comparten el mismo problema estructural: N
+insuficiente con 2 años de datos. Corresponde reportar esto al usuario
+y esperar su decisión sobre si esto ya justifica evaluar el upgrade de
+Massive, o si hay más por explorar a costo cero primero.
 
