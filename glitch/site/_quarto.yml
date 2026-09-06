@@ -1,0 +1,37 @@
+project:
+  type: book
+  output-dir: ../docs
+
+book:
+  title: "GLITCH"
+  subtitle: "Multi-Strategy Futures Prop-Firm Research Report"
+  author: "Eric Trevino"
+  date: today
+  repo-url: https://github.com/erictvillarreal/GLITCH
+  repo-actions: [edit, issue]
+  page-navigation: true
+  search: true
+  navbar:
+    background: dark
+  chapters:
+    - index.qmd
+    - 01-cerebro1-timeline.qmd
+    - 02-cerebro2-timeline.qmd
+    - 03-infraestructura-operaciones.qmd
+    - 04-metodologia-y-disciplina.qmd
+    - 99-glosario.qmd
+
+format:
+  html:
+    theme: [cosmo, custom.scss]
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    code-tools: true
+    highlight-style: github
+    smooth-scroll: true
+
+execute:
+  freeze: auto
+  echo: false

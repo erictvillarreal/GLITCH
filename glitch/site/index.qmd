@@ -1,0 +1,59 @@
+# Executive Summary
+
+## What is GLITCH
+
+GLITCH is a research program to systematically pass a Topstep futures prop-firm evaluation (the "Combine") and then generate real payouts from the resulting funded account (the "XFA"). The project runs two parallel, independently-optimized tracks referred to throughout this report as **Cerebro 1** and **Cerebro 2**.
+
+**Cerebro 1 — pass the Combine.** Objective: maximize the probability of reaching the profit target within a bounded ~15-day evaluation window, where the maximum loss is capped at the fee of the attempt (~$49–149). This bounded-loss, bounded-time structure permits a strategy to pass reliably even without genuine predictive edge — convexity of the payout does the work, not market prediction.
+
+**Cerebro 2 — survive and generate payouts once funded.** A fundamentally different problem: the horizon is unbounded, there is no profit target, and the relevant threshold is 5 winning days of ≥$150 net, not a lump-sum target. A strategy with zero or negative net edge that reliably passes the Combine does **not** survive Cerebro 2 — without the bounded window protecting it, the trailing loss limit (MLL) eventually catches any strategy without genuine positive edge.
+
+## Current Status
+
+| Track | Status | Key number | Source |
+|---|---|---|---|
+| **Cerebro 1** | Validated candidate ("G2") live in real paper trading on Railway | ~70.6% empirical win rate (MES, SL=100/TP=40 ticks), 81.44% theoretical Combine pass rate | [`GLITCH_RESEARCH_LOG.md`, "Consolidación — Camino B"](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/GLITCH_RESEARCH_LOG.md) |
+| **Cerebro 2** | Geometry-pure candidate (MGC/150K) validated on both of its core assumptions; real-edge search (712 tests) found no candidate meeting the N>200 bar; a structural finding shows the Combine and XFA phases need *opposite* geometries | Empirical WR 50.20% (vs. 50% theoretical); Combine pass rate for this same candidate: only 47.5% (vs. G2's 81.4%) | [`GLITCH_RESEARCH_LOG.md`, "HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2"](https://github.com/erictvillarreal/GLITCH/blob/0be4b01/glitch/GLITCH_RESEARCH_LOG.md) |
+
+**Capital deployment decision date: 27 September 2026** (per project governance document).
+
+## Snapshot — Cerebro 1 (G2 candidate)
+
+| Metric | Value | Source |
+|---|---|---|
+| Product / geometry | MES, SL=100/TP=40 ticks (RR=0.40), alternating direction, nc=40 | [`strategies/geometry_pure.py`](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/strategies/geometry_pure.py) |
+| Empirical win rate | ~70.6% (midpoint of optimistic/conservative bracket, post ambiguous-bar fix) | `scripts/revalidate_geometry_table.py` |
+| Theoretical Combine pass rate | 81.44% (`THEORETICAL_PASS_RATE`, Monte Carlo, n_paths=8,000, seed=42) | [`scheduler/geometry_scheduler.py`](https://github.com/erictvillarreal/GLITCH/blob/484187c/glitch/scheduler/geometry_scheduler.py) |
+| Estimated combines/year | 53.6 | `scripts/camino_b_grid.py` results |
+| Operational status | Live paper trading on Railway ("GEOMETRY" service) | — |
+
+## Snapshot — Cerebro 2 (MGC/150K geometry-pure candidate)
+
+| Metric | Value | Source |
+|---|---|---|
+| Geometry | MGC, SL=TP=364 ticks (RR=1.0), alternating, nc=6 | `strategies/geometry_pure.py::CANDIDATES["MGC_XFA_150K"]` (cerebro2-dev) |
+| Empirical WR (corrected liquidity window) | 50.20%, stable across 3 independent sub-periods (49.90–50.13%) | `scripts/validate_mgc_wr_empirical.py` |
+| **Combine pass rate for this same geometry** | **47.5%** — far below G2's 81.4% | `scripts/cerebro2_cashflow_monte_carlo.py` |
+| 1-year chained cash-flow (median, p10–p90) | $31,257 ($15,809–$53,861) | Same script |
+| Capital cushion needed (median / p90) | $894 / $2,679 | Same script |
+| Real-edge search coverage | 712 statistical tests across products, pairs, hold periods; best candidate p=0.0003 but N=128 (< the 200 minimum) | `GLITCH_RESEARCH_LOG.md`, edge-search sections |
+
+::: {.callout-important}
+**Numbers that were retracted or never reproduced — stated explicitly, not omitted.** A **$134,174** payout figure appeared in an earlier Cerebro 2 analysis and was later confirmed to be **fabricated** by a prior AI session — it does not trace to any script in this repository and must never be used as a reference point. Two historical walk-forward candidates were cited with p-values of **0.149** and **0.081** — both looked like real edge, and **neither ever reproduced** when re-tested fresh in this repository (fresh reruns gave p≈0.44–0.45 for both). These two failures are the direct reason for the non-negotiable rigor standard in [Methodology & Discipline](04-metodologia-y-disciplina.qmd).
+:::
+
+## Key Findings
+
+**Cerebro 1's G2 candidate is real, reproducible, and does not depend on predictive signal.** It exploits gambler's-ruin geometry (SL/TP placement) within the Combine's bounded-loss structure — validated against real MES price data with the triple-barrier ambiguous-bar bug fixed first (see [Cerebro 1 Timeline](01-cerebro1-timeline.qmd)).
+
+**Cerebro 2's central structural finding: optimizing for the Combine and optimizing for XFA survival are not the same problem, and can actively conflict.** The MGC/150K candidate — designed to tolerate very few consecutive losses once funded — has a Combine pass rate of only 47.5%, roughly half of G2's 81.4%, when run through the exact same, already-audited Combine simulator. No Cerebro 2 candidate's Combine pass rate should ever be assumed from another candidate's number (see [Cerebro 2 Timeline](02-cerebro2-timeline.qmd)).
+
+**A vectorization bug turned a ~2-hour job into a projected ~70-hour one — caught before it ran unsupervised.** An exhaustive Monte Carlo grid's ETA climbed from an estimated 2 hours to a projected 70 hours after only 1% progress; the root cause was a scalar per-path Python loop whose cost varied ~75x across the parameter space. Vectorizing it (validated bit-exact against the old implementation across 32 cases before replacing it) cut the real run to 51 minutes (see [Infrastructure & Operations](03-infraestructura-operaciones.qmd)).
+
+**A live production incident chain cost ~2.5 weeks and traced to five distinct, unrelated root causes** — a `requirements.txt` file read from the wrong path by the actual build system in use (Railpack, not the Nixpacks config that was being edited), missing Telegram/Massive environment variables discovered one crash at a time, an ephemeral filesystem silently resetting all persistence between cron runs, and a Yahoo Finance data-availability gap at the market open (see [Infrastructure & Operations](03-infraestructura-operaciones.qmd)).
+
+**A "10-minute" data delay claimed by a paid vendor was never verified — and a first attempt to verify it returned an impossible number, catching a second, unrelated API bug.** A real-time delay probe for Massive's futures data returned a 319,174-minute (7+ month) delay; the root cause was an unreliable API pagination pattern (`sort=asc` over a date range never returns the most recent record on this endpoint — confirmed with raw API evidence, not assumed) (see [Infrastructure & Operations](03-infraestructura-operaciones.qmd)).
+
+## How to Read This Report
+
+Every factual claim in this report links to a specific script, commit, or `GLITCH_RESEARCH_LOG.md` section in the [GLITCH repository](https://github.com/erictvillarreal/GLITCH) — commit-hash-pinned where precision matters, so links stay valid even as branches move or get merged. This report is a navigable index into that history, not a replacement for it: `GLITCH_RESEARCH_LOG.md` (on the `main` and `cerebro2-dev` branches — the two have not yet been merged) remains the technical source of truth. Where a number was later invalidated, contradicted, or never reproduced, this report says so explicitly next to the number, not in a separate erratum.

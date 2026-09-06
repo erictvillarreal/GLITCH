@@ -1,0 +1,5 @@
+# Glossary
+
+::: {.callout-note}
+**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
+:::
