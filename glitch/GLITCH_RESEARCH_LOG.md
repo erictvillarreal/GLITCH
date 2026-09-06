@@ -2197,3 +2197,67 @@ merge/deploy:
    con logs revisados en vivo antes de confiar en el cron automático —
    mismo estándar ya aplicado a los otros 2 servicios.
 
+## Fix: logger UTC-mislabeled-como-CT en los 3 schedulers (07-sep-2026)
+
+**Contexto de por qué se encontró esto:** mientras se construía el
+reporte de GitHub Pages del proyecto (documentación, rama
+`docs/glitch-report`), se intentó listar "el bug del logger
+UTC-como-CT" como uno de los bugs ya encontrados-y-arreglados de la
+sesión de búsqueda de edge original. **Verificación antes de
+afirmarlo reveló que NUNCA se había arreglado — es un bug latente que
+seguía vivo hoy** en `geometry_scheduler.py`, `combo2d_scheduler.py`,
+y `glitch_scheduler.py` (los 3 usaban el mismo patrón
+`logging.basicConfig(format="%(asctime)s CT ...")`).
+
+**El bug real:** `%(asctime)s` usa `time.localtime()` por defecto —
+el "CT" en el format string es un literal fijo, no algo derivado del
+valor real. El patrón mostraba la hora correcta SOLO porque Railway
+tiene la variable de entorno `TZ=America/Chicago` configurada — si esa
+variable faltara alguna vez (default típico de un contenedor Docker:
+UTC), los logs mostrarían hora UTC etiquetada incorrectamente como
+"CT", sin ningún error visible. Confirmado con prueba manual directa
+(`TZ=UTC` vs `TZ=America/Chicago`) antes de aplicar el fix — ver commit.
+
+**Fix aplicado:** nuevo módulo `execution/ct_logging.py` (única fuente
+de verdad, reemplaza el patrón duplicado en los 3 archivos) —
+`CTFormatter` con `converter` explícito a `zoneinfo.ZoneInfo("America/Chicago")`,
+independiente de `time.localtime()`/el TZ del proceso. Test permanente
+en `tests/test_ct_logging.py`: fuerza `TZ=UTC` a nivel de proceso y
+confirma que el timestamp logueado sigue siendo la hora real de
+Chicago (incluyendo un caso en verano para confirmar que respeta DST
+correctamente, no un offset fijo).
+
+**Hallazgo lateral, no relacionado al fix:** al hacer el smoke test de
+`scheduler/glitch_scheduler.py` se descubrió que el archivo **no puede
+importarse en absoluto** — `from scheduler.telegram_bot import
+notify_signal, notify_exit, ...` falla porque esas funciones ya no
+existen en `telegram_bot.py` (reemplazadas en algún punto por el
+rework de templates Brain1/Brain2). Esto es un `ImportError` real,
+confirmado con `git diff` como preexistente a este fix (mi cambio solo
+tocó el bloque de logging, no el import de arriba). Esto es evidencia
+fuerte (no definitiva — pendiente que el usuario confirme contra el
+dashboard de Railway) de que `scheduler/glitch_scheduler.py` es código
+huérfano: si fuera el servicio activo detrás de la línea `worker:` del
+Procfile raíz, estaría crash-loopeando de forma visible desde el
+rework de Brain1/Brain2, algo que difícilmente hubiera pasado
+inadvertido en toda esta sesión. **No se corrigió ese `ImportError`** —
+fuera del alcance de este fix específico, pendiente de decisión del
+usuario sobre si vale la pena arreglarlo o el archivo debe eliminarse.
+
+**Corrección a la lista de "bugs encontrados" para el reporte de
+documentación:** de los 4 bugs que se iban a listar, solo 2 están
+confirmados como parte de la búsqueda de edge original con causa raíz
+y fix documentados en su momento: (1) barras ambiguas de
+`triple_barrier.py` (25-ago-2026), (2) unidad de tick de ZC
+cents-vs-dollars. "MES/MNQ tick value confusion" se descarta de la
+lista — no se encontró evidencia de que fuera un bug real, solo una
+nota aclaratoria de que MES (no MNQ) fue el producto correcto usado.
+El logger UTC-como-CT se documenta aquí como lo que realmente es: un
+hallazgo y fix de HOY (07-sep-2026), no un bug histórico de la
+búsqueda de edge — timelines separados, no mezclados.
+
+**Nota (rama `cerebro2-dev`):** este fix de logging aplica también a
+`scheduler/geometry_mgc_scheduler.py` (construido en esta rama, no
+existe en `main`) — ver commit siguiente en esta misma rama para el
+mismo cambio aplicado ahí.
+

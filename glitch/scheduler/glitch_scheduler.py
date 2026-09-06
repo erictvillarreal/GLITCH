@@ -12,12 +12,10 @@ from scheduler.telegram_bot import (
 )
 
 CT = ZoneInfo("America/Chicago")
-logging.basicConfig(stream=__import__("sys").stdout, 
-    level=logging.INFO,
-    format="%(asctime)s CT [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("glitch")
+# Logging con timestamp SIEMPRE en America/Chicago -- fix del
+# 07-sep-2026, ver execution/ct_logging.py para el por que.
+from execution.ct_logging import setup_ct_logging
+log = setup_ct_logging("glitch")
 
 MES_POINT     = 5.0
 NC            = 5
