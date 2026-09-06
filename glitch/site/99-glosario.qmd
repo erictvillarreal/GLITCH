@@ -1,5 +1,39 @@
 # Glossary
 
-::: {.callout-note}
-**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
-:::
+**GLITCH** — the overall research program: a system for systematically passing a Topstep futures prop-firm evaluation and then generating payouts from the resulting funded account. Organized into two independently-optimized tracks, Cerebro 1 and Cerebro 2. See [Executive Summary](index.qmd).
+
+**Cerebro 1** — the research track focused on passing the Topstep Combine. Objective: maximize the probability of reaching the profit target within a bounded ~15-day evaluation window, where the maximum loss is capped at the fee of the attempt. See [Cerebro 1 Timeline](01-cerebro1-timeline.qmd).
+
+**Cerebro 2** — the research track focused on surviving and generating payouts once an account is funded (the XFA phase). An unbounded-horizon problem with no profit target, fundamentally different from Cerebro 1's bounded-loss/bounded-time structure. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Combine** — Topstep's paid evaluation: a trader must reach a fixed profit target (e.g., $3,000 on a 50K account) within a bounded evaluation window without breaching a trailing or static drawdown floor. Passing unlocks a funded account. Distinct from, and — per this project's central structural finding — not necessarily optimized by the same strategy as, the XFA phase that follows it.
+
+**XFA (Express Funded Account)** — the funded account Topstep grants after passing the Combine. No profit target and no fixed evaluation window; the operative constraints are the trailing/static Maximum Loss Limit (MLL) and a payout-eligibility rule (5 winning days of $150+ net, or balance ≥ a threshold). Real capital withdrawal ("payout") is the only goal once here — survival, not a lump-sum finish line.
+
+**MLL (Maximum Loss Limit)** — the floor an XFA account balance may not fall below. Depending on account type, the floor either trails the account's high-water mark or stays fixed once a balance threshold is reached. Breaching it ends the account. Distinct from the Combine's own drawdown rule, which serves a similar risk-limiting purpose during evaluation.
+
+**Scaling Plan** — Topstep's rule that an XFA account's maximum allowed contract count depends on its *current* balance, not the size it was funded with — starting as low as 2–3 mini-equivalent lots near $0 balance and stepping up at defined balance thresholds (e.g., 5 lots at $2,000 for a 50K account, coinciding exactly with that account's MLL distance). Confirmed against Topstep's own documentation partway through Cerebro 2's search, after early modeling had assumed a single fixed contract cap for the account's entire lifetime. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Camino A / B / C** — three distinct approaches explored within Cerebro 2, named in the order they were investigated:
+
+- **Camino A** — "modest pure geometry": designing a low-risk, low-frequency XFA geometry directly (the approach that produced the MGC/150K candidate before its Combine pass rate was measured).
+- **Camino B** — geometry-only strategies that pass reliably without predictive signal, exploiting gambler's-ruin geometry within a bounded-loss/bounded-time structure. This is the approach that produced Cerebro 1's winning G2 candidate; within Cerebro 2 it refers to the analogous (but not directly transferable) idea applied to the XFA phase.
+- **Camino C** — running multiple XFA accounts simultaneously on the same candidate to diversify the *probability of reaching any payout*, explicitly **not** a source of edge or improved per-account geometry — shown to provide real benefit only to the extent the accounts' outcomes are not fully correlated, which running the same product/signal simultaneously does not guarantee. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Combine vs. XFA structural finding** — the central discovery of Cerebro 2: optimizing a geometry to survive the XFA phase (few consecutive losses tolerated, low contract count) does not produce a geometry that clears the Combine phase quickly, and vice versa. Measured directly: the MGC/150K candidate, designed for XFA survival, has a Combine pass rate of only ~47%, roughly half of G2's ~81%, when run through the identical, already-audited Combine simulator. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**G2** — the validated Cerebro 1 candidate: MES, SL=100/TP=40 ticks (RR=0.40), alternating direction, nc=40, no predictive signal required. ~70.6% empirical win rate, 81.44% theoretical Combine pass rate, ~53.6 combines/year. Live in real paper trading on Railway as of this report. See [Cerebro 1 Timeline](01-cerebro1-timeline.qmd).
+
+**WR / RR** — win rate and reward-to-risk ratio (take-profit distance ÷ stop-loss distance, in ticks or dollars). Under gambler's-ruin geometry with no predictive edge, a specific win rate is implied by a given RR: `WR_natural = 1/(1+RR)`. A candidate whose empirical WR sits at or below `WR_natural` for its RR requires no real market edge to be expected-value-neutral-or-better within a bounded structure; a candidate above that line requires genuine predictive signal to justify its assumed win rate. Confusing these two regimes — most notably, treating WR as a free parameter decoupled from RR — was an early, self-corrected error in Cerebro 2's first grid. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**nc / nc_cap / nc_designed** — the number of contracts (typically micro-contracts) a strategy trades per entry. `nc_cap` is a legal ceiling (confirmed, per the Scaling Plan finding above, to be Combine-specific rather than an XFA-lifetime constant as originally assumed); `nc_designed` is the contract count a specific candidate's risk design actually calls for, which may be well below the legal ceiling. `min(nc_designed, nc_legal)` is the correct sizing rule — an earlier implementation bug used the legal maximum unconditionally. See [Methodology & Discipline](04-metodologia-y-disciplina.qmd).
+
+**MGC/150K** — shorthand for Cerebro 2's leading geometry-pure candidate: Micro Gold futures, SL=TP=364 ticks (RR=1.0), alternating direction, nc=6, sized for a 150K XFA account. Validated on empirical win rate (~50.20%, corrected liquidity window) and on its own Combine pass rate (~47.5%) — both phases measured independently, per the structural finding above. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Walk-forward** — a backtesting discipline in which every prediction is made using only information available strictly before the moment of that prediction, with no information from later periods leaking into earlier decisions (via parameter fitting, label construction, or otherwise). The baseline standard for any claim in this project; see [Methodology & Discipline](04-metodologia-y-disciplina.qmd).
+
+**Triple-barrier labeling** — a trade-outcome labeling method (López de Prado) using three exit conditions per trade: take-profit touched, stop-loss touched, or a maximum holding period elapsed (time exit). This project's implementation had a confirmed bug in how it resolved bars that touch both TP and SL simultaneously — fixed by assuming the loss in that ambiguous case, the conservative convention. See [Cerebro 1 Timeline](01-cerebro1-timeline.qmd).
+
+**Massive** — the paid market-data vendor (formerly reached via Polygon-compatible endpoints) used as this project's primary futures data source, replacing an earlier free Yahoo Finance feed that had reliability problems around the market open. Massive's REST API has a confirmed pagination quirk: requesting a date range with ascending sort and taking the last row does not reliably return the most recent bar; only a descending sort with a small limit and no date range does. See [Infrastructure & Operations](03-infraestructura-operaciones.qmd).
+
+**DRY_RUN** — an environment flag under which a scheduler computes and logs trading decisions without submitting any real order — the mode all production schedulers in this project run under as of this report. Graduating a candidate to `DRY_RUN=false` requires an explicit, documented criterion being met first (see [Cerebro 1 Timeline](01-cerebro1-timeline.qmd) and the project's paper-trading duration rationale).

@@ -1,5 +1,99 @@
 # Infrastructure & Operations
 
 ::: {.callout-note}
-**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
+This chapter is a chronicle of operational incidents — deployment, persistence, data-source reliability — as distinct from the statistical findings in [Cerebro 1](01-cerebro1-timeline.qmd) and [Cerebro 2](02-cerebro2-timeline.qmd). Nothing here is evidence of trading edge; a service running cleanly is a hygiene fact, not a validation result.
 :::
+
+## The COMBO2D crash chain — 2.5 weeks, five distinct root causes
+
+Between 14 August and 1 September 2026, the `combo2d_scheduler.py` service failed to execute successfully **a single time** — 12 consecutive failed runs, each crashing in 3–4 seconds during import, before ever reaching `run()`. Reconstructed in full from `git log`/`git show` and Railway's own Cron Run history:
+
+| Date (UTC) | Commit | What happened |
+|---|---|---|
+| Jul 8 – Aug 13 | — | The service was actually running `glitch_scheduler.py`, a separate, earlier script — confirmed via [`git show e0b1ea3:Procfile`](https://github.com/erictvillarreal/GLITCH/commit/e0b1ea3). The clean 15–19 minute runs from this period have nothing to do with combo2d. |
+| Aug 13, 21:31 | [`1a3b714`](https://github.com/erictvillarreal/GLITCH/commit/1a3b714) | `combo2d_scheduler.py` created; Procfile pointed at it for the first time |
+| Aug 13, 23:58 | [`cb070a5`](https://github.com/erictvillarreal/GLITCH/commit/cb070a5) | Switched to `massive`/`RESTClient` for data — but `massive` was never added to the root `requirements.txt` |
+| Aug 17, 14:45 | [`321c747`](https://github.com/erictvillarreal/GLITCH/commit/321c747) | "fix: add massive to scheduler requirements" — added `massive` to `glitch/scheduler/requirements.txt`, the **wrong file**: this service builds via Railpack, which reads the root `requirements.txt`, not the scheduler subdirectory's copy. The fix had zero real effect. |
+| Aug 17 – Aug 26 | — | **9 days with no commits** — the service failing silently, unnoticed |
+| Aug 26–27 | [`99497ec`](https://github.com/erictvillarreal/GLITCH/commit/99497ec) | Security hardening merged (removed hardcoded Massive/Telegram fallbacks) — but `massive` was still missing from the correct file, so execution still died *before* reaching the new Telegram check |
+| Aug 28 | [`44f07cf`](https://github.com/erictvillarreal/GLITCH/commit/44f07cf) | Fixed the correct file (root `requirements.txt`) — first time since Aug 13 the `massive` import actually resolves |
+| Aug 31 | — | With the import resolved, execution reached the *next* unmet requirement — the Telegram token — surfacing a new-looking error that was really the second domino in the same chain |
+
+**Explicit conclusion:** this session's own security hardening (removing hardcoded fallbacks) was not the original cause — it stacked a second requirement (Telegram env vars) behind a pre-existing bug from 17 August that touched the wrong file. Any COMBO2D "Win Rate" or "PnL Total" Telegram report between 14 August and the fix must be treated as **nonexistent, not as contaminated data** — the service simply never ran.
+
+**Related, separate bug found earlier in the same investigation** — an intermediate commit ([`4eed7ca`](https://github.com/erictvillarreal/GLITCH/commit/4eed7ca)) found that the Nixpacks build phase (a different build path than the Railpack one actually in use) installs from `glitch/scheduler/requirements.txt`, not the root file — the opposite convention from Railpack. Two build systems reading two different requirements files was the structural reason the same class of bug ("added the dependency, to the wrong file") could recur.
+
+## Deployment configuration inconsistency — four files, three different start commands
+
+While preparing to add a second Railway service (for the Cerebro 1 geometry candidate), an audit found four config files disagreeing on the start command:
+
+| File | Start command |
+|---|---|
+| `nixpacks.toml` (root) | `python glitch/scheduler/glitch_scheduler.py` |
+| `Procfile` (root) | `python glitch/scheduler/combo2d_scheduler.py` |
+| `glitch/Procfile` | `python scheduler/glitch_scheduler.py` |
+| `glitch/railway.json` | `python scheduler/glitch_scheduler.py` |
+
+The initial hypothesis — that Railway's dashboard had a manual Start Command override ignoring these files — was checked directly and **ruled out**: the combo2d service's Start Command field is empty, meaning Railway genuinely reads one of the four files, yet 3 of 4 point to the old `glitch_scheduler.py` while `combo2d_scheduler.py` is confirmed to be what's actually running. This discrepancy was never fully resolved; it was treated as a live risk (never edit `nixpacks.toml` or `glitch/Procfile` without first confirming Railway's configured Root Directory) rather than guessed past. See [`GLITCH_RESEARCH_LOG.md`, "Despliegue a Railway"](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/GLITCH_RESEARCH_LOG.md).
+
+## Ephemeral filesystem — ~~a data-quality problem~~ a total data-loss problem
+
+Confirmed directly on Railway's dashboard: Cron Schedule-type services (GEOMETRY, and by the same service type, COMBO2D) have no Volumes option — **the filesystem resets between every cron execution.** Both schedulers stored their trade history in a local JSON file, so every run started from a blank slate. Every "Día X de paper" or "pass_rate acumulado" message ever sent to Telegram before this fix reflected, at most, a single day's cycle — never a real accumulation, even though the message read like a running total. Once the COMBO2D crash chain above was reconstructed, this was revealed to be moot for that period specifically (there was no successful run to lose state from until 28 August), but it remained a live, general risk for GEOMETRY.
+
+**Fix:** [`6a548a3`](https://github.com/erictvillarreal/GLITCH/commit/6a548a3) — `execution/gist_store.py`, a private GitHub Gist accessed via the REST API, as the single persistence backend for both schedulers, replacing local-file I/O behind the same `load_log()`/`save_log()` interface. Two alternatives were evaluated and rejected first: Railway Volumes (confirmed unavailable for this service type) and reading the bot's own message history back via Telegram's `getUpdates` (confirmed technically impossible — the Bot API never returns a bot's own sent messages to itself). Failure philosophy is deliberately asymmetric: missing configuration (`GITHUB_GIST_TOKEN`, `GIST_ID`) raises immediately rather than silently starting a scheduler that thinks it's on day one; a transient network failure during a well-configured run logs but does not crash the scheduler, since the day's trade has already executed and been notified by that point. 10 dedicated tests (`tests/test_gist_store.py`, no real network — mocked `requests.get`/`requests.patch`) plus integration coverage in both parity test files; full suite 110/110.
+
+## Unified startup environment check
+
+The COMBO2D crash chain's real underlying pattern — five separate root causes discovered one crash at a time, each hiding the next — prompted a structural fix rather than another one-off patch: [`a24400f`](https://github.com/erictvillarreal/GLITCH/commit/a24400f) added `execution/env_check.py`, called as the very first line of both schedulers, before any of the three modules (`telegram_bot`, `contracts`, `gist_store`) that each used to validate their own required variables independently, one crash-and-fix cycle apart. It checks all five required variables (`MASSIVE_API_KEY`/`POLYGON_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GITHUB_GIST_TOKEN`, `GIST_ID`) at once and sends a single Telegram message listing every missing one, rather than surfacing them serially across separate days. Verified with 6 unit tests plus a real build-environment smoke test: importing each scheduler under `env -i` with exactly the 7 variables Railway has configured, confirming a clean import end-to-end, not just a passing check. A manual "Run now" trigger on 2 September 2026 gave the first real, clean end-to-end log for COMBO2D since the incident began — full suite 118/118 passing at that point.
+
+::: {.callout-important}
+Fixing the crash chain is infrastructure hygiene, not evidence of trading edge. COMBO2D is technically healthy today (it runs start to finish without error) — but it remains the `combo_2d` mean-reversion candidate already discarded on statistical grounds (fresh reproduction gave p≈0.44–0.45; see [Cerebro 1 Timeline](01-cerebro1-timeline.qmd) and [Methodology & Discipline](04-metodologia-y-disciplina.qmd)). A clean log is not a signal.
+:::
+
+## Yahoo Finance MES=F opening-window delay
+
+An earlier, separate incident chain (predating the Massive migration) affected the ORB-based scheduler's live entry: Yahoo Finance's free MES=F feed frequently had no data yet at the scheduled 9:30 CT entry check, producing zero-range opening bars. Fixed iteratively across several commits — skip the trading day if the scheduler starts after the ORB window closes ([`e038911`](https://github.com/erictvillarreal/GLITCH/commit/e038911)), retry on a zero-range ORB instead of assuming the market itself was flat ([`53b03a6`](https://github.com/erictvillarreal/GLITCH/commit/53b03a6)), correct the retry's sleep target ([`ada0bc0`](https://github.com/erictvillarreal/GLITCH/commit/ada0bc0)), log actual bar timestamps to confirm the fetch window truly aligned with 9:30–9:34 ([`1a8a76c`](https://github.com/erictvillarreal/GLITCH/commit/1a8a76c)), widen the entry-fetch window with per-attempt diagnostics ([`7e0d53d`](https://github.com/erictvillarreal/GLITCH/commit/7e0d53d)) — and finally diagnosed with a dedicated standalone real-time probe deployed as its own one-shot Railway service ([`97c522a`](https://github.com/erictvillarreal/GLITCH/commit/97c522a), [`73a4ab9`](https://github.com/erictvillarreal/GLITCH/commit/73a4ab9)) rather than guessed at from inside the live scheduler. This data-reliability problem, among others, motivated the later migration to Massive as the primary market-data source.
+
+## Massive migration — API pagination quirk found twice
+
+Massive's REST API has a specific, non-obvious failure mode: requesting a date range with `sort=window_start.asc` and taking the last row of the response does **not** reliably return the most recent bar — confirmed independently on two different endpoints, seven days apart:
+
+**First occurrence — `/futures/v1/contracts`** (during the original Massive migration): a point-in-time `date=` query works reliably; a wide date range with ascending sort does not.
+
+**Second occurrence — `/futures/v1/aggs/{ticker}`, MGC delay probe (07 September 2026):** a first attempt to measure Massive's real-time data delay for MGC (`scripts/probe_massive_mgc_delay.py`) returned an impossible result — **~319,174 minutes (over 7 months) of "delay."** Rather than re-run the measurement blindly, three query variants were tested side by side against the same endpoint (`scripts/diagnose_massive_aggs_query.py`, [commit `e56322e`](https://github.com/erictvillarreal/GLITCH/commit/e56322e)):
+
+- **A)** Date-only range bounds + `sort=window_start.asc` + high `limit`, taking the last result (the pattern that worked for full historical downloads in `fetch_mes_2y.py`)
+- **B)** Same pattern with full datetime + timezone offset instead of a bare date
+- **C)** No date range at all — `sort=window_start.desc` + `limit=1`, asking directly for "the most recent bar you have"
+
+**Only C works.** A and B both fail identically regardless of date-format — confirming this is an API pagination/ordering issue specific to `sort=asc` + range + take-last, the same failure class already seen on `/futures/v1/contracts`, not a one-off. **Rule adopted for any future "give me the latest" query against Massive: `sort=desc` + small `limit`, never a date range with `sort=asc` and take-the-last-element.** Fixed in [commit `2a1c910`](https://github.com/erictvillarreal/GLITCH/commit/2a1c910).
+
+A second, independent measurement artifact was caught in the same fix: the corrected probe's first real run measured ~1.8 days of "delay" — but it ran on a **Saturday**, so the number was elapsed time since Friday's market close (gold trades Fri 16:00 CT–Sun 17:00 CT), not real API latency. A `_weekday_warning()` guard was added so the probe flags itself when run outside active weekday market hours; the real delay measurement remains pending a weekday run.
+
+## MGC's real trading-liquidity window was miscalibrated — for the whole dataset, not just live entry
+
+While building the third scheduler's entry-window logic (Cerebro 2's checklist item explicitly warning not to assume equity-index RTH conventions transfer to other products), a deeper problem surfaced: the *entire* `mgc_5min_2y.parquet` dataset already used to validate this candidate's win rate had the same miscalibration. `fetch_mes_2y.py` (reused to fetch MGC) filtered to "8:30–15:00 CT, standard for index products" — a filter written for equity index and never revisited for gold.
+
+Checked against two independent external sources — CME/COMEX's legacy pit session (7:20–12:30 CT) and the commonly cited London-NY overlap window for gold's highest real liquidity (7:00–11:00 CT) — both place gold's real active window **1–1.5 hours earlier** than 8:30 CT. Internal evidence corroborated this independently: in the existing dataset, the very first captured bar (8:30 CT) was already the day's volume peak (29.1% of the day's total volume in that first hour alone), decaying monotonically afterward — a slope that, extrapolated backward, suggests the untouched 7:00–8:30 CT window was probably *more* active than anything already captured, not less. [Commit `47350ba`](https://github.com/erictvillarreal/GLITCH/commit/47350ba).
+
+A corrected-window fetch script (`scripts/fetch_mgc_correct_window.py`) was prepared but not run locally (blocked on `MASSIVE_API_KEY`, deliberately not passed into this session per the project's key-handling rule) — the user ran it from their own environment. Comparison, once the corrected dataset (49,395 bars, 7:00–15:00 CT, +22.9% more data) came back:
+
+| | Old window (8:30–15:00 CT) | **Corrected window (7:00–15:00 CT)** |
+|---|---|---|
+| Conditional WR (all) | 49.97% | **50.20%** |
+| WR long / short | 52.78% / 47.16% (5.62pp gap) | **50.47% / 49.93%** (0.54pp gap) |
+| Combine pass rate (alternating) | 47.0% | **47.5%** |
+
+The corrected window is now the reference dataset for this candidate: it captured meaningfully more data, pushed the win rate even closer to the 50% theoretical assumption, and **nearly eliminated the long/short asymmetry** — consistent with the idea that part of that asymmetry was an artifact of excluding the window where buy/sell order flow is most balanced, not a genuine market bias. The Combine pass rate barely moved (47.0% → 47.5%), so the central conclusion that this candidate is weak for the Combine phase (vs. G2's 81.4%) is unaffected. [Commit `0ef0c15`](https://github.com/erictvillarreal/GLITCH/commit/0ef0c15) confirms this was a real improvement, not just a formality. A stale-hardcoded-aggregate bug caught in the comparison script itself along the way ([commit `3f0bd07`](https://github.com/erictvillarreal/GLITCH/commit/3f0bd07)) is documented in [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+This finding is scoped to MGC specifically — `mgc_5min_2y.parquet` (old window) remains valid and untouched for the original, narrower-barrier `CANDIDATES["MGC"]` geometry used in Cerebro 1's product grid, which is not affected by the same time-exit dynamics.
+
+## Same-day finding: UTC-mislabeled-as-CT logger (07 September 2026)
+
+Found while writing this report, not during the original edge search: all 3 production schedulers (`geometry_scheduler.py`, `combo2d_scheduler.py`, `glitch_scheduler.py`) used `logging.basicConfig(format="%(asctime)s CT ...")` — a literal `"CT"` string in the format, with `%(asctime)s` defaulting to `time.localtime()`. This showed the correct time **only because** Railway happens to have `TZ=America/Chicago` set; had that variable ever been absent (the typical default for a bare Docker container is UTC), every log line would have shown UTC time mislabeled as CT, with no visible error. Confirmed empirically (forcing `TZ=UTC` vs. `TZ=America/Chicago` before applying any fix) rather than assumed already-fixed from a passing description.
+
+**Fix:** a new single-source-of-truth module, [`execution/ct_logging.py`](https://github.com/erictvillarreal/GLITCH/blob/484187c/glitch/execution/ct_logging.py), with a `CTFormatter` whose `converter` explicitly resolves to `zoneinfo.ZoneInfo("America/Chicago")`, independent of the process's `TZ` or `time.localtime()`. A permanent regression test (`tests/test_ct_logging.py`) forces `TZ=UTC` at the process level and confirms logged timestamps still reflect real Chicago time, including a summer case to confirm DST is honored rather than a fixed offset. Applied in [commit `484187c`](https://github.com/erictvillarreal/GLITCH/commit/484187c) (`main`: `geometry_scheduler.py`, `combo2d_scheduler.py`, `glitch_scheduler.py`) and [commit `0be4b01`](https://github.com/erictvillarreal/GLITCH/commit/0be4b01) (`cerebro2-dev`: `geometry_mgc_scheduler.py`).
+
+**Side finding, unrelated to the fix itself:** smoke-testing `glitch_scheduler.py` revealed it **cannot be imported at all** — `from scheduler.telegram_bot import notify_signal, notify_exit, ...` fails, because those functions no longer exist in `telegram_bot.py` (replaced at some point by the Brain1/Brain2 template rework; current exports are `send`, `notify_brain1_open/close/no_signal`, `notify_brain2_open/close/no_signal`, and related functions). Confirmed via `git diff` to be pre-existing, unrelated to this logging fix. This is strong circumstantial evidence that `glitch_scheduler.py` is orphaned code — if it were the service actually running behind the root `Procfile`'s `worker:` line, it would be visibly crash-looping since the Brain1/Brain2 rework, which is unlikely to have gone unnoticed for this long. **Not fixed** — out of scope for this same-day finding; deployment dashboards for GEOMETRY, GEOMETRY-MGC, and GLITCH all confirmed "Deployment successful" as of this writing (06 September 2026, a Sunday with no active cron), but which specific file the Railway service named "GLITCH" actually executes was not conclusively confirmed in this session.
+
+**Correction to the bug list for this report:** of the 4 items originally slated to appear as "bugs found during the edge search," only 2 have a confirmed root cause and fix from that original search: the `triple_barrier.py` ambiguous-bar bug and the ZC tick-size unit mismatch (both in [Cerebro 1 Timeline](01-cerebro1-timeline.qmd)). "MES/MNQ tick value confusion" is dropped — no evidence it was ever a real bug. The UTC-as-CT logger bug documented here is a same-day finding from writing this report, not a historical artifact of the original edge search — the two timelines are kept separate deliberately, not conflated.

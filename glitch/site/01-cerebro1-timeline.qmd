@@ -1,5 +1,75 @@
 # Cerebro 1 — Timeline
 
-::: {.callout-note}
-**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
+## Objective
+
+Pass the Topstep Combine: reach the profit target within a bounded ~15-day evaluation window, with loss capped at the fee of the attempt. See [Executive Summary](index.qmd) for why this bounded structure is the entire reason Cerebro 1's winning approach works without predictive signal.
+
+## Signals and strategies investigated, then discarded
+
+Before the geometry-only approach ("Camino B") was found, several distinct hypotheses were tested against real MES price data and discarded — five as full walk-forward strategy candidates, six more as raw correlations never taken further, because correlation alone does not imply a profitable strategy.
+
+| Strategy | Walk-forward result | Verdict |
+|---|---|---|
+| S10 ORB Fade | p≈0.50 (not cleanly significant) | Discarded |
+| ORB Breakout | Negative EV in every configuration tested | Discarded |
+| Mean-reversion day-to-day (base, MES only) | p=0.165 historically cited — **never reproduced fresh** (0.4444 on re-run) | Insufficient, then invalidated |
+| Mean-reversion day-to-day (combo_2d, MES+MNQ double confirmation) | p=0.081 historically cited — **never reproduced fresh** (0.4537 on re-run) | Weak candidate, then invalidated |
+| Intraday fade, multi-window | Bug in the walk-forward harness itself; negative EV on the clean sample | Invalid, discarded |
+
+::: {.callout-important}
+The p=0.165/p=0.081 figures above are the two historical numbers referenced in the [Executive Summary](index.qmd)'s retraction callout (cited there as ~0.149/0.081 from memory of the original write-up; the log's own recorded value for the base candidate is 0.165). Both looked like real, if modest, edge. Neither survived a fresh, from-scratch reproduction in this repository — both collapsed to p≈0.44–0.45, far above the 0.05 bar. The cause of the original-vs-reproduced discrepancy was never identified. **This pair of failures is the direct origin of the non-negotiable rigor standard** applied to every candidate discussed in this report — see [Methodology & Discipline](04-metodologia-y-disciplina.qmd).
 :::
+
+Six raw correlations were also found (day-to-day return autocorrelation, a 2-day-lagged return effect, intraday lag-1 autocorrelation, and three time-of-day lag-1 effects) — all statistically significant at the correlation level, but none were ever converted into a walk-forward-tested strategy with a positive, reproducible EV. Raw correlation is not a strategy.
+
+## The Camino B discovery — geometry without predictive signal
+
+The insight that broke the search open: within the Combine's bounded-loss/bounded-time structure, a strategy with **zero real predictive edge** can still pass reliably, because gambler's-ruin geometry (`WR ≈ SL/(SL+TP)` for a symmetric process) combined with a bounded number of attempts makes the *convexity of the payout structure itself* do the work. Alternating long/short with no signal, at a fixed tick-distance stop-loss/take-profit, was enough. Source: [`GLITCH_RESEARCH_LOG.md`, "Consolidación — Camino B"](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/GLITCH_RESEARCH_LOG.md).
+
+## Bugs found and fixed along the way
+
+Two bugs from the original edge-search and Camino B validation work have a confirmed root cause and fix:
+
+**1. Ambiguous-bar resolution bias (`simulation/triple_barrier.py`).** When a single bar's high/low range is wide enough to touch both the take-profit and stop-loss level in the same bar, the labeling code must pick one. The original implementation resolved this in favor of the win condition, inflating the measured win rate on any barrier configuration narrow relative to typical bar range. Fixed to follow López de Prado's convention: **assume the loss** in an ambiguous bar — the conservative choice. Confirmed and fixed 25 August 2026. Source: [`simulation/triple_barrier.py`](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/simulation/triple_barrier.py), diagnosed with `scripts/quantify_ambiguous_bars.py`.
+
+**2. ZC tick-size unit mismatch (cents vs. dollars).** The first product-grid run used `tick_size=0.0025` (dollars/bushel) applied to a price feed quoted in **cents**/bushel (close≈437 ⇒ $4.37) — a 100x unit mismatch specific to ZC, the only product in that grid quoted in cents rather than dollars/points/index level. `avg_win_usd`/`avg_loss_usd` were inflated 100x, producing a false "ZC leads at 55.7 combines/year" result. Corrected to `tick_size=0.25`; ZC re-ranked to **14.1 combines/year, last place**, once fixed. Source: [`GLITCH_RESEARCH_LOG.md`](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/GLITCH_RESEARCH_LOG.md).
+
+Two other items are explicitly corrected here rather than repeated as fact:
+
+**3. "MES/MNQ tick value confusion"** — no evidence was found that this was ever an actual bug in this codebase. Dropped from the confirmed-bug list after a targeted `git log`/grep audit failed to substantiate it.
+
+**4. UTC-mislabeled-as-CT logger** — this was **not** a historical bug from the original edge search. It was found live, today (07 September 2026), while writing this report. See [Infrastructure & Operations](03-infraestructura-operaciones.qmd) for the full account and the fix, [commit `484187c`](https://github.com/erictvillarreal/GLITCH/commit/484187c).
+
+## Final validation — the G2 candidate
+
+| Parameter | Value |
+|---|---|
+| Product | MES |
+| Geometry | SL=100 / TP=40 ticks (RR=0.40), fixed-tick barriers (no ATR scaling) |
+| Direction | Alternating — the directional bias found in early testing was noise, not edge |
+| Contracts (nc) | 40 (not the 50 legal cap — a deliberate extra safety margin) |
+| Empirical win rate | ~70.6% (midpoint of the bracket measured against real MES data, post ambiguous-bar fix) |
+| Theoretical Combine pass rate | 81.44% (`THEORETICAL_PASS_RATE`, Monte Carlo, n_paths=8,000, seed=42) |
+| Blow rate | ~18.5% |
+| Estimated combines/year | **53.6** |
+| Average days to resolution | ~3.8 |
+
+Seven products were tested under the identical geometry-only rule after the ZC fix. Four independent asset families — equity index, metals, energy, and the equity-index control pair — landed within a tight ~48–54 combines/year band, exactly as the gambler's-ruin premise predicts (a geometry-driven result, not an instrument-specific one):
+
+| Producto | Familia | RR | nc | combines/año | Lectura |
+|---|---|---|---|---|---|
+| MES/MNQ | Equity index | 0.40 | 40 | 53.6 | Consistente, sesgo despreciable (~1%) |
+| GC/MGC (Gold) | Metales | 0.33 | 30 | 52.7 | Consistente, sesgo despreciable |
+| RTY/M2K (Russell) | Equity index (control) | 0.40 | 50 | 51.9 | Consistente, a 1.4% de Gold — esencialmente empatados |
+| CL/MCL (Crude) | Energía | 0.40 | 30 | 48.2 | Consistente, sesgo moderado (4–8%) |
+| 6E/M6E (Euro FX) | FX mayor | 0.50 | 50 | 37.4 | Sesgo ~10% — el más grande de la sesión; marcado para escrutinio futuro |
+| ZN (10Y Note) | Tasas | 0.50 | 5 | 21.4 | Dirección NO consistente entre mitades de la muestra |
+| ZC (Corn) | Agrícola | 0.48 | 5 | 14.1 | Último lugar tras corrección del bug de unidades; dirección tampoco consistente; handicap estructural (nc≤5, sin micro-contrato) |
+
+ZN and ZC — the two products without a micro-contract (`nc≤5`) — fall structurally below the main band. This is not a worse geometry; a hard contract-count ceiling limits how fast dollar progress toward the fixed profit target can accumulate. Results are versioned, not ephemeral: `data_cache/camino_b_products_grid.csv`, `_overfit.csv`, `_final.csv`, committed alongside [`GLITCH_RESEARCH_LOG.md`](https://github.com/erictvillarreal/GLITCH/blob/99497ec/glitch/GLITCH_RESEARCH_LOG.md).
+
+## Operational status
+
+G2 is live in real paper trading on Railway (the "GEOMETRY" service), `DRY_RUN=true`. Infrastructure incidents encountered while getting this candidate to reliable live execution — data-source delay, filesystem persistence, environment-variable configuration — are documented in full in [Infrastructure & Operations](03-infraestructura-operaciones.qmd), not repeated here.
+
+`combo_2d` (the MES+MNQ double-confirmation candidate referenced above) is technically healthy in production (confirmed via a clean manual run — see [Infrastructure & Operations](03-infraestructura-operaciones.qmd)) but remains **discarded on statistical grounds**: infrastructure health is not evidence of edge.

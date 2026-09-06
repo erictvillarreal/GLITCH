@@ -1,5 +1,50 @@
 # Methodology & Discipline
 
-::: {.callout-note}
-**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
+## The standard
+
+Every statistical claim in this project is held to the same non-negotiable bar before it can inform a decision:
+
+1. **Walk-forward, causal only.** No in-sample fitting followed by in-sample reporting. Signals are evaluated on data the model could not have seen at decision time.
+2. **N > 200.** Below this, a candidate is labeled "insufficient sample," never "weak edge" — the two are not the same finding, and conflating them is how false candidates survive review.
+3. **p < 0.05**, and both criteria together — N>200 alone or p<0.05 alone is not sufficient. Several Cerebro 2 candidates hit one bar but not the other (see [Cerebro 2 Timeline](02-cerebro2-timeline.qmd)'s 712-test table) and are explicitly held to "insufficiently proven," not promoted on a technicality.
+4. **Split-half or sub-period consistency.** A result must hold its sign across at least two independent partitions of the data before it is treated as a real, persistent effect rather than noise that happened to average out favorably.
+5. **Fresh reproduction before trust.** A number is not usable until it has been reproduced from scratch, in this repository, with this codebase — not recalled from a prior write-up, a prior session, or a prior analysis.
+
+## Why criterion 5 exists — the two numbers that never came back
+
+Early in the search, two walk-forward candidates looked like real, if modest, edge:
+
+- **Day-to-day mean-reversion (base, MES only): p=0.165**
+- **Day-to-day mean-reversion with double confirmation (combo_2d, MES+MNQ): p=0.081**
+
+Both were re-tested from scratch in this repository on 25 August 2026 (`scripts/wf_mr_pure.py`, `scripts/wf_combo2d.py`). **Neither reproduced.** The fresh runs gave p=0.4444 and p=0.4537 respectively — both far above the 0.05 bar, both indistinguishable from noise. The cause of the original-vs-reproduced discrepancy was never identified, and it does not need to be: the discrepancy itself is the lesson. A number that cannot be reproduced from the code and data actually in the repository is not a fact about the market — it is, at best, unexplained, and at worst, contamination from an earlier, unaudited session.
+
+::: {.callout-important}
+A third number sits in the same category for a different reason: an earlier Cerebro 2 analysis cited a **$134,174** lifetime payout figure. It was later confirmed to be **fabricated** by a prior AI session — it does not trace to any script, dataset, or computation anywhere in this repository. It is not "unreproduced," it is invented, and it must never be cited as a reference point for any future work on this project.
 :::
+
+Every rule in this chapter exists because of these three numbers. Rule 5 in particular is a direct, mechanical response: nothing is trusted until it is reproduced, on demand, from what actually exists in the repository today.
+
+## The standard applied — self-caught errors, not just external checks
+
+The discipline is not only "verify claims from outside" — several of the most consequential corrections in this project's history were self-caught, before being reported, rather than found afterward by the user:
+
+**Metric dilution, caught twice independently.** A naive `win_rate = label==1 / total` metric silently dilutes its denominator with time-barrier expirations (trades that neither hit take-profit nor stop-loss). This happened twice, in unrelated contexts: once in the slow-timeframe direction search (`wf_slow_mr.py`), and again in the MGC empirical win-rate validation (`measure_wr_bracket()`), where a first reading showed an alarming 34.85% win rate — a full 15 percentage points below the 50% theoretical assumption — before the same root cause was identified and the corrected conditional metric (`TP/(TP+SL)`, excluding time-exits) recovered 49.97%, essentially exact. Reporting the alarming number without checking the label distribution first would have wrongly invalidated a candidate that was, in fact, sound. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**The `nc_designed` bug, caught before it was reported as a result.** The first version of `simulate_xfa_lifetime_dynamic_nc()` used the Scaling Plan's legal maximum contract count unconditionally, rather than the smaller of the legal maximum and the candidate's actual designed size — silently validating a strategy trading 5x larger positions than the one actually proposed. This was caught by inspecting the function's behavior before its output was used for any conclusion, and fixed by adding an explicit `nc_designed` parameter with `min(nc_designed, nc_legal)` semantics. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Vectorization validated bit-exact before trusting its output.** When `simulate_xfa_lifetime()` was rewritten from a scalar per-path loop to a vectorized NumPy implementation (to fix a 75x runtime variance that had turned a ~2-hour job into a projected 70-hour one), the new implementation was checked bit-exact against the old one across 32 cases — spanning both MLL policies, all three account sizes, and low/high WR/RR combinations — before the old code was deleted or any new number from the fast version was reported. See [Infrastructure & Operations](03-infraestructura-operaciones.qmd) and [Cerebro 2 Timeline](02-cerebro2-timeline.qmd).
+
+**Two historical bug claims corrected under the same standard used against everyone else's numbers.** "MES/MNQ tick value confusion" was slated to appear on this project's own bug list — but a targeted audit against `git log` and the codebase found no evidence it was ever a real bug, and it was dropped rather than repeated as folklore. Conversely, the UTC-mislabeled-as-CT logger bug was initially assumed already fixed — until a direct empirical test (forcing `TZ=UTC`) showed it was still live in production code, and it was fixed and documented as a *same-day* finding rather than folded into the historical narrative where it did not belong. See [Infrastructure & Operations](03-infraestructura-operaciones.qmd).
+
+## Correlation is not a strategy
+
+Six raw, statistically significant correlations were found early in the search (day-to-day return autocorrelation, a 2-day-lag effect, intraday lag-1 autocorrelation, and three time-of-day effects) — none were ever promoted, because none were converted into a walk-forward-tested strategy with positive, reproducible expected value. A correlation coefficient with a small p-value describes a pattern in historical data; it says nothing about whether that pattern survives transaction costs, position sizing, and the causal ordering a live strategy must respect. This distinction is treated as a hard line, not a matter of degree.
+
+## Statistical significance is not independence
+
+Cerebro 2's 712-test edge search found 8 candidates passing the nominal p<0.05 threshold — more than the ~35 expected by chance alone, but several share legs (the same product appearing across multiple pair tests) or overlapping calendar windows. A "hit" from a search that shares structure with other hits is not an independent confirmation of anything; it is treated with the same skepticism as a single larger search would warrant, not multiplied into false confidence. See [Cerebro 2 Timeline](02-cerebro2-timeline.qmd) for the full table and the correlation caveat applied to it.
+
+## Reproducibility as infrastructure, not just a slogan
+
+Every grid or validation result referenced in this report has a versioned CSV (`data_cache/*.csv`) and a named script that produced it, committed to the repository rather than left as an ephemeral notebook output. Where a figure could not be traced to a script or reproduced on demand, it is marked `[NO VERIFICADO]` in `GLITCH_RESEARCH_LOG.md` rather than quietly dropped or quietly trusted — visible uncertainty, not silent assumption, is the default state of any unverified number in this project.

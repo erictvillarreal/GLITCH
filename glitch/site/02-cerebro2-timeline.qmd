@@ -1,5 +1,87 @@
 # Cerebro 2 — Timeline
 
 ::: {.callout-note}
-**Pendiente de construcción.** Este capítulo se escribe después de que el formato/tono de la Executive Summary quede aprobado. Mientras tanto, ver `GLITCH_RESEARCH_LOG.md` en el repositorio.
+Cerebro 2 lives on the `cerebro2-dev` branch, not yet merged into `main`. Every commit-hash link in this chapter points into `cerebro2-dev` specifically — do not expect these paths on `main`.
 :::
+
+## Objective
+
+Survive and generate payouts once an account is funded (post-Combine): an unbounded horizon, no profit target, and success measured as 5 winning days of ≥$150 net rather than a lump sum. See [Executive Summary](index.qmd) for why this is a fundamentally different optimization problem from Cerebro 1's.
+
+## Base experiment — the WR/RR decoupling bug
+
+The first grid (`scripts/cerebro2_grid_pass1.py`, [commit `8f7a3a4`](https://github.com/erictvillarreal/GLITCH/commit/8f7a3a4)) swept win rate as a free parameter, independent of RR, over MES and M6E — and its own commit message claimed a no-edge-dependent payout zone at WR≥0.50/RR≥1.5. **That claim was retracted explicitly**, not silently corrected: WR was decoupled from RR, so the sweep never checked what win rate a *zero-edge* process would actually produce at each RR (`WR_natural = 1/(1+RR)`, the same gambler's-ruin relationship underlying Cerebro 1's G2). Once every row was relabeled against its own `WR_natural`, the "promising" quadrant of 504 rows turned out to require **real edge in 100% of them** — an average of +1.01R expected value per trade, a level of edge never found anywhere in this session. [Commit `680b66f`](https://github.com/erictvillarreal/GLITCH/commit/680b66f).
+
+## The exhaustive grid, the Scaling Plan discovery, and the nc_cap bug
+
+A 292,050-run grid (`scripts/cerebro2_grid_exhaustive.py`) was designed to map the full k×RR×WR×product×account space — motivated by an unverified third-party marketing claim of ~$9,000 average funded-account payout, treated explicitly as a hypothesis to map against, never as a validated number. [Commit `48986f9`](https://github.com/erictvillarreal/GLITCH/commit/48986f9).
+
+While preparing this grid, a deeper problem surfaced: `nc_cap` (the contract-count ceiling used throughout Cerebro 2's modeling to that point — 50 for MES, 30 for MGC, etc.) is confirmed by Topstep's own documentation to be a **Combine-phase limit**, not the XFA's. The funded account instead uses a **balance-dependent Scaling Plan** — contract allowance rises in steps as account balance grows, starting as low as 2–3 lots near $0 balance:
+
+| Balance | 50K | 100K | 150K |
+|---|---|---|---|
+| < $1,500 | 2 | 3 | 3 |
+| $1,500–$2,000 | 3 | 4 | 4 |
+| $2,000–$3,000 | 5 | 5 | 5 |
+| $3,000–$4,500 | 5 | 5 | 10 |
+| > $3,000 (100K cap) | — | 10 | — |
+| > $4,500 (150K cap) | — | — | 15 |
+
+(Lots are mini-equivalents, 10:1 vs. micros, with per-product exceptions for Micro Silver and Micro Bitcoin/Ether.) This meant every prior Cerebro 2 simulation had implicitly assumed a fixed, XFA-lifetime contract count — an optimistic upper bound, not a real result. [Commit `23ba2e8`](https://github.com/erictvillarreal/GLITCH/commit/23ba2e8). The exhaustive grid was allowed to finish under the old fixed-nc assumption and kept only as a labeled upper-bound reference, never as a final result.
+
+**Follow-up validation (Tarea 1) found this did not change the answer for the winning region specifically:** `simulate_xfa_lifetime_dynamic_nc()` was built with `nc_today = min(nc_designed, nc_legal_del_día)` — a first version that used the legal maximum unconditionally was caught and fixed before being reported (see [Methodology & Discipline](04-metodologia-y-disciplina.qmd) for why this class of bug matters). For the actual top-5 candidates (all 150K, `k=2`, designed nc between 3 and 6), the Scaling Plan's legal floor at $0 balance (30 micro-contracts for a 150K account) is already far above the designed nc — so `min()` always resolves to the smaller designed value, and fixed-nc and dynamic-nc give **identical** results for these candidates specifically (confirmed bit-exact at `n_paths=10,000`). This does not generalize to candidates with larger designed nc or smaller accounts, which were not tested.
+
+## Incident: vectorization bug turns a 2-hour grid into a projected 70 hours
+
+The exhaustive grid was launched after an approved preflight benchmark. At 44 minutes and only 1% complete, the script's own ETA had climbed to ~4,200 minutes (~70 hours) — the run was stopped before burning unsupervised compute. Root cause: `simulate_xfa_lifetime()` had never been vectorized — a scalar per-path Python loop whose runtime depended entirely on how many days each path survived before blowing, varying **~75x** across the grid (12ms for a fast-blowing low-RR case vs. 868ms for a slow, high-survival high-RR corner) — and the preflight's single benchmark point happened to sample the fast extreme.
+
+Fixed by rewriting `simulate_xfa_lifetime()` to vectorize over the path axis with NumPy array operations, **validated bit-exact against the old scalar implementation across 32 cases** (both MLL policies, all 3 account sizes, low/high WR/RR, same seed) before replacing it — full 134/134 test suite unchanged. Post-fix variance dropped to ~2.3x, and the real grid runtime came in at **51 minutes** against the original ~70-hour projection. [Commit `4842fea`](https://github.com/erictvillarreal/GLITCH/commit/4842fea).
+
+## Pivot to a real-edge search
+
+The user redirected Cerebro 2 from "modest pure geometry" toward a genuine statistical-edge search, with success criteria distinct from Cerebro 1's: no speed requirement, but N>200, p<0.05, and reproducible — explicitly invoking the two historical p=0.165/p=0.081 candidates from [Cerebro 1](01-cerebro1-timeline.qmd) that never reproduced fresh, as the standard any new candidate must clear.
+
+### 712 tests, eight candidates that pass p<0.05, zero that clear the bar
+
+Across an individual-product grid (96 tests), a 15-pair cross-product grid (600 tests, including all 14 previously-untested pairs), and a dedicated ZC grid (16 tests) — **712 tests total** — eight candidates passed the nominal p<0.05 threshold:
+
+| Candidate | N | p | Note |
+|---|---|---|---|
+| M2K–M6E weekly hold=3d/fade | 128 | **0.0003** | Strongest of the search; shares the M6E leg with several other hits |
+| Spread MES–M2K daily hold=5d/momentum | 86 | 0.0019 | Confirmed by 2 independent constructions |
+| Spread MES–M2K daily hold=10d/fade | 47 | 0.022 | Confirmed by 2 constructions |
+| MES+MGC weekly hold=5d/fade (pooled) | 170 | 0.048 | — |
+| MES+MGC weekly/fade, ex-Friday | 135 | 0.033 | In-sample refinement — more skepticism warranted, not less |
+| MCL daily hold=2d/fade | 168 | 0.028 | From a 96-test grid (~4.8 false positives expected by chance) |
+| M6E daily hold=3d/fade | 126 | 0.032 | From the same 96-test grid |
+| ZC daily hold=2d/fade | 125 | 0.023 | All 7 fade configs positive EV, all 7 momentum configs negative — internally consistent |
+
+**None reach N>200. None are used in production.** The eight hits also share legs (MES appears in 6 of the 15 strongest pair rows; M6E in several others), so they cannot be treated as independent confirmations of a common effect. A candidate "Friday effect" appeared in three of these results but flipped sign or vanished under closer inspection (MCL's best day is Friday, not worst; the MES–M2K hold=10d spread's Friday behavior is the opposite of its hold=5d sibling) — treated as fragile, not structural. A dedicated barrier-geometry sweep on the two strongest candidates confirmed the inherited 2.5/1.5 PT/SL ratio was already near-optimal for this range — the geometry was not accidentally handicapping the results. Sources: [`GLITCH_RESEARCH_LOG.md`, "Cierre de gaps"](https://github.com/erictvillarreal/GLITCH/blob/366f5f8/glitch/GLITCH_RESEARCH_LOG.md), [commit `366f5f8`](https://github.com/erictvillarreal/GLITCH/commit/366f5f8), [commit `6a606d7`](https://github.com/erictvillarreal/GLITCH/commit/6a606d7).
+
+## The central structural finding: Combine and XFA are different optimization problems
+
+With no real-edge candidate clearing N>200, attention returned to the geometry-pure MGC/150K candidate (SL=TP=364 ticks, WR=0.5, `k=2`, nc=6) — designed to survive the XFA phase (46.2% probability of at least one lifetime payout, $2,169 expected value, run through the already-validated `simulate_xfa_lifetime_dynamic_nc`). This candidate had never been run through the Combine phase it must first pass.
+
+**Result: a 46.9% Combine pass rate** (200,000-path Monte Carlo via the same `TopstepMonteCarloSimulator` engine already used and audited for G2) — **roughly half of G2's 81.4%.** This directly confirmed the user's suspicion that a geometry designed to tolerate few consecutive losses once funded (low nc, wide symmetric barriers) is not the same geometry that clears the Combine's bounded profit-target race quickly. [Commit `1cff838`](https://github.com/erictvillarreal/GLITCH/commit/1cff838); see also the retrospective framing in [`GLITCH_RESEARCH_LOG.md`](https://github.com/erictvillarreal/GLITCH/blob/1cff838/glitch/GLITCH_RESEARCH_LOG.md), "HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2." **No future Cerebro 2 candidate's Combine pass rate should be assumed from another candidate's number** — it must be measured directly, every time.
+
+## Two-stage cash-flow model and empirical validation of the MGC/150K candidate
+
+A full two-stage Monte Carlo (Combine pool of 200,000 outcomes + XFA pool of 50,000 episodes, sampled with replacement across 20,000 independent 365-day trajectories, paying real Combine/activation fees each attempt) produced a distribution, not a point estimate:
+
+| Metric | p10 | p25 | Median | p75 | p90 |
+|---|---|---|---|---|---|
+| 1-year cumulative payout | $15,809 | $22,298 | **$31,257** | $42,076 | $53,861 |
+| Max capital cushion needed | $298 | $447 | **$894** | $1,639 | **$2,679** |
+
+Tail risk was quantified, not just described: probability that any single attempt reaches at least one payout is 46.9% × 46.4% = **21.8%**; probability of needing ≥5 consecutive failed attempts before a payout is **37.5%**; ≥10 consecutive failures, **11.0%**. The $2,679 (p90) cushion figure reflects roughly 18 paid Combine attempts absorbed before enough payout arrives to compensate. [Commit `1cff838`](https://github.com/erictvillarreal/GLITCH/commit/1cff838).
+
+The candidate's two core assumptions were then validated against real MGC price data rather than left as Monte Carlo assumptions:
+
+- **Empirical win rate**: first measurement gave an alarming 34.85% vs. the theoretical 50% — traced to the same time-exit dilution bug already found and fixed twice earlier in this session ([Methodology & Discipline](04-metodologia-y-disciplina.qmd)) — 30.2% of trades expire by time rather than TP/SL for this wide-barrier geometry. The corrected conditional win rate (TP/(TP+SL), excluding time-exits): **49.97%**, essentially exact against the 50% theoretical assumption. [Commit `d1f11fa`](https://github.com/erictvillarreal/GLITCH/commit/d1f11fa).
+- **Sub-period stability**: confirmed stable across 3 independent calendar sub-periods (49.90%, 49.92%, 49.89% — all within 0.15pp of 50%). [Commit `3f0bd07`](https://github.com/erictvillarreal/GLITCH/commit/3f0bd07).
+- **Long/short asymmetry**: not persistent — favors long in sub-periods 1–2 (+9.98pp, +15.23pp) but flips to favor short in sub-period 3 (−3.64pp). This is evidence *for*, not against, the already-chosen alternating design: since the asymmetry is noise rather than a stable bias, alternating protects against betting on either side.
+- **Combine pass-rate sensitivity**: real but contained. A ±5–8pp WR shift near this RR=1.0 equilibrium point moves the Combine pass rate by ~13–20pp (range observed: 30.2%–63.7% across long-only/short-only/sub-period scenarios) — a structural fragility of operating this close to the WR=50%/RR=1.0 break-even point, flagged as a model risk for the user's production decision, not a defect requiring a design change.
+
+## Status
+
+The MGC/150K candidate is validated on both of its core assumptions (Combine pass rate, empirical WR) as of 07 September 2026. A third scheduler (`scheduler/geometry_mgc_scheduler.py`) has been built for paper trading on Railway — its construction, the RTH-window recalibration finding made along the way, and remaining infrastructure blockers are covered in [Infrastructure & Operations](03-infraestructura-operaciones.qmd).
