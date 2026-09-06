@@ -1994,3 +1994,64 @@ python scripts/validate_mgc_subperiods_and_direction.py data_cache/mgc_5min_2y_c
 
 No se tocó producción ni Railway. Todo en `cerebro2-dev`.
 
+## Cerebro 2 — Fase 1 (continuación): dataset con ventana corregida, comparación completa (07-sep-2026)
+
+El usuario corrió `fetch_mgc_correct_window.py` en su propio entorno
+(fuera de esta sesión) y proveyó el resultado:
+`data_cache/mgc_5min_2y_corrected_window.parquet` (49,496 barras,
+ventana 7:00-15:00 CT, 2024-09-06 a 2026-09-04).
+
+**Bug capturado antes de confiar en la comparación:** `part2_combine_direction_sensitivity()`
+en `scripts/validate_mgc_subperiods_and_direction.py` tenía los 3
+escenarios "agregado" (Alternado/Solo LONG/Solo SHORT) HARDCODEADOS a
+los valores del dataset viejo (0.4997/0.5278/0.4716), sin importar qué
+parquet se pasara al script — correcto para el dataset original,
+silenciosamente obsoleto e inconsistente con los propios números de
+Parte 1 al correr contra cualquier otro dataset. Corregido para que
+Parte 1 calcule y devuelva el WR agregado del dataset completo, y
+Parte 2 lo reciba como parámetro. Verificado que el fix reproduce
+exactamente los números originales contra el dataset viejo antes de
+confiar en el resultado nuevo.
+
+### Comparación completa — ventana equity (vieja) vs ventana corregida
+
+| | Ventana vieja (8:30-15:00 CT) | **Ventana corregida (7:00-15:00 CT)** |
+|---|---|---|
+| N (calibración densa) | 40,208 | **49,395** (+22.9%) |
+| WR condicional (todo) | 49.97% | **50.20%** |
+| WR long / short | 52.78% / 47.16% (gap 5.62pp) | **50.47% / 49.93%** (gap 0.54pp) |
+| Pass rate Combine (alternado) | 47.0% | **47.5%** |
+| WR por sub-período (3) | 49.90% / 49.92% / 49.89% (±0.11pp) | 50.25% / 49.72% / 50.13% (±0.28pp) |
+
+**Conclusión: el hallazgo de la ventana horaria era real y valía la
+pena corregir, y el resultado corregido es CONSISTENTE con — y
+ligeramente MEJOR que — lo ya validado, no lo contradice.** La ventana
+correcta capturó ~22.9% más datos de calibración, empuja el WR
+condicional aún más cerca del 50% teórico, y — el cambio más
+importante — **casi elimina la asimetría long/short** (de 5.62pp a
+0.54pp de separación), consistente con la hipótesis de que parte de
+esa asimetría era un artefacto de excluir la ventana de mayor liquidez
+real (donde el flujo de order comprador/vendedor está más balanceado)
+en vez de un sesgo genuino del mercado. El pass rate del Combine
+prácticamente no se mueve (47.0%→47.5%) — la conclusión central de que
+este candidato es débil para el Combine (vs ~81.4% de G2) se mantiene
+sin cambios.
+
+**Decisión: `mgc_5min_2y_corrected_window.parquet` pasa a ser el
+dataset de referencia para este candidato** — más completo, resultado
+más limpio, misma conclusión de negocio. `mgc_5min_2y.parquet`
+(ventana vieja) se conserva sin tocar — sigue siendo válido para
+cualquier trabajo de Camino B/Combine con `CANDIDATES["MGC"]` (la
+geometría original de 136/45 ticks), que no se ve afectado por este
+hallazgo dado su holding window mucho más corto y su barrera más
+angosta relativa al rango de barra (mismo razonamiento que ya explica
+por qué G2/MES tampoco se ve afectado por el problema de time-exit).
+
+**Nota para más adelante, no una acción de esta sesión:** si esto se
+confirma como una mejora genuina y no solo ruido, sería candidato a
+re-evaluar la ventana horaria usada para CUALQUIER trabajo futuro de
+Camino B en productos no-equity (metales, energía, agrícolas, bonos) —
+cada uno con su propia sesión de mayor liquidez, probablemente
+distinta de la de equity index. No se toca retroactivamente el trabajo
+ya hecho para otros productos sin que el usuario lo pida.
+
