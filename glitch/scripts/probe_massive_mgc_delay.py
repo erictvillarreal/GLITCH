@@ -23,14 +23,34 @@ ancho de barra y delay real); si la API no la soporta o devuelve vacio,
 cae a "5min" automaticamente y lo reporta explicitamente -- no falla en
 silencio con un numero de resolucion distinto al que realmente se usó.
 
-USO (correr en la Terminal donde MASSIVE_API_KEY ya esta exportada):
+CORREGIDO (07-sep-2026) tras un primer intento que devolvio un delay
+IMPOSIBLE (~319,174 min, 7+ meses): diagnosticado con
+scripts/diagnose_massive_aggs_query.py, que probo 3 variantes de query
+lado a lado con evidencia cruda. Resultado: pedir un RANGO de fechas
+(`window_start_gte`/`window_start_lte`) con `sort=window_start.asc` y
+tomar el ultimo resultado NO devuelve la barra mas reciente -- ni con
+fechas solas (el formato ya probado en fetch_mes_2y.py) ni con
+datetime completo -- hay un problema de paginacion/ordenamiento de la
+API con ese patron especifico. Unica variante que SI funciona:
+`sort=window_start.desc` + `limit=1`, SIN ningun rango de fechas --
+pedir directamente "la barra mas reciente que tengas". Ver
+GLITCH_RESEARCH_LOG.md, 07-sep-2026, "Leccion de API reusable" -- mismo
+tipo de comportamiento ya visto antes en esta sesion con el endpoint de
+contracts (point-in-time funciona, rango amplio + sort=asc no).
+
+IMPORTANTE -- correr ENTRE SEMANA, en horario de mercado activo: un
+primer intento de esta version corregida midio ~1.8 dias de "delay",
+pero se corrio en fin de semana (2026-09-06 = sabado) -- eso NO es el
+delay real de Massive, es tiempo transcurrido desde el cierre del
+mercado el viernes. Gold cotiza casi 24h (domingo 5pm CT a viernes 4pm
+CT, corte diario de 1h 4-5pm CT) -- correr esto lunes-viernes, evitando
+el corte diario, para que la medicion sea comparable con el "10
+minutos" nominal del plan Starter de Massive.
+
+USO (correr en la Terminal donde MASSIVE_API_KEY ya esta exportada,
+ENTRE SEMANA en horario de mercado activo):
     cd /Users/anelvillarreal/Desktop/Kito/GLITCH-clean/glitch
     python scripts/probe_massive_mgc_delay.py
-
-Nota: gold cotiza casi 24h (domingo 5pm CT a viernes 4pm CT, con un
-corte diario de 1h 4-5pm CT) -- correr esto fuera de ese corte diario
-para que la medicion sea representativa de un momento con datos
-fluyendo activamente, no de un hueco de mercado cerrado.
 """
 from __future__ import annotations
 import os
@@ -68,23 +88,46 @@ def _resolution_seconds(resolution: str) -> int:
 
 
 def fetch_latest_bar(ticker: str) -> tuple[dict, str]:
-    """Devuelve (barra_mas_reciente, resolucion_realmente_usada)."""
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    window_start = (now_utc - dt.timedelta(hours=3)).isoformat()
-    window_end = now_utc.isoformat()
+    """
+    Devuelve (barra_mas_reciente, resolucion_realmente_usada).
 
+    PATRON CORRECTO (confirmado con diagnose_massive_aggs_query.py):
+    sort=window_start.desc + limit=1, SIN window_start_gte/lte -- pedir
+    un RANGO de fechas con sort=asc y tomar el ultimo resultado NO
+    devuelve la barra mas reciente en este endpoint (problema de
+    paginacion/ordenamiento de la API con ese patron especifico, no un
+    problema de formato de fecha). No repetir el patron roto en
+    scripts futuros que necesiten "el dato mas reciente" de Massive.
+    """
     for resolution in RESOLUTIONS_TO_TRY:
         results = _get(f"/futures/v1/aggs/{ticker}", {
-            "resolution": resolution, "window_start_gte": window_start, "window_start_lte": window_end,
-            "sort": "window_start.asc", "limit": 5000,
+            "resolution": resolution, "sort": "window_start.desc", "limit": 1,
         })
         if results:
-            return results[-1], resolution
+            return results[0], resolution
     raise RuntimeError(f"Sin barras recientes para {ticker} en ninguna resolucion probada {RESOLUTIONS_TO_TRY} "
-                        f"-- ¿mercado cerrado (corte diario 4-5pm CT) o ticker incorrecto?")
+                        f"-- ¿mercado cerrado (corte diario 4-5pm CT, o fin de semana) o ticker incorrecto?")
+
+
+def _weekday_warning():
+    """Advertencia defensiva -- un primer intento midio ~1.8 dias de
+    'delay' que en realidad era tiempo desde el cierre del viernes,
+    porque se corrio en sabado. Gold cierra Vie 4pm CT y reabre Dom
+    5pm CT -- fuera de esa ventana, cualquier 'delay' medido aqui es
+    tiempo de mercado cerrado, no delay real de la API."""
+    now_ct = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=5)  # aprox CT (sin DST fino, suficiente para el aviso)
+    weekday = now_ct.weekday()  # 0=lunes .. 5=sabado, 6=domingo
+    if weekday == 5 or (weekday == 6 and now_ct.hour < 17) or (weekday == 4 and now_ct.hour >= 16):
+        print("!" * 80)
+        print("ADVERTENCIA: parece que el mercado de MGC esta CERRADO ahora mismo")
+        print("(gold cierra Vie 16:00 CT, reabre Dom 17:00 CT). Cualquier 'delay' medido")
+        print("en este momento sera tiempo de mercado cerrado, NO el delay real de la API.")
+        print("Correr esto lunes-viernes, en horario de mercado activo.")
+        print("!" * 80 + "\n")
 
 
 def main():
+    _weekday_warning()
     ticker, last_trade_date = resolve_front_month("MGC")
     print(f"Contrato front-month resuelto: {ticker} (last_trade_date={last_trade_date})")
     print(f"Tomando {N_SAMPLES} muestras, {SECONDS_BETWEEN_SAMPLES}s de separacion "

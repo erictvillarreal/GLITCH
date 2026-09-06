@@ -2055,3 +2055,49 @@ cada uno con su propia sesión de mayor liquidez, probablemente
 distinta de la de equity index. No se toca retroactivamente el trabajo
 ya hecho para otros productos sin que el usuario lo pida.
 
+## Cerebro 2 — Lección de API reusable: cómo pedir "el dato más reciente" a Massive (07-sep-2026)
+
+**Incidente:** el primer intento de medir el delay real de Massive
+para MGC (`scripts/probe_massive_mgc_delay.py`) devolvió un resultado
+imposible: ~319,174 minutos (7+ meses) de "delay". Diagnosticado con
+evidencia antes de repetir la medición a ciegas —
+`scripts/diagnose_massive_aggs_query.py` probó 3 variantes de query
+lado a lado contra el endpoint `/futures/v1/aggs/{ticker}`:
+
+- **A) `window_start_gte`/`window_start_lte` como fecha sola +
+  `sort=window_start.asc` + `limit` alto, tomando el último
+  resultado** (mismo patrón usado con éxito en `fetch_mes_2y.py` para
+  descargas históricas completas).
+- **B) Mismo patrón pero con datetime completo + offset de zona
+  horaria** en vez de fecha sola.
+- **C) SIN ningún rango de fechas — `sort=window_start.desc` +
+  `limit=1`**, pidiendo directamente "la barra más reciente que
+  tengas".
+
+**Resultado con evidencia:** A y B **ninguna de las dos** devuelve la
+barra más reciente — hay un problema de paginación/ordenamiento del
+lado de la API específico a pedir un RANGO con `sort=asc` y tomar el
+último elemento (no es un problema de formato de fecha, ambos formatos
+fallan igual). **Solo C funciona.** Mismo tipo de comportamiento ya
+visto antes en esta sesión con el endpoint `/futures/v1/contracts`
+(`date=<point-in-time>` funciona de forma confiable; un rango amplio
+con `sort=asc` no) — patrón recurrente de esta API específica, no un
+incidente aislado.
+
+**Regla para cualquier script futuro que necesite "el dato más
+reciente" de Massive (aggs o contracts): usar `sort=desc` + `limit`
+pequeño (1, o pocos), NUNCA un rango de fechas + `sort=asc` +
+tomar-el-último.** `scripts/probe_massive_mgc_delay.py` corregido para
+usar el patrón C. Agregado también un aviso defensivo en el propio
+script (`_weekday_warning()`) tras un segundo hallazgo relacionado:
+**la primera corrida con el patrón C ya corregido midió ~1.8 días de
+"delay", pero se corrió en sábado** — eso es tiempo desde el cierre
+del mercado el viernes (gold cierra Vie 16:00 CT, reabre Dom 17:00
+CT), no delay real de la API. El script ahora advierte explícitamente
+si se corre fuera de horario de mercado activo entre semana.
+
+**Pendiente:** medir el delay real, corriendo `probe_massive_mgc_delay.py`
+lunes-viernes en horario de mercado activo (evitando también el corte
+diario 4-5pm CT) — el número de fin de semana no es válido para
+diseñar el punto de entrada del scheduler.
+
