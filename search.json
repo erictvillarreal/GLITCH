@@ -1,0 +1,382 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "GLITCH",
+    "section": "",
+    "text": "1 Executive Summary",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#what-is-glitch",
+    "href": "index.html#what-is-glitch",
+    "title": "GLITCH",
+    "section": "1.1 What is GLITCH",
+    "text": "1.1 What is GLITCH\nGLITCH is a research program to systematically pass a Topstep futures prop-firm evaluation (the “Combine”) and then generate real payouts from the resulting funded account (the “XFA”). The project runs two parallel, independently-optimized tracks referred to throughout this report as Cerebro 1 and Cerebro 2.\nCerebro 1 — pass the Combine. Objective: maximize the probability of reaching the profit target within a bounded ~15-day evaluation window, where the maximum loss is capped at the fee of the attempt (~$49–149). This bounded-loss, bounded-time structure permits a strategy to pass reliably even without genuine predictive edge — convexity of the payout does the work, not market prediction.\nCerebro 2 — survive and generate payouts once funded. A fundamentally different problem: the horizon is unbounded, there is no profit target, and the relevant threshold is 5 winning days of ≥$150 net, not a lump-sum target. A strategy with zero or negative net edge that reliably passes the Combine does not survive Cerebro 2 — without the bounded window protecting it, the trailing loss limit (MLL) eventually catches any strategy without genuine positive edge.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#current-status",
+    "href": "index.html#current-status",
+    "title": "GLITCH",
+    "section": "1.2 Current Status",
+    "text": "1.2 Current Status\n\n\n\nTrack\nStatus\nKey number\nSource\n\n\n\n\nCerebro 1\nValidated candidate (“G2”) live in real paper trading on Railway\n~70.6% empirical win rate (MES, SL=100/TP=40 ticks), 81.44% theoretical Combine pass rate\nGLITCH_RESEARCH_LOG.md, “Consolidación — Camino B”\n\n\nCerebro 2\nGeometry-pure candidate (MGC/150K) validated on both of its core assumptions; real-edge search (712 tests) found no candidate meeting the N&gt;200 bar; a structural finding shows the Combine and XFA phases need opposite geometries\nEmpirical WR 50.20% (vs. 50% theoretical); Combine pass rate for this same candidate: only 47.5% (vs. G2’s 81.4%)\nGLITCH_RESEARCH_LOG.md, “HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2”\n\n\n\nCapital deployment decision date: 27 September 2026 (per project governance document).",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#snapshot-cerebro-1-g2-candidate",
+    "href": "index.html#snapshot-cerebro-1-g2-candidate",
+    "title": "GLITCH",
+    "section": "1.3 Snapshot — Cerebro 1 (G2 candidate)",
+    "text": "1.3 Snapshot — Cerebro 1 (G2 candidate)\n\n\n\nMetric\nValue\nSource\n\n\n\n\nProduct / geometry\nMES, SL=100/TP=40 ticks (RR=0.40), alternating direction, nc=40\nstrategies/geometry_pure.py\n\n\nEmpirical win rate\n~70.6% (midpoint of optimistic/conservative bracket, post ambiguous-bar fix)\nscripts/revalidate_geometry_table.py\n\n\nTheoretical Combine pass rate\n81.44% (THEORETICAL_PASS_RATE, Monte Carlo, n_paths=8,000, seed=42)\nscheduler/geometry_scheduler.py\n\n\nEstimated combines/year\n53.6\nscripts/camino_b_grid.py results\n\n\nOperational status\nLive paper trading on Railway (“GEOMETRY” service)\n—",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#snapshot-cerebro-2-mgc150k-geometry-pure-candidate",
+    "href": "index.html#snapshot-cerebro-2-mgc150k-geometry-pure-candidate",
+    "title": "GLITCH",
+    "section": "1.4 Snapshot — Cerebro 2 (MGC/150K geometry-pure candidate)",
+    "text": "1.4 Snapshot — Cerebro 2 (MGC/150K geometry-pure candidate)\n\n\n\n\n\n\n\n\nMetric\nValue\nSource\n\n\n\n\nGeometry\nMGC, SL=TP=364 ticks (RR=1.0), alternating, nc=6\nstrategies/geometry_pure.py::CANDIDATES[\"MGC_XFA_150K\"] (cerebro2-dev)\n\n\nEmpirical WR (corrected liquidity window)\n50.20%, stable across 3 independent sub-periods (49.90–50.13%)\nscripts/validate_mgc_wr_empirical.py\n\n\nCombine pass rate for this same geometry\n47.5% — far below G2’s 81.4%\nscripts/cerebro2_cashflow_monte_carlo.py\n\n\n1-year chained cash-flow (median, p10–p90)\n$31,257 ($15,809–$53,861)\nSame script\n\n\nCapital cushion needed (median / p90)\n$894 / $2,679\nSame script\n\n\nReal-edge search coverage\n712 statistical tests across products, pairs, hold periods; best candidate p=0.0003 but N=128 (&lt; the 200 minimum)\nGLITCH_RESEARCH_LOG.md, edge-search sections\n\n\n\n\n\n\n\n\n\nImportant\n\n\n\nNumbers that were retracted or never reproduced — stated explicitly, not omitted. A $134,174 payout figure appeared in an earlier Cerebro 2 analysis and was later confirmed to be fabricated by a prior AI session — it does not trace to any script in this repository and must never be used as a reference point. Two historical walk-forward candidates were cited with p-values of 0.149 and 0.081 — both looked like real edge, and neither ever reproduced when re-tested fresh in this repository (fresh reruns gave p≈0.44–0.45 for both). These two failures are the direct reason for the non-negotiable rigor standard in Methodology & Discipline.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#key-findings",
+    "href": "index.html#key-findings",
+    "title": "GLITCH",
+    "section": "1.5 Key Findings",
+    "text": "1.5 Key Findings\nCerebro 1’s G2 candidate is real, reproducible, and does not depend on predictive signal. It exploits gambler’s-ruin geometry (SL/TP placement) within the Combine’s bounded-loss structure — validated against real MES price data with the triple-barrier ambiguous-bar bug fixed first (see Cerebro 1 Timeline).\nCerebro 2’s central structural finding: optimizing for the Combine and optimizing for XFA survival are not the same problem, and can actively conflict. The MGC/150K candidate — designed to tolerate very few consecutive losses once funded — has a Combine pass rate of only 47.5%, roughly half of G2’s 81.4%, when run through the exact same, already-audited Combine simulator. No Cerebro 2 candidate’s Combine pass rate should ever be assumed from another candidate’s number (see Cerebro 2 Timeline).\nA vectorization bug turned a ~2-hour job into a projected ~70-hour one — caught before it ran unsupervised. An exhaustive Monte Carlo grid’s ETA climbed from an estimated 2 hours to a projected 70 hours after only 1% progress; the root cause was a scalar per-path Python loop whose cost varied ~75x across the parameter space. Vectorizing it (validated bit-exact against the old implementation across 32 cases before replacing it) cut the real run to 51 minutes (see Infrastructure & Operations).\nA live production incident chain cost ~2.5 weeks and traced to five distinct, unrelated root causes — a requirements.txt file read from the wrong path by the actual build system in use (Railpack, not the Nixpacks config that was being edited), missing Telegram/Massive environment variables discovered one crash at a time, an ephemeral filesystem silently resetting all persistence between cron runs, and a Yahoo Finance data-availability gap at the market open (see Infrastructure & Operations).\nA “10-minute” data delay claimed by a paid vendor was never verified — and a first attempt to verify it returned an impossible number, catching a second, unrelated API bug. A real-time delay probe for Massive’s futures data returned a 319,174-minute (7+ month) delay; the root cause was an unreliable API pagination pattern (sort=asc over a date range never returns the most recent record on this endpoint — confirmed with raw API evidence, not assumed) (see Infrastructure & Operations).",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "index.html#how-to-read-this-report",
+    "href": "index.html#how-to-read-this-report",
+    "title": "GLITCH",
+    "section": "1.6 How to Read This Report",
+    "text": "1.6 How to Read This Report\nEvery factual claim in this report links to a specific script, commit, or GLITCH_RESEARCH_LOG.md section in the GLITCH repository — commit-hash-pinned where precision matters, so links stay valid even as branches move or get merged. This report is a navigable index into that history, not a replacement for it: GLITCH_RESEARCH_LOG.md (on the main and cerebro2-dev branches — the two have not yet been merged) remains the technical source of truth. Where a number was later invalidated, contradicted, or never reproduced, this report says so explicitly next to the number, not in a separate erratum.",
+    "crumbs": [
+      "<span class='chapter-number'>1</span>  <span class='chapter-title'>Executive Summary</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html",
+    "href": "01-cerebro1-timeline.html",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "",
+    "text": "2.1 Objective\nPass the Topstep Combine: reach the profit target within a bounded ~15-day evaluation window, with loss capped at the fee of the attempt. See Executive Summary for why this bounded structure is the entire reason Cerebro 1’s winning approach works without predictive signal.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html#signals-and-strategies-investigated-then-discarded",
+    "href": "01-cerebro1-timeline.html#signals-and-strategies-investigated-then-discarded",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "2.2 Signals and strategies investigated, then discarded",
+    "text": "2.2 Signals and strategies investigated, then discarded\nBefore the geometry-only approach (“Camino B”) was found, several distinct hypotheses were tested against real MES price data and discarded — five as full walk-forward strategy candidates, six more as raw correlations never taken further, because correlation alone does not imply a profitable strategy.\n\n\n\n\n\n\n\n\nStrategy\nWalk-forward result\nVerdict\n\n\n\n\nS10 ORB Fade\np≈0.50 (not cleanly significant)\nDiscarded\n\n\nORB Breakout\nNegative EV in every configuration tested\nDiscarded\n\n\nMean-reversion day-to-day (base, MES only)\np=0.165 historically cited — never reproduced fresh (0.4444 on re-run)\nInsufficient, then invalidated\n\n\nMean-reversion day-to-day (combo_2d, MES+MNQ double confirmation)\np=0.081 historically cited — never reproduced fresh (0.4537 on re-run)\nWeak candidate, then invalidated\n\n\nIntraday fade, multi-window\nBug in the walk-forward harness itself; negative EV on the clean sample\nInvalid, discarded\n\n\n\n\n\n\n\n\n\nImportant\n\n\n\nThe p=0.165/p=0.081 figures above are the two historical numbers referenced in the Executive Summary’s retraction callout (cited there as ~0.149/0.081 from memory of the original write-up; the log’s own recorded value for the base candidate is 0.165). Both looked like real, if modest, edge. Neither survived a fresh, from-scratch reproduction in this repository — both collapsed to p≈0.44–0.45, far above the 0.05 bar. The cause of the original-vs-reproduced discrepancy was never identified. This pair of failures is the direct origin of the non-negotiable rigor standard applied to every candidate discussed in this report — see Methodology & Discipline.\n\n\nSix raw correlations were also found (day-to-day return autocorrelation, a 2-day-lagged return effect, intraday lag-1 autocorrelation, and three time-of-day lag-1 effects) — all statistically significant at the correlation level, but none were ever converted into a walk-forward-tested strategy with a positive, reproducible EV. Raw correlation is not a strategy.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html#the-camino-b-discovery-geometry-without-predictive-signal",
+    "href": "01-cerebro1-timeline.html#the-camino-b-discovery-geometry-without-predictive-signal",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "2.3 The Camino B discovery — geometry without predictive signal",
+    "text": "2.3 The Camino B discovery — geometry without predictive signal\nThe insight that broke the search open: within the Combine’s bounded-loss/bounded-time structure, a strategy with zero real predictive edge can still pass reliably, because gambler’s-ruin geometry (WR ≈ SL/(SL+TP) for a symmetric process) combined with a bounded number of attempts makes the convexity of the payout structure itself do the work. Alternating long/short with no signal, at a fixed tick-distance stop-loss/take-profit, was enough. Source: GLITCH_RESEARCH_LOG.md, “Consolidación — Camino B”.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html#bugs-found-and-fixed-along-the-way",
+    "href": "01-cerebro1-timeline.html#bugs-found-and-fixed-along-the-way",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "2.4 Bugs found and fixed along the way",
+    "text": "2.4 Bugs found and fixed along the way\nTwo bugs from the original edge-search and Camino B validation work have a confirmed root cause and fix:\n1. Ambiguous-bar resolution bias (simulation/triple_barrier.py). When a single bar’s high/low range is wide enough to touch both the take-profit and stop-loss level in the same bar, the labeling code must pick one. The original implementation resolved this in favor of the win condition, inflating the measured win rate on any barrier configuration narrow relative to typical bar range. Fixed to follow López de Prado’s convention: assume the loss in an ambiguous bar — the conservative choice. Confirmed and fixed 25 August 2026. Source: simulation/triple_barrier.py, diagnosed with scripts/quantify_ambiguous_bars.py.\n2. ZC tick-size unit mismatch (cents vs. dollars). The first product-grid run used tick_size=0.0025 (dollars/bushel) applied to a price feed quoted in cents/bushel (close≈437 ⇒ $4.37) — a 100x unit mismatch specific to ZC, the only product in that grid quoted in cents rather than dollars/points/index level. avg_win_usd/avg_loss_usd were inflated 100x, producing a false “ZC leads at 55.7 combines/year” result. Corrected to tick_size=0.25; ZC re-ranked to 14.1 combines/year, last place, once fixed. Source: GLITCH_RESEARCH_LOG.md.\nTwo other items are explicitly corrected here rather than repeated as fact:\n3. “MES/MNQ tick value confusion” — no evidence was found that this was ever an actual bug in this codebase. Dropped from the confirmed-bug list after a targeted git log/grep audit failed to substantiate it.\n4. UTC-mislabeled-as-CT logger — this was not a historical bug from the original edge search. It was found live, today (07 September 2026), while writing this report. See Infrastructure & Operations for the full account and the fix, commit 484187c.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html#final-validation-the-g2-candidate",
+    "href": "01-cerebro1-timeline.html#final-validation-the-g2-candidate",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "2.5 Final validation — the G2 candidate",
+    "text": "2.5 Final validation — the G2 candidate\n\n\n\n\n\n\n\nParameter\nValue\n\n\n\n\nProduct\nMES\n\n\nGeometry\nSL=100 / TP=40 ticks (RR=0.40), fixed-tick barriers (no ATR scaling)\n\n\nDirection\nAlternating — the directional bias found in early testing was noise, not edge\n\n\nContracts (nc)\n40 (not the 50 legal cap — a deliberate extra safety margin)\n\n\nEmpirical win rate\n~70.6% (midpoint of the bracket measured against real MES data, post ambiguous-bar fix)\n\n\nTheoretical Combine pass rate\n81.44% (THEORETICAL_PASS_RATE, Monte Carlo, n_paths=8,000, seed=42)\n\n\nBlow rate\n~18.5%\n\n\nEstimated combines/year\n53.6\n\n\nAverage days to resolution\n~3.8\n\n\n\nSeven products were tested under the identical geometry-only rule after the ZC fix. Four independent asset families — equity index, metals, energy, and the equity-index control pair — landed within a tight ~48–54 combines/year band, exactly as the gambler’s-ruin premise predicts (a geometry-driven result, not an instrument-specific one):\n\n\n\n\n\n\n\n\n\n\n\nProducto\nFamilia\nRR\nnc\ncombines/año\nLectura\n\n\n\n\nMES/MNQ\nEquity index\n0.40\n40\n53.6\nConsistente, sesgo despreciable (~1%)\n\n\nGC/MGC (Gold)\nMetales\n0.33\n30\n52.7\nConsistente, sesgo despreciable\n\n\nRTY/M2K (Russell)\nEquity index (control)\n0.40\n50\n51.9\nConsistente, a 1.4% de Gold — esencialmente empatados\n\n\nCL/MCL (Crude)\nEnergía\n0.40\n30\n48.2\nConsistente, sesgo moderado (4–8%)\n\n\n6E/M6E (Euro FX)\nFX mayor\n0.50\n50\n37.4\nSesgo ~10% — el más grande de la sesión; marcado para escrutinio futuro\n\n\nZN (10Y Note)\nTasas\n0.50\n5\n21.4\nDirección NO consistente entre mitades de la muestra\n\n\nZC (Corn)\nAgrícola\n0.48\n5\n14.1\nÚltimo lugar tras corrección del bug de unidades; dirección tampoco consistente; handicap estructural (nc≤5, sin micro-contrato)\n\n\n\nZN and ZC — the two products without a micro-contract (nc≤5) — fall structurally below the main band. This is not a worse geometry; a hard contract-count ceiling limits how fast dollar progress toward the fixed profit target can accumulate. Results are versioned, not ephemeral: data_cache/camino_b_products_grid.csv, _overfit.csv, _final.csv, committed alongside GLITCH_RESEARCH_LOG.md.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "01-cerebro1-timeline.html#operational-status",
+    "href": "01-cerebro1-timeline.html#operational-status",
+    "title": "2  Cerebro 1 — Timeline",
+    "section": "2.6 Operational status",
+    "text": "2.6 Operational status\nG2 is live in real paper trading on Railway (the “GEOMETRY” service), DRY_RUN=true. Infrastructure incidents encountered while getting this candidate to reliable live execution — data-source delay, filesystem persistence, environment-variable configuration — are documented in full in Infrastructure & Operations, not repeated here.\ncombo_2d (the MES+MNQ double-confirmation candidate referenced above) is technically healthy in production (confirmed via a clean manual run — see Infrastructure & Operations) but remains discarded on statistical grounds: infrastructure health is not evidence of edge.",
+    "crumbs": [
+      "<span class='chapter-number'>2</span>  <span class='chapter-title'>Cerebro 1 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html",
+    "href": "02-cerebro2-timeline.html",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "",
+    "text": "3.1 Objective\nSurvive and generate payouts once an account is funded (post-Combine): an unbounded horizon, no profit target, and success measured as 5 winning days of ≥$150 net rather than a lump sum. See Executive Summary for why this is a fundamentally different optimization problem from Cerebro 1’s.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#base-experiment-the-wrrr-decoupling-bug",
+    "href": "02-cerebro2-timeline.html#base-experiment-the-wrrr-decoupling-bug",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.2 Base experiment — the WR/RR decoupling bug",
+    "text": "3.2 Base experiment — the WR/RR decoupling bug\nThe first grid (scripts/cerebro2_grid_pass1.py, commit 8f7a3a4) swept win rate as a free parameter, independent of RR, over MES and M6E — and its own commit message claimed a no-edge-dependent payout zone at WR≥0.50/RR≥1.5. That claim was retracted explicitly, not silently corrected: WR was decoupled from RR, so the sweep never checked what win rate a zero-edge process would actually produce at each RR (WR_natural = 1/(1+RR), the same gambler’s-ruin relationship underlying Cerebro 1’s G2). Once every row was relabeled against its own WR_natural, the “promising” quadrant of 504 rows turned out to require real edge in 100% of them — an average of +1.01R expected value per trade, a level of edge never found anywhere in this session. Commit 680b66f.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#the-exhaustive-grid-the-scaling-plan-discovery-and-the-nc_cap-bug",
+    "href": "02-cerebro2-timeline.html#the-exhaustive-grid-the-scaling-plan-discovery-and-the-nc_cap-bug",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.3 The exhaustive grid, the Scaling Plan discovery, and the nc_cap bug",
+    "text": "3.3 The exhaustive grid, the Scaling Plan discovery, and the nc_cap bug\nA 292,050-run grid (scripts/cerebro2_grid_exhaustive.py) was designed to map the full k×RR×WR×product×account space — motivated by an unverified third-party marketing claim of ~$9,000 average funded-account payout, treated explicitly as a hypothesis to map against, never as a validated number. Commit 48986f9.\nWhile preparing this grid, a deeper problem surfaced: nc_cap (the contract-count ceiling used throughout Cerebro 2’s modeling to that point — 50 for MES, 30 for MGC, etc.) is confirmed by Topstep’s own documentation to be a Combine-phase limit, not the XFA’s. The funded account instead uses a balance-dependent Scaling Plan — contract allowance rises in steps as account balance grows, starting as low as 2–3 lots near $0 balance:\n\n\n\nBalance\n50K\n100K\n150K\n\n\n\n\n&lt; $1,500\n2\n3\n3\n\n\n$1,500–$2,000\n3\n4\n4\n\n\n$2,000–$3,000\n5\n5\n5\n\n\n$3,000–$4,500\n5\n5\n10\n\n\n&gt; $3,000 (100K cap)\n—\n10\n—\n\n\n&gt; $4,500 (150K cap)\n—\n—\n15\n\n\n\n(Lots are mini-equivalents, 10:1 vs. micros, with per-product exceptions for Micro Silver and Micro Bitcoin/Ether.) This meant every prior Cerebro 2 simulation had implicitly assumed a fixed, XFA-lifetime contract count — an optimistic upper bound, not a real result. Commit 23ba2e8. The exhaustive grid was allowed to finish under the old fixed-nc assumption and kept only as a labeled upper-bound reference, never as a final result.\nFollow-up validation (Tarea 1) found this did not change the answer for the winning region specifically: simulate_xfa_lifetime_dynamic_nc() was built with nc_today = min(nc_designed, nc_legal_del_día) — a first version that used the legal maximum unconditionally was caught and fixed before being reported (see Methodology & Discipline for why this class of bug matters). For the actual top-5 candidates (all 150K, k=2, designed nc between 3 and 6), the Scaling Plan’s legal floor at $0 balance (30 micro-contracts for a 150K account) is already far above the designed nc — so min() always resolves to the smaller designed value, and fixed-nc and dynamic-nc give identical results for these candidates specifically (confirmed bit-exact at n_paths=10,000). This does not generalize to candidates with larger designed nc or smaller accounts, which were not tested.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#incident-vectorization-bug-turns-a-2-hour-grid-into-a-projected-70-hours",
+    "href": "02-cerebro2-timeline.html#incident-vectorization-bug-turns-a-2-hour-grid-into-a-projected-70-hours",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.4 Incident: vectorization bug turns a 2-hour grid into a projected 70 hours",
+    "text": "3.4 Incident: vectorization bug turns a 2-hour grid into a projected 70 hours\nThe exhaustive grid was launched after an approved preflight benchmark. At 44 minutes and only 1% complete, the script’s own ETA had climbed to ~4,200 minutes (~70 hours) — the run was stopped before burning unsupervised compute. Root cause: simulate_xfa_lifetime() had never been vectorized — a scalar per-path Python loop whose runtime depended entirely on how many days each path survived before blowing, varying ~75x across the grid (12ms for a fast-blowing low-RR case vs. 868ms for a slow, high-survival high-RR corner) — and the preflight’s single benchmark point happened to sample the fast extreme.\nFixed by rewriting simulate_xfa_lifetime() to vectorize over the path axis with NumPy array operations, validated bit-exact against the old scalar implementation across 32 cases (both MLL policies, all 3 account sizes, low/high WR/RR, same seed) before replacing it — full 134/134 test suite unchanged. Post-fix variance dropped to ~2.3x, and the real grid runtime came in at 51 minutes against the original ~70-hour projection. Commit 4842fea.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#pivot-to-a-real-edge-search",
+    "href": "02-cerebro2-timeline.html#pivot-to-a-real-edge-search",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.5 Pivot to a real-edge search",
+    "text": "3.5 Pivot to a real-edge search\nThe user redirected Cerebro 2 from “modest pure geometry” toward a genuine statistical-edge search, with success criteria distinct from Cerebro 1’s: no speed requirement, but N&gt;200, p&lt;0.05, and reproducible — explicitly invoking the two historical p=0.165/p=0.081 candidates from Cerebro 1 that never reproduced fresh, as the standard any new candidate must clear.\n\n3.5.1 712 tests, eight candidates that pass p&lt;0.05, zero that clear the bar\nAcross an individual-product grid (96 tests), a 15-pair cross-product grid (600 tests, including all 14 previously-untested pairs), and a dedicated ZC grid (16 tests) — 712 tests total — eight candidates passed the nominal p&lt;0.05 threshold:\n\n\n\n\n\n\n\n\n\nCandidate\nN\np\nNote\n\n\n\n\nM2K–M6E weekly hold=3d/fade\n128\n0.0003\nStrongest of the search; shares the M6E leg with several other hits\n\n\nSpread MES–M2K daily hold=5d/momentum\n86\n0.0019\nConfirmed by 2 independent constructions\n\n\nSpread MES–M2K daily hold=10d/fade\n47\n0.022\nConfirmed by 2 constructions\n\n\nMES+MGC weekly hold=5d/fade (pooled)\n170\n0.048\n—\n\n\nMES+MGC weekly/fade, ex-Friday\n135\n0.033\nIn-sample refinement — more skepticism warranted, not less\n\n\nMCL daily hold=2d/fade\n168\n0.028\nFrom a 96-test grid (~4.8 false positives expected by chance)\n\n\nM6E daily hold=3d/fade\n126\n0.032\nFrom the same 96-test grid\n\n\nZC daily hold=2d/fade\n125\n0.023\nAll 7 fade configs positive EV, all 7 momentum configs negative — internally consistent\n\n\n\nNone reach N&gt;200. None are used in production. The eight hits also share legs (MES appears in 6 of the 15 strongest pair rows; M6E in several others), so they cannot be treated as independent confirmations of a common effect. A candidate “Friday effect” appeared in three of these results but flipped sign or vanished under closer inspection (MCL’s best day is Friday, not worst; the MES–M2K hold=10d spread’s Friday behavior is the opposite of its hold=5d sibling) — treated as fragile, not structural. A dedicated barrier-geometry sweep on the two strongest candidates confirmed the inherited 2.5/1.5 PT/SL ratio was already near-optimal for this range — the geometry was not accidentally handicapping the results. Sources: GLITCH_RESEARCH_LOG.md, “Cierre de gaps”, commit 366f5f8, commit 6a606d7.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#the-central-structural-finding-combine-and-xfa-are-different-optimization-problems",
+    "href": "02-cerebro2-timeline.html#the-central-structural-finding-combine-and-xfa-are-different-optimization-problems",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.6 The central structural finding: Combine and XFA are different optimization problems",
+    "text": "3.6 The central structural finding: Combine and XFA are different optimization problems\nWith no real-edge candidate clearing N&gt;200, attention returned to the geometry-pure MGC/150K candidate (SL=TP=364 ticks, WR=0.5, k=2, nc=6) — designed to survive the XFA phase (46.2% probability of at least one lifetime payout, $2,169 expected value, run through the already-validated simulate_xfa_lifetime_dynamic_nc). This candidate had never been run through the Combine phase it must first pass.\nResult: a 46.9% Combine pass rate (200,000-path Monte Carlo via the same TopstepMonteCarloSimulator engine already used and audited for G2) — roughly half of G2’s 81.4%. This directly confirmed the user’s suspicion that a geometry designed to tolerate few consecutive losses once funded (low nc, wide symmetric barriers) is not the same geometry that clears the Combine’s bounded profit-target race quickly. Commit 1cff838; see also the retrospective framing in GLITCH_RESEARCH_LOG.md, “HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2.” No future Cerebro 2 candidate’s Combine pass rate should be assumed from another candidate’s number — it must be measured directly, every time.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#two-stage-cash-flow-model-and-empirical-validation-of-the-mgc150k-candidate",
+    "href": "02-cerebro2-timeline.html#two-stage-cash-flow-model-and-empirical-validation-of-the-mgc150k-candidate",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.7 Two-stage cash-flow model and empirical validation of the MGC/150K candidate",
+    "text": "3.7 Two-stage cash-flow model and empirical validation of the MGC/150K candidate\nA full two-stage Monte Carlo (Combine pool of 200,000 outcomes + XFA pool of 50,000 episodes, sampled with replacement across 20,000 independent 365-day trajectories, paying real Combine/activation fees each attempt) produced a distribution, not a point estimate:\n\n\n\n\n\n\n\n\n\n\n\nMetric\np10\np25\nMedian\np75\np90\n\n\n\n\n1-year cumulative payout\n$15,809\n$22,298\n$31,257\n$42,076\n$53,861\n\n\nMax capital cushion needed\n$298\n$447\n$894\n$1,639\n$2,679\n\n\n\nTail risk was quantified, not just described: probability that any single attempt reaches at least one payout is 46.9% × 46.4% = 21.8%; probability of needing ≥5 consecutive failed attempts before a payout is 37.5%; ≥10 consecutive failures, 11.0%. The $2,679 (p90) cushion figure reflects roughly 18 paid Combine attempts absorbed before enough payout arrives to compensate. Commit 1cff838.\nThe candidate’s two core assumptions were then validated against real MGC price data rather than left as Monte Carlo assumptions:\n\nEmpirical win rate: first measurement gave an alarming 34.85% vs. the theoretical 50% — traced to the same time-exit dilution bug already found and fixed twice earlier in this session (Methodology & Discipline) — 30.2% of trades expire by time rather than TP/SL for this wide-barrier geometry. The corrected conditional win rate (TP/(TP+SL), excluding time-exits): 49.97%, essentially exact against the 50% theoretical assumption. Commit d1f11fa.\nSub-period stability: confirmed stable across 3 independent calendar sub-periods (49.90%, 49.92%, 49.89% — all within 0.15pp of 50%). Commit 3f0bd07.\nLong/short asymmetry: not persistent — favors long in sub-periods 1–2 (+9.98pp, +15.23pp) but flips to favor short in sub-period 3 (−3.64pp). This is evidence for, not against, the already-chosen alternating design: since the asymmetry is noise rather than a stable bias, alternating protects against betting on either side.\nCombine pass-rate sensitivity: real but contained. A ±5–8pp WR shift near this RR=1.0 equilibrium point moves the Combine pass rate by ~13–20pp (range observed: 30.2%–63.7% across long-only/short-only/sub-period scenarios) — a structural fragility of operating this close to the WR=50%/RR=1.0 break-even point, flagged as a model risk for the user’s production decision, not a defect requiring a design change.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "02-cerebro2-timeline.html#status",
+    "href": "02-cerebro2-timeline.html#status",
+    "title": "3  Cerebro 2 — Timeline",
+    "section": "3.8 Status",
+    "text": "3.8 Status\nThe MGC/150K candidate is validated on both of its core assumptions (Combine pass rate, empirical WR) as of 07 September 2026. A third scheduler (scheduler/geometry_mgc_scheduler.py) has been built for paper trading on Railway — its construction, the RTH-window recalibration finding made along the way, and remaining infrastructure blockers are covered in Infrastructure & Operations.",
+    "crumbs": [
+      "<span class='chapter-number'>3</span>  <span class='chapter-title'>Cerebro 2 — Timeline</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html",
+    "href": "03-infraestructura-operaciones.html",
+    "title": "4  Infrastructure & Operations",
+    "section": "",
+    "text": "4.1 The COMBO2D crash chain — 2.5 weeks, five distinct root causes\nBetween 14 August and 1 September 2026, the combo2d_scheduler.py service failed to execute successfully a single time — 12 consecutive failed runs, each crashing in 3–4 seconds during import, before ever reaching run(). Reconstructed in full from git log/git show and Railway’s own Cron Run history:\nExplicit conclusion: this session’s own security hardening (removing hardcoded fallbacks) was not the original cause — it stacked a second requirement (Telegram env vars) behind a pre-existing bug from 17 August that touched the wrong file. Any COMBO2D “Win Rate” or “PnL Total” Telegram report between 14 August and the fix must be treated as nonexistent, not as contaminated data — the service simply never ran.\nRelated, separate bug found earlier in the same investigation — an intermediate commit (4eed7ca) found that the Nixpacks build phase (a different build path than the Railpack one actually in use) installs from glitch/scheduler/requirements.txt, not the root file — the opposite convention from Railpack. Two build systems reading two different requirements files was the structural reason the same class of bug (“added the dependency, to the wrong file”) could recur.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#the-combo2d-crash-chain-2.5-weeks-five-distinct-root-causes",
+    "href": "03-infraestructura-operaciones.html#the-combo2d-crash-chain-2.5-weeks-five-distinct-root-causes",
+    "title": "4  Infrastructure & Operations",
+    "section": "",
+    "text": "Date (UTC)\nCommit\nWhat happened\n\n\n\n\nJul 8 – Aug 13\n—\nThe service was actually running glitch_scheduler.py, a separate, earlier script — confirmed via git show e0b1ea3:Procfile. The clean 15–19 minute runs from this period have nothing to do with combo2d.\n\n\nAug 13, 21:31\n1a3b714\ncombo2d_scheduler.py created; Procfile pointed at it for the first time\n\n\nAug 13, 23:58\ncb070a5\nSwitched to massive/RESTClient for data — but massive was never added to the root requirements.txt\n\n\nAug 17, 14:45\n321c747\n“fix: add massive to scheduler requirements” — added massive to glitch/scheduler/requirements.txt, the wrong file: this service builds via Railpack, which reads the root requirements.txt, not the scheduler subdirectory’s copy. The fix had zero real effect.\n\n\nAug 17 – Aug 26\n—\n9 days with no commits — the service failing silently, unnoticed\n\n\nAug 26–27\n99497ec\nSecurity hardening merged (removed hardcoded Massive/Telegram fallbacks) — but massive was still missing from the correct file, so execution still died before reaching the new Telegram check\n\n\nAug 28\n44f07cf\nFixed the correct file (root requirements.txt) — first time since Aug 13 the massive import actually resolves\n\n\nAug 31\n—\nWith the import resolved, execution reached the next unmet requirement — the Telegram token — surfacing a new-looking error that was really the second domino in the same chain",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#deployment-configuration-inconsistency-four-files-three-different-start-commands",
+    "href": "03-infraestructura-operaciones.html#deployment-configuration-inconsistency-four-files-three-different-start-commands",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.2 Deployment configuration inconsistency — four files, three different start commands",
+    "text": "4.2 Deployment configuration inconsistency — four files, three different start commands\nWhile preparing to add a second Railway service (for the Cerebro 1 geometry candidate), an audit found four config files disagreeing on the start command:\n\n\n\n\n\n\n\nFile\nStart command\n\n\n\n\nnixpacks.toml (root)\npython glitch/scheduler/glitch_scheduler.py\n\n\nProcfile (root)\npython glitch/scheduler/combo2d_scheduler.py\n\n\nglitch/Procfile\npython scheduler/glitch_scheduler.py\n\n\nglitch/railway.json\npython scheduler/glitch_scheduler.py\n\n\n\nThe initial hypothesis — that Railway’s dashboard had a manual Start Command override ignoring these files — was checked directly and ruled out: the combo2d service’s Start Command field is empty, meaning Railway genuinely reads one of the four files, yet 3 of 4 point to the old glitch_scheduler.py while combo2d_scheduler.py is confirmed to be what’s actually running. This discrepancy was never fully resolved; it was treated as a live risk (never edit nixpacks.toml or glitch/Procfile without first confirming Railway’s configured Root Directory) rather than guessed past. See GLITCH_RESEARCH_LOG.md, “Despliegue a Railway”.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#ephemeral-filesystem-a-data-quality-problem-a-total-data-loss-problem",
+    "href": "03-infraestructura-operaciones.html#ephemeral-filesystem-a-data-quality-problem-a-total-data-loss-problem",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.3 Ephemeral filesystem — a data-quality problem a total data-loss problem",
+    "text": "4.3 Ephemeral filesystem — a data-quality problem a total data-loss problem\nConfirmed directly on Railway’s dashboard: Cron Schedule-type services (GEOMETRY, and by the same service type, COMBO2D) have no Volumes option — the filesystem resets between every cron execution. Both schedulers stored their trade history in a local JSON file, so every run started from a blank slate. Every “Día X de paper” or “pass_rate acumulado” message ever sent to Telegram before this fix reflected, at most, a single day’s cycle — never a real accumulation, even though the message read like a running total. Once the COMBO2D crash chain above was reconstructed, this was revealed to be moot for that period specifically (there was no successful run to lose state from until 28 August), but it remained a live, general risk for GEOMETRY.\nFix: 6a548a3 — execution/gist_store.py, a private GitHub Gist accessed via the REST API, as the single persistence backend for both schedulers, replacing local-file I/O behind the same load_log()/save_log() interface. Two alternatives were evaluated and rejected first: Railway Volumes (confirmed unavailable for this service type) and reading the bot’s own message history back via Telegram’s getUpdates (confirmed technically impossible — the Bot API never returns a bot’s own sent messages to itself). Failure philosophy is deliberately asymmetric: missing configuration (GITHUB_GIST_TOKEN, GIST_ID) raises immediately rather than silently starting a scheduler that thinks it’s on day one; a transient network failure during a well-configured run logs but does not crash the scheduler, since the day’s trade has already executed and been notified by that point. 10 dedicated tests (tests/test_gist_store.py, no real network — mocked requests.get/requests.patch) plus integration coverage in both parity test files; full suite 110/110.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#unified-startup-environment-check",
+    "href": "03-infraestructura-operaciones.html#unified-startup-environment-check",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.4 Unified startup environment check",
+    "text": "4.4 Unified startup environment check\nThe COMBO2D crash chain’s real underlying pattern — five separate root causes discovered one crash at a time, each hiding the next — prompted a structural fix rather than another one-off patch: a24400f added execution/env_check.py, called as the very first line of both schedulers, before any of the three modules (telegram_bot, contracts, gist_store) that each used to validate their own required variables independently, one crash-and-fix cycle apart. It checks all five required variables (MASSIVE_API_KEY/POLYGON_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GITHUB_GIST_TOKEN, GIST_ID) at once and sends a single Telegram message listing every missing one, rather than surfacing them serially across separate days. Verified with 6 unit tests plus a real build-environment smoke test: importing each scheduler under env -i with exactly the 7 variables Railway has configured, confirming a clean import end-to-end, not just a passing check. A manual “Run now” trigger on 2 September 2026 gave the first real, clean end-to-end log for COMBO2D since the incident began — full suite 118/118 passing at that point.\n\n\n\n\n\n\nImportant\n\n\n\nFixing the crash chain is infrastructure hygiene, not evidence of trading edge. COMBO2D is technically healthy today (it runs start to finish without error) — but it remains the combo_2d mean-reversion candidate already discarded on statistical grounds (fresh reproduction gave p≈0.44–0.45; see Cerebro 1 Timeline and Methodology & Discipline). A clean log is not a signal.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#yahoo-finance-mesf-opening-window-delay",
+    "href": "03-infraestructura-operaciones.html#yahoo-finance-mesf-opening-window-delay",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.5 Yahoo Finance MES=F opening-window delay",
+    "text": "4.5 Yahoo Finance MES=F opening-window delay\nAn earlier, separate incident chain (predating the Massive migration) affected the ORB-based scheduler’s live entry: Yahoo Finance’s free MES=F feed frequently had no data yet at the scheduled 9:30 CT entry check, producing zero-range opening bars. Fixed iteratively across several commits — skip the trading day if the scheduler starts after the ORB window closes (e038911), retry on a zero-range ORB instead of assuming the market itself was flat (53b03a6), correct the retry’s sleep target (ada0bc0), log actual bar timestamps to confirm the fetch window truly aligned with 9:30–9:34 (1a8a76c), widen the entry-fetch window with per-attempt diagnostics (7e0d53d) — and finally diagnosed with a dedicated standalone real-time probe deployed as its own one-shot Railway service (97c522a, 73a4ab9) rather than guessed at from inside the live scheduler. This data-reliability problem, among others, motivated the later migration to Massive as the primary market-data source.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#massive-migration-api-pagination-quirk-found-twice",
+    "href": "03-infraestructura-operaciones.html#massive-migration-api-pagination-quirk-found-twice",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.6 Massive migration — API pagination quirk found twice",
+    "text": "4.6 Massive migration — API pagination quirk found twice\nMassive’s REST API has a specific, non-obvious failure mode: requesting a date range with sort=window_start.asc and taking the last row of the response does not reliably return the most recent bar — confirmed independently on two different endpoints, seven days apart:\nFirst occurrence — /futures/v1/contracts (during the original Massive migration): a point-in-time date= query works reliably; a wide date range with ascending sort does not.\nSecond occurrence — /futures/v1/aggs/{ticker}, MGC delay probe (07 September 2026): a first attempt to measure Massive’s real-time data delay for MGC (scripts/probe_massive_mgc_delay.py) returned an impossible result — ~319,174 minutes (over 7 months) of “delay.” Rather than re-run the measurement blindly, three query variants were tested side by side against the same endpoint (scripts/diagnose_massive_aggs_query.py, commit e56322e):\n\nA) Date-only range bounds + sort=window_start.asc + high limit, taking the last result (the pattern that worked for full historical downloads in fetch_mes_2y.py)\nB) Same pattern with full datetime + timezone offset instead of a bare date\nC) No date range at all — sort=window_start.desc + limit=1, asking directly for “the most recent bar you have”\n\nOnly C works. A and B both fail identically regardless of date-format — confirming this is an API pagination/ordering issue specific to sort=asc + range + take-last, the same failure class already seen on /futures/v1/contracts, not a one-off. Rule adopted for any future “give me the latest” query against Massive: sort=desc + small limit, never a date range with sort=asc and take-the-last-element. Fixed in commit 2a1c910.\nA second, independent measurement artifact was caught in the same fix: the corrected probe’s first real run measured ~1.8 days of “delay” — but it ran on a Saturday, so the number was elapsed time since Friday’s market close (gold trades Fri 16:00 CT–Sun 17:00 CT), not real API latency. A _weekday_warning() guard was added so the probe flags itself when run outside active weekday market hours; the real delay measurement remains pending a weekday run.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#mgcs-real-trading-liquidity-window-was-miscalibrated-for-the-whole-dataset-not-just-live-entry",
+    "href": "03-infraestructura-operaciones.html#mgcs-real-trading-liquidity-window-was-miscalibrated-for-the-whole-dataset-not-just-live-entry",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.7 MGC’s real trading-liquidity window was miscalibrated — for the whole dataset, not just live entry",
+    "text": "4.7 MGC’s real trading-liquidity window was miscalibrated — for the whole dataset, not just live entry\nWhile building the third scheduler’s entry-window logic (Cerebro 2’s checklist item explicitly warning not to assume equity-index RTH conventions transfer to other products), a deeper problem surfaced: the entire mgc_5min_2y.parquet dataset already used to validate this candidate’s win rate had the same miscalibration. fetch_mes_2y.py (reused to fetch MGC) filtered to “8:30–15:00 CT, standard for index products” — a filter written for equity index and never revisited for gold.\nChecked against two independent external sources — CME/COMEX’s legacy pit session (7:20–12:30 CT) and the commonly cited London-NY overlap window for gold’s highest real liquidity (7:00–11:00 CT) — both place gold’s real active window 1–1.5 hours earlier than 8:30 CT. Internal evidence corroborated this independently: in the existing dataset, the very first captured bar (8:30 CT) was already the day’s volume peak (29.1% of the day’s total volume in that first hour alone), decaying monotonically afterward — a slope that, extrapolated backward, suggests the untouched 7:00–8:30 CT window was probably more active than anything already captured, not less. Commit 47350ba.\nA corrected-window fetch script (scripts/fetch_mgc_correct_window.py) was prepared but not run locally (blocked on MASSIVE_API_KEY, deliberately not passed into this session per the project’s key-handling rule) — the user ran it from their own environment. Comparison, once the corrected dataset (49,395 bars, 7:00–15:00 CT, +22.9% more data) came back:\n\n\n\n\n\n\n\n\n\nOld window (8:30–15:00 CT)\nCorrected window (7:00–15:00 CT)\n\n\n\n\nConditional WR (all)\n49.97%\n50.20%\n\n\nWR long / short\n52.78% / 47.16% (5.62pp gap)\n50.47% / 49.93% (0.54pp gap)\n\n\nCombine pass rate (alternating)\n47.0%\n47.5%\n\n\n\nThe corrected window is now the reference dataset for this candidate: it captured meaningfully more data, pushed the win rate even closer to the 50% theoretical assumption, and nearly eliminated the long/short asymmetry — consistent with the idea that part of that asymmetry was an artifact of excluding the window where buy/sell order flow is most balanced, not a genuine market bias. The Combine pass rate barely moved (47.0% → 47.5%), so the central conclusion that this candidate is weak for the Combine phase (vs. G2’s 81.4%) is unaffected. Commit 0ef0c15 confirms this was a real improvement, not just a formality. A stale-hardcoded-aggregate bug caught in the comparison script itself along the way (commit 3f0bd07) is documented in Cerebro 2 Timeline.\nThis finding is scoped to MGC specifically — mgc_5min_2y.parquet (old window) remains valid and untouched for the original, narrower-barrier CANDIDATES[\"MGC\"] geometry used in Cerebro 1’s product grid, which is not affected by the same time-exit dynamics.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "03-infraestructura-operaciones.html#same-day-finding-utc-mislabeled-as-ct-logger-07-september-2026",
+    "href": "03-infraestructura-operaciones.html#same-day-finding-utc-mislabeled-as-ct-logger-07-september-2026",
+    "title": "4  Infrastructure & Operations",
+    "section": "4.8 Same-day finding: UTC-mislabeled-as-CT logger (07 September 2026)",
+    "text": "4.8 Same-day finding: UTC-mislabeled-as-CT logger (07 September 2026)\nFound while writing this report, not during the original edge search: all 3 production schedulers (geometry_scheduler.py, combo2d_scheduler.py, glitch_scheduler.py) used logging.basicConfig(format=\"%(asctime)s CT ...\") — a literal \"CT\" string in the format, with %(asctime)s defaulting to time.localtime(). This showed the correct time only because Railway happens to have TZ=America/Chicago set; had that variable ever been absent (the typical default for a bare Docker container is UTC), every log line would have shown UTC time mislabeled as CT, with no visible error. Confirmed empirically (forcing TZ=UTC vs. TZ=America/Chicago before applying any fix) rather than assumed already-fixed from a passing description.\nFix: a new single-source-of-truth module, execution/ct_logging.py, with a CTFormatter whose converter explicitly resolves to zoneinfo.ZoneInfo(\"America/Chicago\"), independent of the process’s TZ or time.localtime(). A permanent regression test (tests/test_ct_logging.py) forces TZ=UTC at the process level and confirms logged timestamps still reflect real Chicago time, including a summer case to confirm DST is honored rather than a fixed offset. Applied in commit 484187c (main: geometry_scheduler.py, combo2d_scheduler.py, glitch_scheduler.py) and commit 0be4b01 (cerebro2-dev: geometry_mgc_scheduler.py).\nSide finding, unrelated to the fix itself: smoke-testing glitch_scheduler.py revealed it cannot be imported at all — from scheduler.telegram_bot import notify_signal, notify_exit, ... fails, because those functions no longer exist in telegram_bot.py (replaced at some point by the Brain1/Brain2 template rework; current exports are send, notify_brain1_open/close/no_signal, notify_brain2_open/close/no_signal, and related functions). Confirmed via git diff to be pre-existing, unrelated to this logging fix. This is strong circumstantial evidence that glitch_scheduler.py is orphaned code — if it were the service actually running behind the root Procfile’s worker: line, it would be visibly crash-looping since the Brain1/Brain2 rework, which is unlikely to have gone unnoticed for this long. Not fixed — out of scope for this same-day finding; deployment dashboards for GEOMETRY, GEOMETRY-MGC, and GLITCH all confirmed “Deployment successful” as of this writing (06 September 2026, a Sunday with no active cron), but which specific file the Railway service named “GLITCH” actually executes was not conclusively confirmed in this session.\nCorrection to the bug list for this report: of the 4 items originally slated to appear as “bugs found during the edge search,” only 2 have a confirmed root cause and fix from that original search: the triple_barrier.py ambiguous-bar bug and the ZC tick-size unit mismatch (both in Cerebro 1 Timeline). “MES/MNQ tick value confusion” is dropped — no evidence it was ever a real bug. The UTC-as-CT logger bug documented here is a same-day finding from writing this report, not a historical artifact of the original edge search — the two timelines are kept separate deliberately, not conflated.",
+    "crumbs": [
+      "<span class='chapter-number'>4</span>  <span class='chapter-title'>Infrastructure & Operations</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html",
+    "href": "04-metodologia-y-disciplina.html",
+    "title": "5  Methodology & Discipline",
+    "section": "",
+    "text": "5.1 The standard\nEvery statistical claim in this project is held to the same non-negotiable bar before it can inform a decision:",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#the-standard",
+    "href": "04-metodologia-y-disciplina.html#the-standard",
+    "title": "5  Methodology & Discipline",
+    "section": "",
+    "text": "Walk-forward, causal only. No in-sample fitting followed by in-sample reporting. Signals are evaluated on data the model could not have seen at decision time.\nN &gt; 200. Below this, a candidate is labeled “insufficient sample,” never “weak edge” — the two are not the same finding, and conflating them is how false candidates survive review.\np &lt; 0.05, and both criteria together — N&gt;200 alone or p&lt;0.05 alone is not sufficient. Several Cerebro 2 candidates hit one bar but not the other (see Cerebro 2 Timeline’s 712-test table) and are explicitly held to “insufficiently proven,” not promoted on a technicality.\nSplit-half or sub-period consistency. A result must hold its sign across at least two independent partitions of the data before it is treated as a real, persistent effect rather than noise that happened to average out favorably.\nFresh reproduction before trust. A number is not usable until it has been reproduced from scratch, in this repository, with this codebase — not recalled from a prior write-up, a prior session, or a prior analysis.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#why-criterion-5-exists-the-two-numbers-that-never-came-back",
+    "href": "04-metodologia-y-disciplina.html#why-criterion-5-exists-the-two-numbers-that-never-came-back",
+    "title": "5  Methodology & Discipline",
+    "section": "5.2 Why criterion 5 exists — the two numbers that never came back",
+    "text": "5.2 Why criterion 5 exists — the two numbers that never came back\nEarly in the search, two walk-forward candidates looked like real, if modest, edge:\n\nDay-to-day mean-reversion (base, MES only): p=0.165\nDay-to-day mean-reversion with double confirmation (combo_2d, MES+MNQ): p=0.081\n\nBoth were re-tested from scratch in this repository on 25 August 2026 (scripts/wf_mr_pure.py, scripts/wf_combo2d.py). Neither reproduced. The fresh runs gave p=0.4444 and p=0.4537 respectively — both far above the 0.05 bar, both indistinguishable from noise. The cause of the original-vs-reproduced discrepancy was never identified, and it does not need to be: the discrepancy itself is the lesson. A number that cannot be reproduced from the code and data actually in the repository is not a fact about the market — it is, at best, unexplained, and at worst, contamination from an earlier, unaudited session.\n\n\n\n\n\n\nImportant\n\n\n\nA third number sits in the same category for a different reason: an earlier Cerebro 2 analysis cited a $134,174 lifetime payout figure. It was later confirmed to be fabricated by a prior AI session — it does not trace to any script, dataset, or computation anywhere in this repository. It is not “unreproduced,” it is invented, and it must never be cited as a reference point for any future work on this project.\n\n\nEvery rule in this chapter exists because of these three numbers. Rule 5 in particular is a direct, mechanical response: nothing is trusted until it is reproduced, on demand, from what actually exists in the repository today.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#the-standard-applied-self-caught-errors-not-just-external-checks",
+    "href": "04-metodologia-y-disciplina.html#the-standard-applied-self-caught-errors-not-just-external-checks",
+    "title": "5  Methodology & Discipline",
+    "section": "5.3 The standard applied — self-caught errors, not just external checks",
+    "text": "5.3 The standard applied — self-caught errors, not just external checks\nThe discipline is not only “verify claims from outside” — several of the most consequential corrections in this project’s history were self-caught, before being reported, rather than found afterward by the user:\nMetric dilution, caught twice independently. A naive win_rate = label==1 / total metric silently dilutes its denominator with time-barrier expirations (trades that neither hit take-profit nor stop-loss). This happened twice, in unrelated contexts: once in the slow-timeframe direction search (wf_slow_mr.py), and again in the MGC empirical win-rate validation (measure_wr_bracket()), where a first reading showed an alarming 34.85% win rate — a full 15 percentage points below the 50% theoretical assumption — before the same root cause was identified and the corrected conditional metric (TP/(TP+SL), excluding time-exits) recovered 49.97%, essentially exact. Reporting the alarming number without checking the label distribution first would have wrongly invalidated a candidate that was, in fact, sound. See Cerebro 2 Timeline.\nThe nc_designed bug, caught before it was reported as a result. The first version of simulate_xfa_lifetime_dynamic_nc() used the Scaling Plan’s legal maximum contract count unconditionally, rather than the smaller of the legal maximum and the candidate’s actual designed size — silently validating a strategy trading 5x larger positions than the one actually proposed. This was caught by inspecting the function’s behavior before its output was used for any conclusion, and fixed by adding an explicit nc_designed parameter with min(nc_designed, nc_legal) semantics. See Cerebro 2 Timeline.\nVectorization validated bit-exact before trusting its output. When simulate_xfa_lifetime() was rewritten from a scalar per-path loop to a vectorized NumPy implementation (to fix a 75x runtime variance that had turned a ~2-hour job into a projected 70-hour one), the new implementation was checked bit-exact against the old one across 32 cases — spanning both MLL policies, all three account sizes, and low/high WR/RR combinations — before the old code was deleted or any new number from the fast version was reported. See Infrastructure & Operations and Cerebro 2 Timeline.\nTwo historical bug claims corrected under the same standard used against everyone else’s numbers. “MES/MNQ tick value confusion” was slated to appear on this project’s own bug list — but a targeted audit against git log and the codebase found no evidence it was ever a real bug, and it was dropped rather than repeated as folklore. Conversely, the UTC-mislabeled-as-CT logger bug was initially assumed already fixed — until a direct empirical test (forcing TZ=UTC) showed it was still live in production code, and it was fixed and documented as a same-day finding rather than folded into the historical narrative where it did not belong. See Infrastructure & Operations.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#correlation-is-not-a-strategy",
+    "href": "04-metodologia-y-disciplina.html#correlation-is-not-a-strategy",
+    "title": "5  Methodology & Discipline",
+    "section": "5.4 Correlation is not a strategy",
+    "text": "5.4 Correlation is not a strategy\nSix raw, statistically significant correlations were found early in the search (day-to-day return autocorrelation, a 2-day-lag effect, intraday lag-1 autocorrelation, and three time-of-day effects) — none were ever promoted, because none were converted into a walk-forward-tested strategy with positive, reproducible expected value. A correlation coefficient with a small p-value describes a pattern in historical data; it says nothing about whether that pattern survives transaction costs, position sizing, and the causal ordering a live strategy must respect. This distinction is treated as a hard line, not a matter of degree.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#statistical-significance-is-not-independence",
+    "href": "04-metodologia-y-disciplina.html#statistical-significance-is-not-independence",
+    "title": "5  Methodology & Discipline",
+    "section": "5.5 Statistical significance is not independence",
+    "text": "5.5 Statistical significance is not independence\nCerebro 2’s 712-test edge search found 8 candidates passing the nominal p&lt;0.05 threshold — more than the ~35 expected by chance alone, but several share legs (the same product appearing across multiple pair tests) or overlapping calendar windows. A “hit” from a search that shares structure with other hits is not an independent confirmation of anything; it is treated with the same skepticism as a single larger search would warrant, not multiplied into false confidence. See Cerebro 2 Timeline for the full table and the correlation caveat applied to it.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "04-metodologia-y-disciplina.html#reproducibility-as-infrastructure-not-just-a-slogan",
+    "href": "04-metodologia-y-disciplina.html#reproducibility-as-infrastructure-not-just-a-slogan",
+    "title": "5  Methodology & Discipline",
+    "section": "5.6 Reproducibility as infrastructure, not just a slogan",
+    "text": "5.6 Reproducibility as infrastructure, not just a slogan\nEvery grid or validation result referenced in this report has a versioned CSV (data_cache/*.csv) and a named script that produced it, committed to the repository rather than left as an ephemeral notebook output. Where a figure could not be traced to a script or reproduced on demand, it is marked [NO VERIFICADO] in GLITCH_RESEARCH_LOG.md rather than quietly dropped or quietly trusted — visible uncertainty, not silent assumption, is the default state of any unverified number in this project.",
+    "crumbs": [
+      "<span class='chapter-number'>5</span>  <span class='chapter-title'>Methodology & Discipline</span>"
+    ]
+  },
+  {
+    "objectID": "99-glosario.html",
+    "href": "99-glosario.html",
+    "title": "6  Glossary",
+    "section": "",
+    "text": "GLITCH — the overall research program: a system for systematically passing a Topstep futures prop-firm evaluation and then generating payouts from the resulting funded account. Organized into two independently-optimized tracks, Cerebro 1 and Cerebro 2. See Executive Summary.\nCerebro 1 — the research track focused on passing the Topstep Combine. Objective: maximize the probability of reaching the profit target within a bounded ~15-day evaluation window, where the maximum loss is capped at the fee of the attempt. See Cerebro 1 Timeline.\nCerebro 2 — the research track focused on surviving and generating payouts once an account is funded (the XFA phase). An unbounded-horizon problem with no profit target, fundamentally different from Cerebro 1’s bounded-loss/bounded-time structure. See Cerebro 2 Timeline.\nCombine — Topstep’s paid evaluation: a trader must reach a fixed profit target (e.g., $3,000 on a 50K account) within a bounded evaluation window without breaching a trailing or static drawdown floor. Passing unlocks a funded account. Distinct from, and — per this project’s central structural finding — not necessarily optimized by the same strategy as, the XFA phase that follows it.\nXFA (Express Funded Account) — the funded account Topstep grants after passing the Combine. No profit target and no fixed evaluation window; the operative constraints are the trailing/static Maximum Loss Limit (MLL) and a payout-eligibility rule (5 winning days of $150+ net, or balance ≥ a threshold). Real capital withdrawal (“payout”) is the only goal once here — survival, not a lump-sum finish line.\nMLL (Maximum Loss Limit) — the floor an XFA account balance may not fall below. Depending on account type, the floor either trails the account’s high-water mark or stays fixed once a balance threshold is reached. Breaching it ends the account. Distinct from the Combine’s own drawdown rule, which serves a similar risk-limiting purpose during evaluation.\nScaling Plan — Topstep’s rule that an XFA account’s maximum allowed contract count depends on its current balance, not the size it was funded with — starting as low as 2–3 mini-equivalent lots near $0 balance and stepping up at defined balance thresholds (e.g., 5 lots at $2,000 for a 50K account, coinciding exactly with that account’s MLL distance). Confirmed against Topstep’s own documentation partway through Cerebro 2’s search, after early modeling had assumed a single fixed contract cap for the account’s entire lifetime. See Cerebro 2 Timeline.\nCamino A / B / C — three distinct approaches explored within Cerebro 2, named in the order they were investigated:\n\nCamino A — “modest pure geometry”: designing a low-risk, low-frequency XFA geometry directly (the approach that produced the MGC/150K candidate before its Combine pass rate was measured).\nCamino B — geometry-only strategies that pass reliably without predictive signal, exploiting gambler’s-ruin geometry within a bounded-loss/bounded-time structure. This is the approach that produced Cerebro 1’s winning G2 candidate; within Cerebro 2 it refers to the analogous (but not directly transferable) idea applied to the XFA phase.\nCamino C — running multiple XFA accounts simultaneously on the same candidate to diversify the probability of reaching any payout, explicitly not a source of edge or improved per-account geometry — shown to provide real benefit only to the extent the accounts’ outcomes are not fully correlated, which running the same product/signal simultaneously does not guarantee. See Cerebro 2 Timeline.\n\nCombine vs. XFA structural finding — the central discovery of Cerebro 2: optimizing a geometry to survive the XFA phase (few consecutive losses tolerated, low contract count) does not produce a geometry that clears the Combine phase quickly, and vice versa. Measured directly: the MGC/150K candidate, designed for XFA survival, has a Combine pass rate of only ~47%, roughly half of G2’s ~81%, when run through the identical, already-audited Combine simulator. See Cerebro 2 Timeline.\nG2 — the validated Cerebro 1 candidate: MES, SL=100/TP=40 ticks (RR=0.40), alternating direction, nc=40, no predictive signal required. ~70.6% empirical win rate, 81.44% theoretical Combine pass rate, ~53.6 combines/year. Live in real paper trading on Railway as of this report. See Cerebro 1 Timeline.\nWR / RR — win rate and reward-to-risk ratio (take-profit distance ÷ stop-loss distance, in ticks or dollars). Under gambler’s-ruin geometry with no predictive edge, a specific win rate is implied by a given RR: WR_natural = 1/(1+RR). A candidate whose empirical WR sits at or below WR_natural for its RR requires no real market edge to be expected-value-neutral-or-better within a bounded structure; a candidate above that line requires genuine predictive signal to justify its assumed win rate. Confusing these two regimes — most notably, treating WR as a free parameter decoupled from RR — was an early, self-corrected error in Cerebro 2’s first grid. See Cerebro 2 Timeline.\nnc / nc_cap / nc_designed — the number of contracts (typically micro-contracts) a strategy trades per entry. nc_cap is a legal ceiling (confirmed, per the Scaling Plan finding above, to be Combine-specific rather than an XFA-lifetime constant as originally assumed); nc_designed is the contract count a specific candidate’s risk design actually calls for, which may be well below the legal ceiling. min(nc_designed, nc_legal) is the correct sizing rule — an earlier implementation bug used the legal maximum unconditionally. See Methodology & Discipline.\nMGC/150K — shorthand for Cerebro 2’s leading geometry-pure candidate: Micro Gold futures, SL=TP=364 ticks (RR=1.0), alternating direction, nc=6, sized for a 150K XFA account. Validated on empirical win rate (~50.20%, corrected liquidity window) and on its own Combine pass rate (~47.5%) — both phases measured independently, per the structural finding above. See Cerebro 2 Timeline.\nWalk-forward — a backtesting discipline in which every prediction is made using only information available strictly before the moment of that prediction, with no information from later periods leaking into earlier decisions (via parameter fitting, label construction, or otherwise). The baseline standard for any claim in this project; see Methodology & Discipline.\nTriple-barrier labeling — a trade-outcome labeling method (López de Prado) using three exit conditions per trade: take-profit touched, stop-loss touched, or a maximum holding period elapsed (time exit). This project’s implementation had a confirmed bug in how it resolved bars that touch both TP and SL simultaneously — fixed by assuming the loss in that ambiguous case, the conservative convention. See Cerebro 1 Timeline.\nMassive — the paid market-data vendor (formerly reached via Polygon-compatible endpoints) used as this project’s primary futures data source, replacing an earlier free Yahoo Finance feed that had reliability problems around the market open. Massive’s REST API has a confirmed pagination quirk: requesting a date range with ascending sort and taking the last row does not reliably return the most recent bar; only a descending sort with a small limit and no date range does. See Infrastructure & Operations.\nDRY_RUN — an environment flag under which a scheduler computes and logs trading decisions without submitting any real order — the mode all production schedulers in this project run under as of this report. Graduating a candidate to DRY_RUN=false requires an explicit, documented criterion being met first (see Cerebro 1 Timeline and the project’s paper-trading duration rationale).",
+    "crumbs": [
+      "<span class='chapter-number'>6</span>  <span class='chapter-title'>Glossary</span>"
+    ]
+  }
+]
