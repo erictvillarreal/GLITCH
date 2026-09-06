@@ -80,7 +80,29 @@
 
 ## Cerebro 2 — Funded Account (NO iniciado)
 
-**Estado actual:** No hay ni una línea de código de investigación para la fase funded.
+> **HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2 (confirmado con evidencia
+> dura el 06-sep-2026, ver sección "Monte Carlo de flujo de caja real,
+> 2 etapas" más abajo):** el Combine y la XFA son DOS problemas de
+> optimización distintos, con geometrías óptimas DISTINTAS y
+> potencialmente EN CONFLICTO. G2 (SL=100/TP=40 ticks, MES/50K) fue
+> diseñado para maximizar pass rate del Combine (~81.4%) y es
+> excelente para eso. El mejor candidato de geometría pura de Cerebro 2
+> (MGC/150K, SL=TP=364 ticks, WR=0.5, nc=6) fue diseñado para
+> sobrevivir en la XFA una vez fondeado (46.2% prob de payout, $2,169
+> esperado de por vida) — pero al correrlo por primera vez a través de
+> la MISMA fase Combine que G2 domina, su pass rate es **solo 46.9%**,
+> casi la mitad. **Optimizar para XFA no optimiza para Combine, y
+> viceversa — no se puede diseñar una sola geometría asumiendo que
+> "pasar bien" y "sobrevivir bien fondeado" son el mismo objetivo.**
+> Esto no era intuición ni hipótesis — se verificó corriendo la
+> geometría real de cada candidato por el simulador de Combine ya
+> auditado. Cualquier candidato futuro de Cerebro 2 debe reportar SU
+> PROPIO pass rate de Combine, nunca asumir el de G2 ni el de ningún
+> otro candidato.
+
+**Estado actual (nota original, 13-ago-2026, ver arriba para el estado
+real tras la búsqueda de edge y el Monte Carlo de flujo de caja):** No
+hay ni una línea de código de investigación para la fase funded.
 
 **El problema del Cerebro 2 es diferente al del Combine:**
 - Combine: maximizar probabilidad de llegar a $3,000 antes de tocar el floor
