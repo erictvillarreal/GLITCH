@@ -2101,3 +2101,99 @@ lunes-viernes en horario de mercado activo (evitando también el corte
 diario 4-5pm CT) — el número de fin de semana no es válido para
 diseñar el punto de entrada del scheduler.
 
+## Cerebro 2 — `scheduler/geometry_mgc_scheduler.py` construido, listo salvo 1 parámetro (07-sep-2026)
+
+Objetivo del usuario: tener el scheduler listo para decisión de
+deploy el lunes, adelantando en fin de semana todo lo que no depende
+del mercado abierto. Checklist explícito, verificado uno por uno.
+
+### 1. Archivo nuevo, no extensión de geometry_pure.py
+
+`strategies/geometry_pure.py` (capa de GEOMETRÍA/estrategia) ya era
+agnóstico de producto — no necesitó tocarse más allá de la entrada
+`CANDIDATES["MGC_XFA_150K"]` ya agregada el 07-sep. Pero
+`scheduler/geometry_scheduler.py` (capa de EJECUCIÓN/infra) está
+hardcodeado a Yahoo (`yf.Ticker`) y falla explícitamente si
+`ProductSpec.yf_ticker is None` — que es el caso de MGC a propósito
+(nunca verificado, ver `strategies/geometry_pure.py`). Como este
+scheduler usa Massive en vez de Yahoo (decisión ya tomada), reusar
+`geometry_scheduler.py` vía `GLITCH_PRODUCT` no era viable — se creó
+`scheduler/geometry_mgc_scheduler.py` como archivo nuevo, reutilizando
+TODO lo demás (env_check, gist_store, contracts, geometry_pure) sin
+duplicar esa lógica.
+
+### 2. Lecciones de infraestructura aplicadas, cada una verificada
+
+- **Chequeo unificado desde la primera línea:** `require_env(...)`
+  corre antes de `telegram_bot`/`execution.contracts`/`execution.gist_store`
+  — mismo orden que los otros 2 schedulers. Verificado con smoke test
+  (`env -i` + 4 de 5 variables): falla con el mensaje consolidado
+  esperado, reportando LA variable faltante (`GIST_ID`), no un crash
+  genérico.
+- **Persistencia via Gist, namespace nuevo:** `LOG_FILE =
+  "geometry_mgc_log.json"` — distinto de `geometry_mes_log.json` y
+  `combo2d_log.json`, sin riesgo de colisión.
+- **Smoke test de import limpio** (`env -i` con las 5 variables
+  requeridas, valores falsos pero presentes): import exitoso de
+  principio a fin, `CFG` resuelto correctamente
+  (`CANDIDATES["MGC_XFA_150K"]`), sin excepciones.
+- **Bug real atrapado en el smoke test, no en producción:**
+  `fetch_latest_price(...) -> float | None` usaba sintaxis de union
+  types de Python 3.10+ (`X | Y`) — el MISMO tipo de incompatibilidad
+  con Python 3.9 ya encontrado y corregido en `execution/env_check.py`
+  semanas atrás. Corregido a `Optional[float]` (`typing`) antes de
+  que este bug llegara a Railway.
+
+### 3. `ENTRY_WAIT_MINUTES` — pendiente explícito, falla ruidoso si se despliega sin confirmar
+
+`ENTRY_WAIT_MINUTES = None  # PENDIENTE`. Agregado
+`_fail_if_entry_wait_not_confirmed()`, llamado al inicio de `run()`
+(antes incluso del chequeo de día hábil) — si sigue en `None`, loguea
+el error, manda alerta a Telegram, y sale con `sys.exit(1)`. Verificado
+en aislamiento (con `send()` mockeado, sin red real): dispara
+`SystemExit(1)` y el mensaje de Telegram correctamente. **No se puede
+desplegar este scheduler sin completar este valor primero.**
+
+### 4. Otras piezas de lógica verificadas en aislamiento (sin acceso a la API real)
+
+- `fetch_latest_price()`: mockeado `requests.get` — confirma que usa
+  el patrón YA CORREGIDO (`sort=window_start.desc`, `limit=1`, **sin**
+  `window_start_gte/lte`) y que el fallback 1min→5min funciona cuando
+  la resolución fina no devuelve resultados.
+- `_paper_progress()`: con un log de ejemplo (2 TP, 1 SL, 1 FLATTEN),
+  confirma que el WR condicional excluye FLATTEN del denominador
+  (2/(2+1)=66.7%, no 2/4=50%) — mismo criterio ya aplicado en
+  `validate_mgc_wr_empirical.py`, no una fórmula nueva sin probar.
+
+### 5. Cron Schedule propuesto (no bloqueante, ajustar el lunes)
+
+Basado en la ventana de liquidez ya confirmada (7:00-14:30 CT):
+`0 12 * * 1-5` (12:00 UTC = 7:00 CT en horario de verano CDT —
+**verificar DST vigente** al configurar el cron real en Railway, CT
+puede ser UTC-5 o UTC-6 según la época del año).
+
+### 6. Sin push a main, sin tocar Railway
+
+Todo comiteado en `cerebro2-dev`. Pendiente antes de decidir
+merge/deploy:
+1. Correr `probe_massive_mgc_delay.py` lunes-viernes en horario activo
+   → completar `ENTRY_WAIT_MINUTES`.
+2. **Verificar manualmente en el dashboard de Railway** (no asumible
+   desde este entorno): qué Builder usa el nuevo servicio (Railpack vs
+   Nixpacks — el Procfile actual del repo solo tiene una línea generica
+   `worker: python scheduler/glitch_scheduler.py`, no una entrada por
+   servicio; los otros 2 schedulers parecen configurarse con Start
+   Command directo en el dashboard de cada servicio, no vía este
+   Procfile — mismo tipo de suposición que causó el incidente de
+   Railpack/Nixpacks de semanas atrás, no repetir esa suposición aquí).
+   Start Command a usar: `python scheduler/geometry_mgc_scheduler.py`.
+3. Configurar las 5 variables de entorno en el nuevo servicio de
+   Railway (mismos nombres, `GIST_ID`/`GITHUB_GIST_TOKEN` **compartidos**
+   con los otros 2 servicios — el namespace nuevo vive en el nombre del
+   archivo dentro del gist, no en variables separadas).
+4. Cron Schedule en Railway con el horario propuesto (ajustar si hace
+   falta).
+5. Una vez todo lo anterior: correr una vez manualmente ("Run now")
+   con logs revisados en vivo antes de confiar en el cron automático —
+   mismo estándar ya aplicado a los otros 2 servicios.
+
