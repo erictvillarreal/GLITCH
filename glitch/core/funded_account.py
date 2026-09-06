@@ -593,4 +593,5 @@ def simulate_xfa_lifetime_dynamic_nc(wr: float, sl_usd_per_contract: float, tp_u
         # camino normal de un candidato individual.
         result["raw_lifetime_payout_usd"] = usd_arr
         result["raw_lifetime_payouts"] = payouts_arr
+        result["raw_lifetime_days"] = days_arr
     return result

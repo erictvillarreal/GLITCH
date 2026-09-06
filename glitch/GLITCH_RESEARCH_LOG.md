@@ -1645,3 +1645,96 @@ correlación entre pares que impide tratarlos como confirmaciones
 independientes, y ningún candidato individual con potencia suficiente
 para una decisión de negocio.
 
+## Cerebro 2 — Monte Carlo de flujo de caja real, 2 etapas (06-sep-2026)
+
+**Gap encontrado y resuelto ANTES de construir nada:** los números ya
+citados del candidato de geometría pura (MGC/150K, k=2, nc=6,
+SL=TP=364 ticks, WR=0.5) — $2,169 esperado, 46.2% prob de payout — son
+**exclusivamente de la fase XFA**, asumiendo que la cuenta YA está
+fondeada desde $0. Esta geometría específica NUNCA se había corrido a
+través de la fase Combine (la evaluación que hay que pasar, pagando
+la fee, antes de llegar a la XFA). Decisión del usuario: construir el
+modelo de 2 etapas completo, reusando el simulador de Combine ya
+existente y auditado (`simulation/monte_carlo.py::TopstepMonteCarloSimulator`,
+el mismo motor usado para validar G2), en vez de asumir que pagar la
+fee garantiza pasar.
+
+### Hallazgo central — el candidato es débil para pasar el Combine
+
+`scripts/cerebro2_cashflow_monte_carlo.py`. Distribución diaria para
+Combine TOPSTEP_150K: WR=50%, avg_win=$2,172, avg_loss=$2,196 (después
+de comisión), EV/día=-$11.5. **Pass rate: 46.9%** (200,000 paths) —
+**dramáticamente menor que el ~81.4% de G2.** Confirma exactamente la
+sospecha explícita del usuario: este candidato fue diseñado para
+sobrevivir en XFA (nc bajo, tolera pocas pérdidas consecutivas), NO
+para pasar el Combine rápido — son objetivos de diseño distintos, y
+optimizar uno no optimiza el otro. Avg días a pasar: 7.6; avg días a
+tronar: 5.6.
+
+### Encadenamiento y supuesto explícito
+
+Pool de 200,000 resultados de Combine (pass/blow + días) + pool de
+50,000 episodios de XFA (payout total, días de vida, número de pagos,
+vía `simulate_xfa_lifetime_dynamic_nc` ya validado) — muestreados CON
+REEMPLAZO en una simulación secuencial de 365 días de calendario por
+trayectoria (20,000 trayectorias independientes), pagando fee de
+Combine ($149) en cada intento nuevo, fee de activación adicional
+($149) solo si pasa, y jugando la economía de XFA solo entonces.
+
+**Supuesto declarado explícitamente:** el payout total de un ciclo de
+vida de XFA se acredita al FINAL de ese ciclo (no distribuido en el
+momento exacto de cada pago dentro del ciclo, información no
+disponible a este nivel de agregación) — esto es CONSERVADOR para el
+cálculo de colchón de capital, nunca optimista.
+
+### Resultado — distribución completa, no un promedio (política `every_payout`)
+
+| Métrica | p10 | p25 | p50 (mediana) | p75 | p90 | media |
+|---|---|---|---|---|---|---|
+| Payout total acumulado a 1 año | $15,809 | $22,298 | **$31,257** | $42,076 | $53,861 | $33,357 |
+| N intentos de Combine en el año | 27 | 30 | 33 | 36 | 38 | 32.7 |
+| N veces que llegó a XFA | 13 | 14 | 15 | 17 | 18 | 15.3 |
+| N payouts XFA exitosos | 7 | 9 | 11 | 14 | 16 | 11.4 |
+| **Capital colchón máximo necesario** | $298 | $447 | **$894** | $1,639 | **$2,679** | $1,251 |
+
+(Política `first_payout_only`: prácticamente idéntico — payout mediano
+$28,823, colchón mediano $894, colchón p90 $2,679 — la ambigüedad de
+reset de MLL no cambia materialmente esta conclusión.)
+
+### Respuestas directas a las 4 preguntas del usuario
+
+1. **Duración promedio de un ciclo completo (Combine + XFA si
+   aplica): 11.4 días.** Para acumular una muestra de:
+   - **30 intentos completos: ~343 días (~0.94 años)** — casi el año
+     entero.
+   - **50 intentos completos: ~572 días (~1.57 años)** — más de un
+     año calendario.
+   **El promedio observado NO se acerca al $2,169 teórico dentro de
+   un solo año de operación real — la varianza de pocas observaciones
+   domina durante todo el primer año**, consistente con el rango
+   p10-p90 de $15,809-$53,861 (un factor de ~3.4x entre el peor y
+   mejor decil, todo dentro de "resultado normal").
+2. **Riesgo de cola izquierda, cuantificado, no solo descrito:**
+   P(un intento cualquiera termina en al menos 1 payout) = pass_rate ×
+   prob(≥1 payout | pasó) = 46.9% × 46.4% = **21.8%.**
+   - **P(se necesitan ≥5 intentos consecutivos sin ningún payout) =
+     37.5%**
+   - **P(se necesitan ≥10 intentos consecutivos sin ningún payout) =
+     11.0%**
+   Esto NO es un evento de cola remoto — más de 1 de cada 3
+   trayectorias atraviesa una racha de 5+ intentos fallidos en algún
+   momento. El capital colchón de $2,679 (p90) refleja exactamente
+   este riesgo: ~18 fees de Combine pagadas antes de que llegue
+   suficiente payout para compensar.
+
+**Conclusión operativa:** el candidato SÍ genera flujo de caja
+positivo real en un horizonte de 1 año (mediana +$31,257, muy por
+encima de cualquier colchón necesario) — pero requiere (a) paciencia
+real (no resultados fiables en menos de ~1 año), (b) un colchón de
+capital de al menos ~$900-2,700 para sobrevivir las rachas normales de
+mala suerte del Combine, y (c) la advertencia estructural ya
+establecida en esta sesión: el pass rate de 46.9% en el Combine es un
+COSTO REAL no capturado en los $2,169/46.2% citados anteriormente —
+cualquier reporte futuro de este candidato debe citar AMBAS fases,
+nunca solo la XFA aislada.
+
