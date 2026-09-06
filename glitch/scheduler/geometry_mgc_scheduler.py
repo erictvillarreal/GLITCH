@@ -105,12 +105,13 @@ from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E4
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
 
 CT = ZoneInfo("America/Chicago")
-logging.basicConfig(
-    stream=sys.stdout, level=logging.INFO,
-    format="%(asctime)s CT [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-log = logging.getLogger("geometry_mgc")
+# Logging con timestamp SIEMPRE en America/Chicago -- mismo fix del
+# 07-sep-2026 aplicado a geometry_scheduler.py/combo2d_scheduler.py/
+# glitch_scheduler.py en main, ver execution/ct_logging.py y
+# GLITCH_RESEARCH_LOG.md para el por que (el patron anterior dependia
+# silenciosamente del TZ del contenedor).
+from execution.ct_logging import setup_ct_logging
+log = setup_ct_logging("geometry_mgc")
 
 # ── Config ────────────────────────────────────────────────────────────────
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
