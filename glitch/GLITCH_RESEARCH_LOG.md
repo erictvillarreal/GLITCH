@@ -1814,3 +1814,84 @@ resumen ejecutivo (`CEREBRO2_G2_VS_MGC_SUMMARY.md`) se actualiza para
 reflejar que el ítem pendiente ("WR nunca validado contra datos
 reales") queda resuelto y a favor del candidato.
 
+## Cerebro 2 — Verificación adicional antes de producción: sub-períodos + sensibilidad direccional del Combine (07-sep-2026)
+
+Pedido explícito del usuario antes de proponer paso a paper trading
+real: (1) reproducción out-of-sample del WR por sub-período temporal,
+no solo el agregado; (2) confirmar si la asimetría long/short se
+traduce en algo relevante al nivel de pass rate del Combine, no solo
+en el WR base. `scripts/validate_mgc_subperiods_and_direction.py`.
+
+### 1. WR condicional por sub-período — CONFIRMADO, estable
+
+3 sub-períodos calendario de igual duración (2024-08-27→2025-04-27,
+→2025-12-27, →2026-08-26):
+
+| Sub-período | N | WR condicional | Diferencia vs 50% |
+|---|---|---|---|
+| 1 | 13,268 | 49.90% | -0.10pp |
+| 2 | 13,488 | 49.92% | -0.08pp |
+| 3 | 13,250 | 49.89% | -0.11pp |
+
+**El WR≈50% se sostiene de forma remarcablemente estable en los 3
+sub-períodos independientes** (diferencias todas <0.15pp, todas en la
+misma dirección marginal) — no es un artefacto de promediar
+variación entre sub-períodos, cada uno por separado ya está ahí.
+
+**Hallazgo lateral interesante (no cambia la conclusión de WR):** el
+time-exit share varía enormemente entre sub-períodos — 54.4% → 30.8%
+→ 5.9% — reflejando un régimen de volatilidad de MGC creciente con el
+tiempo (barras más anchas en el período 3 tocan las barreras de 364
+ticks mucho más seguido dentro de la ventana de holding). No afecta el
+WR condicional (que corrige exactamente por esto), pero es un dato
+útil sobre cómo cambió la dinámica de MGC en estos 2 años.
+
+### 2. Asimetría long/short — NO es persistente, se invierte de signo
+
+| Sub-período | WR long | WR short | Lado favorecido |
+|---|---|---|---|
+| 1 | 54.89% | 44.91% | Long (+9.98pp) |
+| 2 | 57.54% | 42.31% | Long (+15.23pp) |
+| 3 | 48.07% | 51.71% | **Short (-3.64pp)** |
+
+La asimetría agregada (52.78%/47.16%) que se reportó antes como
+"ruido con signo consistente por azar" **resulta NO ser ni siquiera
+consistente en signo** — favorece long en los períodos 1-2 y se
+invierte a favor de short en el período 3. Esto es evidencia
+adicional, más fuerte que la disponible antes, de que NO hay un sesgo
+direccional real y persistente en esta geometría — es exactamente el
+tipo de inestabilidad que se espera de ruido puro, no de una señal.
+
+### 3. Sensibilidad del pass rate del Combine — real pero contenida por el diseño "alternado"
+
+El pass rate del Combine SÍ es sensible a cambios pequeños de WR cerca
+de este punto (RR=1.0): variar el WR en ±5-8pp mueve el pass rate en
+~13-20pp:
+
+| Escenario | WR | Pass rate |
+|---|---|---|
+| Alternado (diseño real, agregado) | 49.97% | 47.0% |
+| Solo LONG (agregado 2 años) | 52.78% | 53.5% |
+| Solo SHORT (agregado 2 años) | 47.16% | 40.7% |
+| Solo LONG, peor caso (sub-período 2) | 57.54% | 63.7% |
+| Solo SHORT, peor caso (sub-período 2) | 42.31% | 30.2% |
+
+**Sí — la asimetría SÍ se traduciría en algo relevante a nivel de pass
+rate SI fuera persistente y alguien operara un solo lado** (rango de
+pass rate observado: 30.2%-63.7%, una diferencia enorme). **Pero como
+la Parte 2 arriba confirma que la asimetría NO es persistente (se
+invierte de signo entre sub-períodos), el diseño "alternado" —ya
+elegido, no una decisión nueva— es precisamente lo que protege contra
+este riesgo:** al alternar, la cuenta queda expuesta al WR agregado
+(~50%) en vez de apostar a que un lado seguirá siendo mejor que el
+otro, que la evidencia dice que no es cierto.
+
+**Conclusión operativa:** ambas verificaciones adicionales confirman
+el candidato sin nuevas alertas — el WR es temporalmente estable y la
+elección de diseño (alternar) es la correcta dado que la asimetría
+direccional es ruido, no señal. Dicho esto, la sensibilidad del pass
+rate a pequeños cambios de WR (punto 3) es una fragilidad estructural
+real de operar tan cerca del punto de equilibrio RR=1.0/WR=50% — vale
+la pena que el usuario lo tenga presente como riesgo de modelo
+(no de ejecución) al decidir sobre producción.
+

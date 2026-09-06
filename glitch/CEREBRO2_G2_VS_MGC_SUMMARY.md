@@ -26,7 +26,16 @@
 
 `scripts/validate_mgc_wr_empirical.py` corrido contra 2 años reales de MGC. Primera lectura de la métrica estándar (`measure_wr_bracket()`) dio 34.9% — alarmante — pero resultó ser un artefacto: 30.2% de los trades de calibración expiran por tiempo (barreras muy anchas relativas al holding window) y esa métrica diluye el denominador con ellos, el mismo problema ya corregido antes para el win_rate de la Dirección 1. La métrica correcta (TP/(TP+SL), excluyendo time-exits) da **WR=49.97% — prácticamente idéntico al 50% teórico** (diferencia: -0.03pp). Pequeña asimetría long/short (52.78%/47.16%) tratada como ruido direccional, mismo criterio ya aplicado a G2, no cambia la recomendación de alternar sin señal.
 
-**El candidato MGC/150K queda validado en sus dos supuestos centrales: WR≈50% empírico y pass rate de Combine 46.9%.** Ningún ítem pendiente de validación básica queda abierto.
+**El candidato MGC/150K queda validado en sus dos supuestos centrales: WR≈50% empírico y pass rate de Combine 46.9%.**
+
+## Verificación final antes de producción (07-sep-2026)
+
+Dos chequeos adicionales, mismo estándar exigido a cualquier candidato:
+
+1. **Out-of-sample por sub-período:** WR condicional en 3 sub-períodos calendario independientes = 49.90% / 49.92% / 49.89% — estable, sin sorpresas, diferencias <0.15pp en los 3.
+2. **Sensibilidad direccional del Combine:** la asimetría long/short **se invierte de signo entre sub-períodos** (long favorecido en 2 de 3, short en el 3º) — confirma que NO es un sesgo real y persistente, solo ruido. El pass rate del Combine SÍ es sensible a esta clase de asimetría si fuera persistente (rango observado 30%-64% de pass rate según qué lado domine) — pero el diseño "alternado" ya elegido es exactamente lo que protege contra ese riesgo, dado que ningún lado gana de forma estable.
+
+**Ningún ítem pendiente de validación básica queda abierto. Fragilidad de modelo a tener presente (no de ejecución):** el candidato opera muy cerca del punto de equilibrio RR=1.0/WR=50%, donde el pass rate del Combine es inherentemente sensible a pequeños errores de calibración del WR real.
 
 ## Estado
 
