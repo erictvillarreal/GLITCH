@@ -140,6 +140,17 @@ CANDIDATES = {
     "MES": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=40, max_holding_bars=100, nc=40, direction="alternate"),
     "MGC": GeometryConfig(SPECS["MGC"], sl_ticks=136, tp_ticks=45, max_holding_bars=100, nc=30, direction="alternate"),
     "M2K": GeometryConfig(SPECS["M2K"], sl_ticks=200, tp_ticks=80, max_holding_bars=100, nc=50, direction="alternate"),
+    # Cerebro 2 -- candidato de geometria pura para SOBREVIVIR en la XFA
+    # 150K una vez fondeado (NO para pasar el Combine -- ese es
+    # CANDIDATES["MGC"] arriba, geometria distinta, objetivo distinto,
+    # ver GLITCH_RESEARCH_LOG.md 06/07-sep-2026 para la confirmacion
+    # empirica de que optimizar uno no optimiza el otro: pass rate de
+    # Combine de ESTA geometria es solo 46.9%, vs ~81.4% de G2/MGC-combine).
+    # RR=1.0, WR=0.5 (validado empiricamente contra MGC real: 49.97%
+    # condicional, estable en 3 sub-periodos temporales independientes).
+    # Clave deliberadamente DISTINTA de "MGC" -- NO sobrescribir el
+    # candidato de Combine ya validado.
+    "MGC_XFA_150K": GeometryConfig(SPECS["MGC"], sl_ticks=364, tp_ticks=364, max_holding_bars=100, nc=6, direction="alternate"),
 }
 
 # NOTA (max_holding_bars): viene del backtest en barras de 5min. En vivo,

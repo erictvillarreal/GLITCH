@@ -1895,3 +1895,102 @@ real de operar tan cerca del punto de equilibrio RR=1.0/WR=50% — vale
 la pena que el usuario lo tenga presente como riesgo de modelo
 (no de ejecución) al decidir sobre producción.
 
+## Cerebro 2 — Construcción del 3er scheduler (MGC/150K): Fase 1, código + hallazgo de ventana RTH (07-sep-2026)
+
+Instrucción del usuario: construir el scheduler de paper trading para
+el candidato MGC/150K en Railway, aplicando explícitamente cada
+lección de infraestructura ya aprendida con GEOMETRY/combo2d. Reporte
+por fases — esta es la Fase 1 (código + fuente de datos), antes de
+tocar Railway.
+
+### 1. ProductSpec de MGC — re-verificado, confirmado correcto
+
+Contra CME (vía búsqueda web): MGC = 10 oz troy, tick=$0.10/oz, tick
+value=$1.00/tick. Coincide exactamente con `SPECS["MGC"]` en
+`strategies/geometry_pure.py` (`tick_size=0.10, tick_value_usd=1.00`).
+**Sin bug esta vez** — a diferencia de ZC (bug de unidades cents/dollars
+encontrado el 25-ago) y del hallazgo de nc_cap/Scaling Plan del 04-sep,
+MGC ya estaba bien desde el principio.
+
+### 2. Nueva entrada en CANDIDATES — sin sobrescribir la existente
+
+`CANDIDATES["MGC"]` YA EXISTÍA (candidato de Camino B para pasar el
+Combine: sl_ticks=136, tp_ticks=45, nc=30 — geometría y objetivo
+distintos). Agregar el candidato XFA bajo la misma clave habría
+sobrescrito ese candidato. Agregado como
+**`CANDIDATES["MGC_XFA_150K"]`** (sl_ticks=364, tp_ticks=364, nc=6,
+direction="alternate") — clave nueva y explícitamente distinta,
+comentario cruzado en el código explicando la diferencia de objetivo.
+138/138 tests sin cambios.
+
+### 3. HALLAZGO — la ventana horaria de MGC usada hasta ahora está mal calibrada
+
+Punto 7 del checklist del usuario ("NO asumir que 9:30 RTH aplica
+igual [a MGC]") resultó ser más grave de lo esperado: **no es solo la
+ventana de apertura del scheduler en vivo la que está mal calibrada —
+es TODO el dataset `mgc_5min_2y.parquet` ya usado para validar el WR
+de este candidato.**
+
+`fetch_mes_2y.py` (usado para descargar MGC también) filtra a
+"8:30-15:00 CT, estándar para índices" — un filtro escrito para
+equity index, nunca revisado para gold. Verificado contra 2 fuentes
+independientes:
+- CME/COMEX: sesión heredada del pit = 8:20am-1:30pm ET (7:20am-12:30pm CT).
+- Fuentes de mercado (overlap Londres-NY): 8:00am-12:00pm EST
+  (7:00am-11:00am CT) como ventana de mayor liquidez real de gold.
+
+**Ambas apuntan a que la ventana real empieza ~1-1.5h ANTES de las
+8:30 CT que se usó.** Confirmado con evidencia interna (no solo las
+fuentes externas): en el parquet YA existente, el volumen de la
+PRIMERA barra capturada (8:30 CT) ya es el pico del día (2,257
+contratos/barra promedio, 29.1% del volumen total capturado en solo
+la primera hora) y decae MONÓTONAMENTE el resto del día hasta 588 a
+las 15:00 — la pendiente, extrapolada hacia atrás, sugiere que la
+ventana 7:00-8:30 CT (totalmente ausente del dataset) es probablemente
+MÁS activa que cualquier hora ya capturada, no menos.
+
+**Implicación:** el WR=49.97% ya validado (y su estabilidad en 3
+sub-períodos) se calculó sobre un dataset que probablemente excluye la
+ventana más líquida real de MGC. No se sabe todavía si el WR cambiaría
+con la ventana correcta — pero por la propia regla de decisión del
+usuario ("si el volumen perdido es sustancial, justifica re-fetch"),
+la evidencia (interna + 2 fuentes externas independientes, todas
+apuntando en la misma dirección) es suficiente para justificarlo.
+
+### 4. Preparado (NO ejecutado) — re-fetch con ventana corregida
+
+`scripts/fetch_mgc_correct_window.py`: misma lógica de descubrimiento
+de contratos y roll que `fetch_mes_2y.py` (sin reimplementar), único
+cambio: ventana 7:00-15:00 CT en vez de 8:30-15:00 CT. Guarda en
+`data_cache/mgc_5min_2y_corrected_window.parquet` (NO sobreescribe el
+archivo actual — comparación explícita antes de decidir cuál usar).
+**No modificado `fetch_mes_2y.py` directamente** — su filtro sí es
+correcto para los productos de equity index (MES, M2K) ya descargados
+con él, cambiarlo ahí rompería datos ya validados de otros productos.
+
+**Bloqueo:** requiere `MASSIVE_API_KEY`, no disponible en este shell
+local — mismo bloqueo que la medición de delay pedida en paralelo.
+Por decisión explícita del usuario, correr DESDE RAILWAY (donde la key
+ya vive), no pasar la key a esta sesión.
+
+`scripts/validate_mgc_wr_empirical.py` y
+`scripts/validate_mgc_subperiods_and_direction.py` actualizados para
+aceptar una ruta de parquet alternativa como argumento — re-correr
+contra el dataset corregido es un solo comando una vez descargado:
+```
+python scripts/validate_mgc_wr_empirical.py data_cache/mgc_5min_2y_corrected_window.parquet
+python scripts/validate_mgc_subperiods_and_direction.py data_cache/mgc_5min_2y_corrected_window.parquet
+```
+
+### Próximos pasos (bloqueados en Railway/API key, no en esta sesión)
+
+1. Correr `fetch_mgc_correct_window.py` en Railway.
+2. Re-correr ambos scripts de validación contra el dataset corregido,
+   comparar WR viejo vs nuevo explícitamente.
+3. Medir el delay real de Massive para MGC (pedido en paralelo,
+   pendiente por el mismo bloqueo de acceso).
+4. Solo después de 1-3: diseñar la ventana de apertura del scheduler
+   en vivo y escribir `scheduler/geometry_mgc_scheduler.py`.
+
+No se tocó producción ni Railway. Todo en `cerebro2-dev`.
+

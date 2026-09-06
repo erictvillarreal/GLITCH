@@ -34,7 +34,8 @@ from core.prop_firm import TOPSTEP_150K
 from strategies.geometry_pure import SPECS
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_cache")
-MGC_PATH = os.path.join(DATA_DIR, "mgc_5min_2y.parquet")
+# Uso: python scripts/validate_mgc_subperiods_and_direction.py [ruta_parquet_alternativa]
+MGC_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join(DATA_DIR, "mgc_5min_2y.parquet")
 
 SL_TICKS = TP_TICKS = 364
 MAX_HOLDING_BARS = 100

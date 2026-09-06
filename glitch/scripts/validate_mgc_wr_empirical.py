@@ -50,7 +50,10 @@ from scripts.camino_b_grid import measure_wr_bracket, _label_fixed_ticks
 from strategies.geometry_pure import SPECS
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_cache")
-MGC_PATH = os.path.join(DATA_DIR, "mgc_5min_2y.parquet")
+# Uso: python scripts/validate_mgc_wr_empirical.py [ruta_parquet_alternativa]
+# -- para re-correr contra data_cache/mgc_5min_2y_corrected_window.parquet
+# (ventana RTH corregida, ver scripts/fetch_mgc_correct_window.py) sin editar el script.
+MGC_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join(DATA_DIR, "mgc_5min_2y.parquet")
 
 # Candidato exacto validado en el Monte Carlo de flujo de caja
 # (ver GLITCH_RESEARCH_LOG.md, 06-sep-2026): MGC/150K, k=2, nc=6.
