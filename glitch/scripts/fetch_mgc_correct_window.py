@@ -34,22 +34,41 @@ en cualquier entorno donde el usuario la tenga exportada:
     export MASSIVE_API_KEY="..."
     python scripts/fetch_mgc_correct_window.py
 
+ACTUALIZADO (07-sep-2026): el filesystem de Railway es efímero (misma
+lección de siempre) -- mover el parquet completo de vuelta a esta
+sesión no es práctico. Este script ahora imprime un RESUMEN
+AUTOSUFICIENTE (conteo de filas, rango de fechas, perfil de volumen
+por hora, Y el WR condicional recalculado con la ventana corregida --
+comparable directamente contra el 49.97% ya validado) para poder
+decidir el siguiente paso leyendo el log de Railway, sin necesitar el
+archivo de vuelta. También intenta guardar ese mismo resumen (JSON
+pequeño, no el parquet binario) en el Gist compartido ya usado para
+persistencia (`execution/gist_store.py`) bajo la clave
+"mgc_window_validation_summary.json" -- un parquet de varios MB no
+tiene buen encaje en un Gist de texto, pero el resumen estadístico sí,
+y es lo único que realmente hace falta para decidir. Si faltan las
+credenciales del Gist o falla la subida, el script sigue funcionando
+igual -- el log impreso es la fuente de verdad primaria, el Gist es
+solo una comodidad adicional.
+
 Una vez corrido, ANTES de usar este dataset para el scheduler:
-  1. Re-correr scripts/validate_mgc_wr_empirical.py y
-     scripts/validate_mgc_subperiods_and_direction.py contra el nuevo
-     parquet -- confirmar que WR≈50% se sostiene con la ventana
-     correcta (podría cambiar si la ventana perdida tenía dinámica de
-     precio distinta).
-  2. Comparar el WR viejo vs nuevo explícitamente antes de descartar
-     el dataset anterior -- documentar la diferencia, no solo asumir
-     que "más datos es mejor" sin medirlo.
+  1. Leer el resumen impreso (o el Gist) -- ya incluye el WR
+     condicional recalculado, no hace falta correr un script aparte
+     para eso.
+  2. Comparar el WR viejo (49.97%) vs nuevo explícitamente antes de
+     descartar el dataset anterior -- documentar la diferencia, no
+     solo asumir que "más datos es mejor" sin medirlo.
 """
 from __future__ import annotations
-import os, re, sys, datetime as dt
+import os, re, sys, json, datetime as dt
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import numpy as np
 import pandas as pd
 import requests
+
+from scripts.camino_b_grid import _label_fixed_ticks
+from strategies.geometry_pure import SPECS
 
 API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY", "")
 if not API_KEY:
@@ -206,8 +225,86 @@ def main():
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     prices_rth.to_parquet(OUT_PATH)
-    print(f"\nGuardado: {OUT_PATH}")
-    print("\nNO reemplaza mgc_5min_2y.parquet automaticamente -- comparar WR de ambos antes de decidir cual usar.")
+    print(f"\nGuardado localmente: {OUT_PATH} (filesystem efimero de Railway -- "
+          f"no depender de recuperar este archivo, ver resumen abajo)")
+
+    summary = build_summary(prices_rth)
+    print("\n" + "=" * 100)
+    print("RESUMEN AUTOSUFICIENTE -- suficiente para decidir el siguiente paso sin mover el parquet")
+    print("=" * 100)
+    print(json.dumps(summary, indent=2, default=str))
+
+    persist_summary_to_gist(summary)
+
+
+def build_summary(prices_rth: pd.DataFrame) -> dict:
+    """Conteo/rango + perfil de volumen por hora + WR condicional
+    recalculado con la ventana corregida -- todo lo necesario para
+    decidir sin el parquet completo de vuelta."""
+    local = prices_rth.copy()
+    local.index = local.index.tz_convert("America/Chicago")
+
+    vol_by_hour = local.groupby(local.index.hour)["volume"].mean()
+    total_vol = float(local["volume"].sum())
+    first_hour_vol = float(local[local.index.hour == 7]["volume"].sum())
+
+    wr = compute_wr_conditional(prices_rth)
+
+    return {
+        "n_rows": int(len(prices_rth)),
+        "date_range": [str(prices_rth.index.min()), str(prices_rth.index.max())],
+        "contracts": sorted(prices_rth["contract"].unique().tolist()),
+        "avg_volume_by_hour_ct": {int(h): round(float(v), 1) for h, v in vol_by_hour.items()},
+        "volume_pct_hour_7_of_total": round(first_hour_vol / total_vol, 4) if total_vol else None,
+        "wr_conditional_corrected_window": wr,
+        "wr_conditional_old_window_reference": 0.4997,  # ya validado, ver GLITCH_RESEARCH_LOG.md 07-sep-2026
+    }
+
+
+def compute_wr_conditional(prices_rth: pd.DataFrame) -> dict:
+    """Mismo calculo (SL=TP=364 ticks, max_holding=100, alternando sin
+    señal) ya usado en validate_mgc_wr_empirical.py -- reproducido aqui
+    para no depender de una segunda corrida de script separada."""
+    tick_size = SPECS["MGC"].tick_size
+    sl_pts = tp_pts = 364 * tick_size
+    max_holding = 100
+
+    n = len(prices_rth)
+    signal_indices = np.arange(0, n - max_holding - 1, 1)
+    longs = signal_indices[np.arange(len(signal_indices)) % 2 == 0]
+    shorts = signal_indices[np.arange(len(signal_indices)) % 2 == 1]
+
+    ll = _label_fixed_ticks(prices_rth, longs, tp_pts, sl_pts, max_holding, side=1, win_first=False)
+    ls = _label_fixed_ticks(prices_rth, shorts, tp_pts, sl_pts, max_holding, side=-1, win_first=False)
+    all_labels = np.concatenate([ll, ls])
+    n_tp, n_sl, n_time = int((all_labels == 1).sum()), int((all_labels == -1).sum()), int((all_labels == 0).sum())
+    total = len(all_labels)
+
+    return {
+        "n_trades": total,
+        "tp_pct": round(n_tp / total, 4) if total else None,
+        "sl_pct": round(n_sl / total, 4) if total else None,
+        "time_exit_pct": round(n_time / total, 4) if total else None,
+        "wr_conditional": round(n_tp / (n_tp + n_sl), 4) if (n_tp + n_sl) else None,
+        "wr_long": round((ll == 1).sum() / ((ll == 1).sum() + (ll == -1).sum()), 4) if len(ll) else None,
+        "wr_short": round((ls == 1).sum() / ((ls == 1).sum() + (ls == -1).sum()), 4) if len(ls) else None,
+    }
+
+
+def persist_summary_to_gist(summary: dict) -> None:
+    """Sube el resumen (JSON pequeño) al Gist compartido de persistencia
+    -- NO el parquet binario (mal encaje en un Gist de texto). Clave
+    deliberadamente distinta de los logs de geometry_mes/combo2d. Si
+    faltan credenciales o falla la subida, se loguea y se sigue -- el
+    log impreso arriba ya es la fuente de verdad primaria."""
+    try:
+        from execution.gist_store import save_log
+        save_log("mgc_window_validation_summary.json", [summary])
+        print("\nResumen tambien guardado en el Gist compartido "
+              "(clave: mgc_window_validation_summary.json) -- recuperable sin este shell.")
+    except Exception as e:
+        print(f"\n[warn] No se pudo guardar el resumen en el Gist ({e}) -- "
+              "el log impreso arriba sigue siendo suficiente para decidir el siguiente paso.")
 
 
 if __name__ == "__main__":
