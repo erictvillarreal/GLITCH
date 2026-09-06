@@ -1505,3 +1505,143 @@ insuficiente con 2 años de datos. Corresponde reportar esto al usuario
 y esperar su decisión sobre si esto ya justifica evaluar el upgrade de
 Massive, o si hay más por explorar a costo cero primero.
 
+## Cerebro 2 — Tarea 0: auditoría honesta de qué tan agotada está la búsqueda (06-sep-2026)
+
+El usuario preguntó directamente si la búsqueda de edge ya estaba
+genuinamente agotada. Verificado contra CSVs/scripts guardados (no
+reconstruido de memoria):
+
+- **Individual (`cerebro2_slow_mr_grid.csv`):** 6 de 7 productos con
+  datos en caché (falta ZC), 8 configs c/u (lookback∈{1,5}×hold, con
+  lookback=5 NUNCA probado con hold<5), 2 direcciones = 96 combos,
+  profundidad idéntica en los 6.
+- **Pares:** solo 1 de 15 pares posibles entre esos 6 productos
+  probado (MES-M2K), aunque a fondo (40 combos, 2 construcciones).
+- **Barrera:** `pt_multiplier=2.5`/`sl_multiplier=1.5` en el 100% de
+  las corridas de TODA la búsqueda — confirmado con `grep`, cero
+  variación en ningún momento.
+- **Refinamiento** (día de semana, timing de entrada, filtro
+  volumen/rango): aplicado únicamente al candidato flagship
+  (MES+MGC weekly/fade). MCL, M6E, y el 2º hallazgo del spread nunca
+  lo recibieron.
+
+**Conclusión: la búsqueda NO estaba agotada.** Gaps identificados y
+priorizados por el usuario para esta misma ronda: 14 pares sin probar,
+ZC sin tocar, refinamiento pendiente en 2 candidatos + 1 hallazgo, y
+geometría de barrera nunca cuestionada.
+
+## Cerebro 2 — Cierre de gaps (06-sep-2026)
+
+### 1. Los 14 pares restantes (`scripts/wf_slow_pairs_full.py`)
+
+Misma profundidad que MES-M2K: 2 construcciones × lookback{1,5} ×
+hold{2,3,5,10,15} × dirección = 40 combos × 14 pares = 560 nuevos (600
+en total con MES-M2K). CSV completo en `data_cache/cerebro2_pairs_full_grid.csv`.
+
+**560 nuevos + 40 existentes = 600 pruebas. 57 pasan p<0.05 nominal —
+por encima de los ~30 esperados por puro azar a α=0.05, pero con una
+advertencia estructural importante: estas NO son 600 pruebas
+independientes.** Muchos pares comparten una pata (MES aparece en 5 de
+los 15 pares, M6E en 5, etc.) — un patrón real o espurio en UN producto
+puede aparecer repetido en varios pares sin ser confirmación
+independiente. El top 20 por p-value muestra exactamente esto: MES
+aparece en 6 de las 15 filas más significativas.
+
+**Hallazgo más fuerte de este barrido:** `M2K-M6E, weekly (lookback=5d)
+hold=3d, fade` — **p=0.0003** (retdiff_index) / p=0.0006 (ratio_close),
+N=128, mismo signo ambas mitades. Es la señal semanal-con-hold-corto
+que la Dirección 1 original nunca probó (lookback=5 solo se había
+probado con hold≥5). Aun así, N=128 < 200.
+
+### 2. ZC — nunca tocado, ahora corrido (`scripts/wf_slow_mr_zc.py`)
+
+Mismo grid de 16 combos que los otros 6 productos. **1 de 16 pasa
+p<0.05** (daily hold=2d/fade, p=0.023, N=125). Patrón interesante:
+**los 7 configs de fade dan EV positivo, los 7 de momentum dan EV
+negativo** (consistencia direccional interna, aunque solo 1 cruza el
+umbral). N máximo=125, no alcanza 200.
+
+### 3. Refinamiento de MCL y M6E (`scripts/wf_slow_mr_gap_fill.py`)
+
+**MCL daily-2d/fade:** NO comparte el patrón de viernes negativo de
+MES/MGC — viernes es su MEJOR día (+1.22%), lunes el peor
+(-0.03%, único negativo). Split de mitades consistente (+0.80%,
++0.66%). Filtro de rango alto mejora marginalmente el p (0.012 vs
+0.027 baseline) pero con N menor (83 vs 172) — mismo patrón de "menos
+N, no necesariamente más señal" visto antes.
+
+**M6E daily-3d/fade:** sin patrón de día de semana. Split de mitades
+consistente (+0.093%, +0.076%). Ningún filtro mejora el baseline.
+
+### 4. Segundo hallazgo del spread — MES-M2K daily hold=10d/fade
+
+Split de mitades consistente (+0.58%, +0.27%), confirmado por ambas
+construcciones. **Viernes es su SEGUNDO MEJOR día (+0.58%)** — lo
+opuesto al patrón de la versión hold=5d/momentum del mismo spread.
+**El "efecto viernes" NO es una propiedad robusta ni siquiera dentro
+del mismo par** — aparece en una configuración del spread y no en la
+otra, reforzando tratarlo como observación frágil, no un patrón
+estructural del par.
+
+### 5. Geometría de barrera — nunca variada hasta ahora
+
+Barrido de 10 combinaciones (pt,sl) para los 2 candidatos más fuertes:
+
+- **MES-M2K daily-5d/momentum:** patrón claro y monotónico — a mayor
+  RR (pt/sl), mejor p. El baseline heredado (2.5/1.5, p=0.0019) YA
+  está cerca del óptimo de este rango; `pt=3.0/sl=1.5` da p=0.0016,
+  una mejora marginal, no dramática.
+- **MES+MGC weekly/fade:** mismo patrón cualitativo, menos limpio —
+  baseline (p=0.048) y `pt=3.0/sl=1.5` (p=0.046) prácticamente
+  empatados.
+
+**Conclusión: la geometría heredada de Cerebro 1 (2.5/1.5) NO estaba
+handicapeando los resultados por accidente — ya se encuentra en una
+zona razonablemente buena del espacio.** Hay una mejora marginal
+posible con RR más alto, pero explorar 10 geometrías sobre la MISMA
+muestra que ya generó estos candidatos es, otra vez, búsqueda
+in-sample — no se adopta ninguna geometría "mejor" como upgrade
+confirmado, se reporta como confirmación de que el baseline no era
+arbitrariamente malo.
+
+### Tarea 2 — patrón de calendario aplicado a lo YA VALIDADO
+
+**G2 (Cerebro 1, `scripts/g2_calendar_check.py`):** reconstruido el
+backtest real de G2 (1 entrada/día, alternando dirección vía
+`decide_side()`/`trading_day_index()`, SL=100/TP=40 ticks, fix de
+barras ambiguas ya auditado aplicado) sobre los 2 años reales de MES.
+**WR limpio por día de semana: Lunes 69.6%, Martes 70.5%, Miércoles
+77.5%, Jueves 71.0%, Viernes 69.3% — esencialmente plano.** Excluir
+viernes cambia el WR de 71.57% a 72.13% — **0.56 puntos porcentuales,
+nivel de ruido, no un efecto de calendario real.** El patrón de
+Cerebro 2 NO transfiere a G2.
+
+**Candidato de geometría pura de Cerebro 2 (MGC/150K):** **NO
+APLICABLE tal como se planteó** — es un supuesto sintético de Monte
+Carlo (Bernoulli WR=0.5 por día), nunca derivado de precios reales de
+MGC. No existe un "viernes" real en el modelo que excluir; hacerlo
+requeriría inventar una relación entre el índice de día sintético y el
+calendario real que no está fundamentada en nada. Se documenta la
+limitación en vez de fabricar un número.
+
+### Tabla consolidada final — TODOS los candidatos pendientes
+
+| Candidato | N | p | Notas |
+|---|---|---|---|
+| **M2K-M6E weekly hold=3d/fade** | 128 | **0.0003** | Nuevo, confirmado por 2 construcciones, split-half OK — pero comparte pata M6E con otros hits, ver caveat de correlación |
+| Spread MES-M2K daily hold=5d/momentum | 86 | 0.0019 | Confirmado por 2 construcciones; geometría de barrera no mejora sustancialmente |
+| Spread MES-M2K daily hold=10d/fade | 47 | 0.022 | Confirmado por 2 construcciones, split-half OK, sin patrón de viernes (al contrario del hallazgo hermano) |
+| MES+MGC weekly hold=5d/fade (pooled) | 170 | 0.048 | Geometría alternativa no mejora sustancialmente |
+| MES+MGC weekly/fade, sin viernes | 135 | 0.033 | In-sample, más escepticismo no menos |
+| MCL daily hold=2d/fade | 168 | 0.028 | Sin patrón de viernes (viernes es su mejor día) |
+| M6E daily hold=3d/fade | 126 | 0.032 | Sin patrón de calendario |
+| ZC daily hold=2d/fade | 125 | 0.023 | Nuevo; fade positivo/momentum negativo consistente en los 7 pares de configs |
+
+**NINGUNO alcanza N>200. Ninguno se usa para nada de producción.**
+Con 600+96+16 = 712 pruebas acumuladas en total en esta búsqueda de
+edge, el panorama estadístico agregado sigue siendo: más hits de los
+esperados por puro azar en algunos barridos, pero con estructura de
+correlación entre pares que impide tratarlos como confirmaciones
+independientes, y ningún candidato individual con potencia suficiente
+para una decisión de negocio.
+
