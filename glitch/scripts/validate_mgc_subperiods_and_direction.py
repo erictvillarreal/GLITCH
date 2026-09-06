@@ -69,6 +69,11 @@ def part1_subperiods():
     bounds = pd.date_range(start, end + pd.Timedelta(days=1), periods=N_SUBPERIODS + 1)
     print(f"Rango total: {start.date()} a {end.date()}  |  {N_SUBPERIODS} sub-periodos de igual duracion\n")
 
+    aggregate = wr_conditional_for_window(mgc, tick_size)
+    print(f"Agregado (dataset completo, para referencia de Parte 2): N={aggregate['n']}  "
+          f"WR_condicional={aggregate['wr_conditional']:.4f}  "
+          f"(long={aggregate['wr_long']:.4f}  short={aggregate['wr_short']:.4f})\n")
+
     results = []
     for i in range(N_SUBPERIODS):
         sub = mgc[(mgc.index >= bounds[i]) & (mgc.index < bounds[i + 1])]
@@ -80,20 +85,25 @@ def part1_subperiods():
               f"TP={r['tp_pct']:.1%} SL={r['sl_pct']:.1%} time-exit={r['time_exit_pct']:.1%}")
         print(f"  WR_condicional={r['wr_conditional']:.4f}  (long={r['wr_long']:.4f}  short={r['wr_short']:.4f})  "
               f"diff_vs_0.50={((r['wr_conditional']-0.5)*100):+.2f}pp\n")
-    return results
+    return results, aggregate
 
 
-def part2_combine_direction_sensitivity(subperiod_results):
+def part2_combine_direction_sensitivity(subperiod_results, aggregate):
     print("=" * 100 + "\nPARTE 2: sensibilidad del pass rate del Combine a la asimetria long/short\n" + "=" * 100)
     tick_value = SPECS["MGC"].tick_value_usd
     commission_rt = SPECS["MGC"].commission_roundturn
     gross = SL_TICKS * tick_value * NC
     commission = commission_rt * NC
 
+    # NOTA (07-sep-2026): estos 3 escenarios "agregado" se recalculan del
+    # dataset REALMENTE pasado a este script -- antes estaban hardcodeados
+    # a los valores del dataset viejo (0.4997/0.5278/0.4716), lo que los
+    # dejaba obsoletos/inconsistentes al re-correr contra el dataset con
+    # ventana corregida. Corregido antes de confiar en el resultado.
     scenarios = [
-        ("Alternado (agregado, ya validado)", 0.4997),
-        ("Solo LONG (agregado 2 anios)", 0.5278),
-        ("Solo SHORT (agregado 2 anios)", 0.4716),
+        ("Alternado (agregado, este dataset)", aggregate["wr_conditional"]),
+        ("Solo LONG (agregado, este dataset)", aggregate["wr_long"]),
+        ("Solo SHORT (agregado, este dataset)", aggregate["wr_short"]),
     ]
     for r in subperiod_results:
         scenarios.append((f"Solo LONG, sub-periodo {r['periodo']}", r["wr_long"]))
@@ -107,5 +117,5 @@ def part2_combine_direction_sensitivity(subperiod_results):
 
 
 if __name__ == "__main__":
-    subperiod_results = part1_subperiods()
-    part2_combine_direction_sensitivity(subperiod_results)
+    subperiod_results, aggregate = part1_subperiods()
+    part2_combine_direction_sensitivity(subperiod_results, aggregate)
