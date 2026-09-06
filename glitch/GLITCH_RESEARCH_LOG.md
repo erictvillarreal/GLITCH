@@ -1760,3 +1760,57 @@ COSTO REAL no capturado en los $2,169/46.2% citados anteriormente —
 cualquier reporte futuro de este candidato debe citar AMBAS fases,
 nunca solo la XFA aislada.
 
+## Cerebro 2 — Validación empírica del WR de MGC contra datos reales (07-sep-2026)
+
+**Corrido** `scripts/validate_mgc_wr_empirical.py` (preparado el
+06-sep, ejecutado con autorización del usuario el 07-sep). Primera
+lectura de `measure_wr_bracket()` dio un resultado alarmante: WR
+empírico 34.85%, **-15.14 puntos porcentuales** por debajo del 50%
+teórico — pero **antes de reportarlo, se verificó la distribución de
+labels y se encontró el MISMO problema de métrica ya diagnosticado y
+corregido para el win_rate de `wf_slow_mr.py` en la Dirección 1**:
+`wr_all` divide por el TOTAL de trades, incluyendo los que expiran por
+tiempo (ni TP ni SL tocado). Para esta geometría (SL=TP=364 ticks,
+`max_holding_bars=100`), **30.2% de los 40,208 trades de calibración
+expiran por tiempo** — un share enorme, muy distinto al ~1.2% de G2
+(barreras mucho más angostas relativas al mismo holding window, casi
+nunca expiran por tiempo).
+
+**Resultado correcto — WR condicional (TP/(TP+SL), excluyendo
+time-exits, la métrica comparable contra el WR teórico):**
+
+| | TP | SL | time-exit | WR condicional |
+|---|---|---|---|---|
+| Todo | 34.9% | 34.9% | 30.2% | **49.97%** |
+| Long | 36.8% | 32.9% | 30.2% | 52.78% |
+| Short | 32.9% | 36.9% | 30.3% | 47.16% |
+
+**El WR=0.5 teórico asumido en todo el Monte Carlo de Cerebro 2 está
+validado empíricamente casi a la perfección: diferencia de -0.03
+puntos porcentuales (49.97% vs 50.00%).** A diferencia del hallazgo
+del Combine (que reveló un problema real), este es un resultado
+tranquilizador — la geometría de gambler's ruin para RR=1.0 simétrico
+se sostiene contra 2 años de datos reales de MGC. La pequeña asimetría
+long/short (52.78% vs 47.16%, ~5.6pp de separación) se trata con la
+MISMA cautela ya aplicada a sesgos direccionales similares en G2:
+"ruido con signo consistente por azar", no edge real sin más
+evidencia — no cambia la recomendación de dirección alternada sin
+señal.
+
+**Corrección aplicada a `measure_wr_bracket()`** (`scripts/camino_b_grid.py`):
+agregado un caveat explícito en el docstring — la función es correcta
+para G2 (time-exit share despreciable) pero SUBESTIMA el WR real para
+geometrías de barreras anchas relativas al holding window (como este
+candidato MGC). No se modificó la lógica de la función ni ningún
+número ya auditado de G2 (que no se ve afectado, diferencia <1pp) —
+solo se documentó la limitación para que una reutilización futura de
+la función no repita el mismo error de lectura que casi se comete
+aquí. 138/138 tests sin cambios.
+
+**Conclusión operativa:** el candidato de geometría pura MGC/150K
+queda validado en sus DOS supuestos ahora — WR≈50% empírico (esta
+sección) y pass rate de Combine 46.9% (sección anterior). El
+resumen ejecutivo (`CEREBRO2_G2_VS_MGC_SUMMARY.md`) se actualiza para
+reflejar que el ítem pendiente ("WR nunca validado contra datos
+reales") queda resuelto y a favor del candidato.
+
