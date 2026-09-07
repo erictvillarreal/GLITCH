@@ -2261,3 +2261,156 @@ búsqueda de edge — timelines separados, no mezclados.
 existe en `main`) — ver commit siguiente en esta misma rama para el
 mismo cambio aplicado ahí.
 
+## Incidente: GEOMETRY-MGC crash-loop en Railway, rama incorrecta conectada (07-sep-2026)
+
+**Síntoma reportado por el usuario:** el servicio GEOMETRY-MGC en
+Railway llevaba 11+ horas en estado "Running" tras un deploy a las
+06:01 CT, mientras GEOMETRY y COMBO2D (mismo día, mismo feriado)
+terminaron en segundos con "No es dia de trading — saliendo".
+
+**Diagnóstico inicial (por descarte, antes del log real):** se
+revisaron y descartaron, con evidencia directa contra el código de
+`scheduler/geometry_mgc_scheduler.py`:
+1. Calendario de feriados — idéntico byte-a-byte entre los 3
+   schedulers (`geometry_scheduler.py`, `combo2d_scheduler.py`,
+   `geometry_mgc_scheduler.py`), y 07-sep-2026 SÍ está correctamente
+   listado como feriado en los 3.
+2. `_fail_if_entry_wait_not_confirmed()` — no puede colgarse: llama a
+   `send()`, que tiene `timeout=10` y captura sus propias excepciones
+   internamente: nunca propaga un hang hacia afuera.
+3. Ninguna llamada de red alcanzable desde `run()` carece de timeout
+   explícito (`fetch_latest_price`: 20s por intento; `telegram_bot.send()`:
+   10s; el envío de Telegram duplicado deliberadamente en
+   `execution/env_check.py`: 10s también).
+
+Conclusión de ese primer análisis: el código, tal como está
+committeado (`ENTRY_WAIT_MINUTES = None` desde el commit original,
+confirmado con `git log --all` que nunca se le asignó un valor real),
+debería fallar en segundos vía `_fail_if_entry_wait_not_confirmed()` —
+un "Running" de 11+ horas era inconsistente con este código
+ejecutándose normalmente.
+
+**Causa raíz real, confirmada con el log real de Railway que el
+usuario trajo después:**
+
+```
+python: can't open file '/app/scheduler/geometry_mgc_scheduler.py':
+[Errno 2] No such file or directory
+```
+
+Las "11 horas corriendo" eran un ciclo de crash-restart continuo, no
+un proceso colgado — consistente con `restartPolicyType: ON_FAILURE`
+visto en `glitch/railway.json`.
+
+**Dos problemas distintos, encontrados en cascada:**
+
+1. **Prefijo de ruta.** La ruta real del archivo (confirmada con
+   `git ls-tree -r cerebro2-dev --name-only`) es
+   `glitch/scheduler/geometry_mgc_scheduler.py`. El Start Command
+   configurado en Railway usaba `scheduler/geometry_mgc_scheduler.py`
+   (sin el prefijo `glitch/`) — inconsistente con el patrón ya usado
+   por los 2 servicios que sí funcionan (`worker`/`worker-geometry`
+   en el `Procfile` raíz, ambos con el prefijo `glitch/`), y
+   probablemente copiado del patrón de `glitch/railway.json`
+   (`python scheduler/glitch_scheduler.py`, sin prefijo), que solo es
+   correcto si el Root Directory de ESE servicio está fijado a
+   `glitch/` — una convención distinta a la de GEOMETRY/COMBO2D.
+
+2. **Causa más fundamental, encontrada después: el servicio
+   GEOMETRY-MGC estaba conectado a la rama `main` en Railway, no a
+   `cerebro2-dev`.** `scheduler/geometry_mgc_scheduler.py` y
+   `CANDIDATES["MGC_XFA_150K"]` NUNCA existieron en `main` — todo el
+   código de Cerebro 2 vive exclusivamente en `cerebro2-dev`. El
+   archivo nunca existió en la rama que Railway estaba mirando,
+   independientemente de cualquier problema de ruta. Esto explica el
+   síntoma de forma más completa que el problema de prefijo por sí
+   solo.
+
+**Decisión de gobernanza, documentada explícitamente (autorización
+puntual del usuario, no una regla general nueva):** el usuario
+autorizó conectar el servicio GEOMETRY-MGC en Railway directamente a
+la rama `cerebro2-dev` — una excepción puntual a la práctica de "nada
+llega a producción sin pasar por `main`", limitada explícitamente a
+ESTE servicio específico. No es un merge de `cerebro2-dev` a `main` —
+GEOMETRY y COMBO2D siguen conectados a `main` sin cambios. La
+justificación: todo el código real de Cerebro 2 (incluyendo el
+scheduler mismo) vive solo en `cerebro2-dev`, y forzar un merge
+completo a `main` solo para desbloquear este deploy mezclaría de forma
+prematura ~5,659 líneas de trabajo de investigación (scripts de grid,
+Monte Carlo, validaciones) que no tienen relación con hacer funcionar
+este servicio.
+
+**Verificación de riesgo, hecha ANTES de que el usuario confirmara el
+cambio de rama (no después):** diff completo `main`...`cerebro2-dev`
+revisado archivo por archivo. Todo lo que cambia respecto a `main` es:
+- Archivos nuevos, autocontenidos, nunca importados por ningún
+  scheduler (`scripts/cerebro2_*.py`, `scripts/wf_slow_*.py`,
+  `scripts/validate_mgc_*.py`, `scripts/probe_massive_mgc_delay.py`,
+  `scripts/diagnose_massive_aggs_query.py`, `scripts/fetch_mgc_correct_window.py`,
+  `scripts/g2_calendar_check.py`, `tests/test_funded_account.py`) —
+  se ejecutan solo manualmente, Railway nunca los toca.
+- `core/funded_account.py` (+333 líneas) — NO importado por ningún
+  scheduler (ni GEOMETRY, ni COMBO2D, ni GEOMETRY-MGC); solo lo usan
+  los scripts de Monte Carlo offline.
+- `strategies/geometry_pure.py` (+11 líneas) — puramente aditivo,
+  agrega `CANDIDATES["MGC_XFA_150K"]` bajo una clave nueva y distinta,
+  sin tocar `CANDIDATES["MGC"]` ni ninguna otra entrada existente.
+- `scripts/camino_b_grid.py` (+14 líneas) — solo un docstring/caveat
+  agregado a `measure_wr_bracket()`, cero cambio de lógica.
+- `GLITCH_RESEARCH_LOG.md`, `CEREBRO2_G2_VS_MGC_SUMMARY.md` —
+  documentación, sin impacto en runtime.
+- `scheduler/geometry_mgc_scheduler.py` — el archivo que se está
+  desplegando, ya revisado en el diagnóstico de arriba.
+- **`execution/contracts.py`, `execution/gist_store.py`,
+  `execution/env_check.py`, `execution/ct_logging.py`,
+  `scheduler/telegram_bot.py`, `scheduler/combo2d_scheduler.py`,
+  `scheduler/geometry_scheduler.py` — CERO diferencias respecto a
+  `main`** (confirmado, no están en el diff). Los módulos compartidos
+  que GEOMETRY y COMBO2D dependen quedan exactamente iguales; conectar
+  GEOMETRY-MGC a esta rama no puede afectarlos de ninguna forma,
+  incluso en el hipotético caso de que alguno de los dos estuviera
+  también conectado a `cerebro2-dev` (no lo está — ambos siguen en
+  `main`).
+
+**Conclusión del análisis de riesgo: conectar GEOMETRY-MGC a
+`cerebro2-dev` es seguro.** El único elemento "pendiente" dentro de lo
+que realmente se ejecuta es `ENTRY_WAIT_MINUTES = None` en el propio
+`geometry_mgc_scheduler.py` — y eso falla de forma controlada (alerta
+a Telegram + `sys.exit(1)`), no de forma insegura. **Advertencia
+explícita para el usuario:** una vez resuelto el problema de
+rama/ruta, la PRÓXIMA corrida de este servicio va a volver a terminar
+casi inmediatamente — esta vez con el error esperado y ya documentado
+de "ENTRY_WAIT_MINUTES sin confirmar", no con el crash de archivo no
+encontrado. Eso no es un bug nuevo; es el guard de "fallar explícito,
+no adivinar" ya construido deliberadamente, haciendo exactamente lo
+que se diseñó para hacer. El siguiente paso real para que este
+candidato empiece a paper-tradear de verdad es correr
+`scripts/probe_massive_mgc_delay.py` lunes-viernes en horario de
+mercado activo y fijar `ENTRY_WAIT_MINUTES` con el valor medido.
+
+**Riesgo aceptado hacia adelante, no solo hoy:** conectar este
+servicio a `cerebro2-dev` significa que CUALQUIER push futuro a esta
+rama dispara un redeploy automático de GEOMETRY-MGC. Mientras el
+trabajo futuro en esta rama siga el mismo patrón de hoy (scripts de
+investigación aislados, sin tocar `execution/*`, `scheduler/telegram_bot.py`,
+ni `strategies/geometry_pure.py::CANDIDATES["MGC_XFA_150K"]`), el
+riesgo se mantiene bajo. Cualquier cambio futuro a esos archivos
+específicos debe tratarse, de aquí en adelante, con el mismo cuidado
+que un cambio a `main` — no como investigación aislada de bajo riesgo.
+
+**Fix aplicado (config, no código de producción):** agregada una
+entrada `worker-geometry-mgc` al `Procfile` de la raíz del repo en
+esta rama, con la ruta correcta:
+```
+worker-geometry-mgc: python glitch/scheduler/geometry_mgc_scheduler.py
+```
+Esto NO reemplaza por sí solo el Start Command ya configurado
+manualmente en el dashboard de Railway para este servicio (que es lo
+que causó el problema de prefijo) — el usuario debe, en el dashboard:
+(a) confirmar el Root Directory del servicio (todo indica que es la
+raíz del repo, igual que GEOMETRY/COMBO2D, dado el path del crash
+`/app/scheduler/...`), y (b) fijar el Start Command explícitamente a
+`python glitch/scheduler/geometry_mgc_scheduler.py`, o limpiar el
+Start Command y apuntar el servicio al process type
+`worker-geometry-mgc` de este Procfile.
+
