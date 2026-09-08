@@ -114,7 +114,47 @@ POLL_INTERVAL = 60  # segundos entre polls
 # cierre del periodo, este reporte solo la deja visible dia a dia.
 THEORETICAL_PASS_RATE = 0.8144
 
+# Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar en los
+# 3 schedulers, ver GLITCH_RESEARCH_LOG.md. PREFIX identifica el mensaje
+# como Cerebro 1/COMBINE de un vistazo, sin ambiguedad con Cerebro 2/XFA
+# (geometry_mgc_scheduler.py) ni con COMBO2D.
+PREFIX = f"S10GLITCH - COMBINE - {PRODUCT_KEY}"
+
+# "Dias vs. Estimado" -- dias_calendario_esperados = dias_promedio_resolucion
+# (avg de TODOS los intentos de Combine resueltos, pase o truene) x
+# (1/pass_rate) (intentos esperados hasta pasar). Ver
+# GLITCH_RESEARCH_LOG.md, "Duracion recomendada del periodo de paper
+# trading" (25-ago-2026): dias_promedio_resolucion=3.6571,
+# pass_rate=0.8144 -> intentos_esperados=1.2279 ->
+# dias_calendario_esperados=4.4905. Redondeado a 4.49. Numero ya
+# calculado y documentado en esa sesion -- no requiere una corrida
+# nueva (a diferencia del equivalente de MGC, ver
+# scripts/mgc_dias_esperados.py, 09-sep-2026).
+DIAS_ESPERADOS = 4.49
+
 _front_month_cache: dict[str, tuple[str, str]] = {}
+
+
+def utc_now_str():
+    """Timestamp UTC para los mensajes de Telegram (template 09-sep-2026)
+    -- distinto de ct_now(), que sigue usandose para el timing operativo
+    del scheduler (apertura, flatten, etc). No afecta setup_ct_logging()
+    (execution/ct_logging.py) -- los logs del servidor siguen en CT."""
+    return datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _peak_equity(paper_log: list) -> float:
+    """Maximo historico rodante del PnL acumulado -- calculado en el
+    momento desde paper_log existente, sin nuevo estado persistido
+    (template de Telegram, 09-sep-2026). paper_log ya esta en orden
+    cronologico (una entrada por dia, appendeada en secuencia)."""
+    peak = 0.0
+    running = 0.0
+    for e in paper_log:
+        running += e.get('pnl', 0)
+        if running > peak:
+            peak = running
+    return peak
 
 
 def _paper_progress(paper_log: list, today_str: str) -> dict:
@@ -213,6 +253,15 @@ def run():
     now = ct_now()
     today_str = str(date.today())
     paper_log = load_log()
+    # NOTA (09-sep-2026): "Progreso a Target" es ACUMULADO desde el dia 1
+    # de paper trading, SIN limite de intento (el codigo no detecta
+    # pass/blow del Combine ni resetea nada -- decision explicita del
+    # usuario de no agregar esa logica en este cambio de formato, ver
+    # GLITCH_RESEARCH_LOG.md). Si el paper trading corre lo suficiente,
+    # puede superar $3,000 o caer por debajo del floor sin que el mensaje
+    # lo refleje como "intento resuelto" -- tracking real de limites de
+    # intento queda como tarea futura separada.
+    total_pnl_before = sum(e.get('pnl', 0) for e in paper_log)
 
     # ── 1. Resuelve el contrato en uso (para logging/alertas de vencimiento --
     #        ver docstring de arriba: el feed de precio en vivo usa el simbolo
@@ -223,7 +272,7 @@ def run():
         check_expiry_alerts(_front_month_cache, send, f"GEOMETRY-{PRODUCT_KEY}")
     except Exception as e:
         log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
-        send(f"GLITCH - GEOMETRY-{PRODUCT_KEY}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
+        send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
         return
 
     # ── 2. Señal: sin predictiva, funcion pura de la fecha (ver geometry_pure.py) ──
@@ -251,12 +300,12 @@ def run():
     else:
         pass_rate_line = "sin ciclos resueltos todavia"
 
-    kickoff = (f"GLITCH - GEOMETRY-{PRODUCT_KEY} | INICIO DE DIA\n"
+    kickoff = (f"{PREFIX} | INICIO DE DIA\n"
                f"Dia {progress['days_elapsed']} de paper  |  Ciclos completados: {progress['n_cycles']}\n"
                f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={CFG.direction})\n"
                f"Resultado de ayer: {yesterday_line}\n"
                f"Pass rate acumulado: {pass_rate_line}\n"
-               f"{datetime.now(CT).strftime('%Y-%m-%d %H:%M CT')}")
+               f"{utc_now_str()}")
     send(kickoff)
     log.info(kickoff.replace("\n", " | "))
 
@@ -296,7 +345,7 @@ def run():
 
     if entry_bars is None or entry_bars.empty:
         gave_up_at = ct_now().strftime("%H:%M:%S")
-        msg = (f"GLITCH - GEOMETRY-{PRODUCT_KEY}\nSTATUS: ERROR\n"
+        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
                f"ERROR: no entry data available\n"
                f"Se rindio tras {attempt + 1} intentos a las {gave_up_at} CT")
         send(msg)
@@ -320,14 +369,17 @@ def run():
     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
     log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
 
-    msg = (f"GLITCH DETECTED - GEOMETRY-{PRODUCT_KEY}\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'}\n"
-           f"STATUS: OPEN\n"
-           f"{direction_str}: {entry_price:,.4f}\n"
-           f"TP/SL: {tp_price:,.4f} - {sl_price:,.4f}\n"
-           f"ASSET: {CFG.spec.label} ({ticker})\n"
-           f"SIZE: {CFG.nc} Contracts\n"
-           f"{datetime.now(CT).strftime('%Y-%m-%d %H:%M CT')}")
+    pct_target_before = total_pnl_before / 3000 * 100
+    msg = (f"{PREFIX}\n"
+           f"[OPEN]\n"
+           f"Symbol: {CFG.spec.label} ({ticker})\n"
+           f"Direction: {direction_str}\n"
+           f"Entry: {entry_price:,.4f}\n"
+           f"Contracts: {CFG.nc}\n"
+           f"TP: {tp_price:,.4f}\n"
+           f"SL: {sl_price:,.4f}\n"
+           f"Progreso a Target: ${total_pnl_before:,.2f} / $3,000 ({pct_target_before:.1f}%)\n"
+           f"{utc_now_str()}")
     send(msg)
 
     # ── 4. Monitorea la posicion -- flatten obligatorio de fin de sesion es la
@@ -375,12 +427,17 @@ def run():
     pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
     log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
 
-    msg = (f"GLITCH CLOSED - GEOMETRY-{PRODUCT_KEY}\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'} | {result}\n"
-           f"{direction_str}: {entry_price:,.4f} → {exit_price:,.4f}\n"
-           f"PnL: ${pnl:+,.2f} USD\n"
-           f"ASSET: {CFG.spec.label}\n"
-           f"{datetime.now(CT).strftime('%Y-%m-%d %H:%M CT')}")
+    progreso_acumulado = total_pnl_before + pnl
+    pct_target_acumulado = progreso_acumulado / 3000 * 100
+    msg = (f"{PREFIX}\n"
+           f"[CLOSE] [{result}]\n"
+           f"Symbol: {CFG.spec.label} ({ticker})\n"
+           f"PnL: ${pnl:+,.2f}\n"
+           f"Contracts: {CFG.nc}\n"
+           f"Progreso a Target: ${progreso_acumulado:,.2f} / $3,000 ({pct_target_acumulado:.1f}%)\n"
+           f"Dia de paper: {progress['days_elapsed']}\n"
+           f"Pass Rate: {pass_rate_line}\n"
+           f"{utc_now_str()}")
     send(msg)
 
     paper_log.append({
@@ -402,10 +459,16 @@ def run():
     else:
         pass_rate_line = "sin ciclos resueltos todavia"
 
-    summary = (f"GLITCH - GEOMETRY-{PRODUCT_KEY} | DAILY SUMMARY\n"
-               f"Dia {progress['days_elapsed']} de paper  |  Ciclos: {progress['n_cycles']}\n"
+    peak = _peak_equity(paper_log)
+
+    summary = (f"{PREFIX}\n"
+               f"Equity: ${total_pnl:,.2f}\n"
+               f"Peak: ${peak:,.2f}\n"
+               f"PnL Hoy: ${pnl:+,.2f}\n"
+               f"Ciclos: {progress['n_cycles']}\n"
                f"Pass Rate: {pass_rate_line}\n"
-               f"PnL Total: ${total_pnl:+,.2f} USD")
+               f"Dias vs. Estimado: {progress['days_elapsed']} / {DIAS_ESPERADOS} esperados\n"
+               f"{utc_now_str()}")
     send(summary)
     log.info("Done — saliendo")
 

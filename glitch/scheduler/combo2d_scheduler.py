@@ -9,7 +9,7 @@ Salida: via triple-barrier ATR (pt=2.5x, sl=1.5x) o fin de sesion (14:30 CT)
 Railway Cron: 25 14 * * 1-5 (9:25 AM CT L-V)
 """
 import os, sys, logging, time, datetime as dt_module
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -50,8 +50,27 @@ ATR_WINDOW    = 20                                  # barras para ATR
 LOG_FILE      = "combo2d_log.json"  # nombre del archivo DENTRO del gist compartido -- ver execution/gist_store.py
 POLL_INTERVAL = 60  # segundos entre polls
 
+# Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar que
+# geometry_scheduler.py/geometry_mgc_scheduler.py, ver GLITCH_RESEARCH_LOG.md.
+# Aplicado por consistencia visual (confirmado con el usuario) aunque
+# combo_2d sigue siendo la estrategia ya descartada por edge no
+# significativo (walk-forward p=0.44-0.45) -- este cambio es puramente de
+# formato, no cambia esa conclusion.
+PREFIX = "S10GLITCH - COMBO2D - MNQ"
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def ct_now(): return datetime.now(CT)
+
+
+def utc_now_str():
+    """Timestamp UTC para los mensajes de Telegram. NOTA (09-sep-2026): el
+    codigo previo ya intentaba usar datetime.now(UTC) en los mensajes de
+    OPEN/CLOSE (lineas originales 247/298) pero `UTC` nunca estaba
+    importado -- NameError latente, nunca disparado porque las unicas
+    corridas exitosas confirmadas de este scheduler tomaron la rama
+    NO_SIGNAL (que no llega a ese codigo). Encontrado al tocar este mismo
+    bloque para el rediseño de templates, corregido aqui de una vez."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 # REFACTOR (27-ago-2026): load_log()/save_log() ya NO leen/escriben el
 # filesystem local -- los servicios "Cron Schedule" de Railway no tienen
@@ -192,9 +211,10 @@ def run():
     check_expiry_alerts(_front_month_cache, send, "COMBO2D")
 
     if side == 0:
-        msg = f"""GLITCH - COMBO2D
-STATUS: NO SIGNAL
-REASON: {reason}"""
+        msg = (f"{PREFIX}\n"
+               f"STATUS: NO SIGNAL\n"
+               f"REASON: {reason}\n"
+               f"{utc_now_str()}")
         send(msg)
         paper_log.append({"date": today_str, "signal": False, "pnl": 0, "note": reason})
         save_log(paper_log)
@@ -217,9 +237,10 @@ REASON: {reason}"""
         time.sleep(30)
 
     if entry_bars is None or entry_bars.empty:
-        msg = """GLITCH - COMBO2D
-STATUS: ERROR
-ERROR: No MNQ data available for entry"""
+        msg = (f"{PREFIX}\n"
+               f"STATUS: ERROR\n"
+               f"ERROR: No MNQ data available for entry\n"
+               f"{utc_now_str()}")
         send(msg)
         paper_log.append({"date": today_str, "signal": True, "side": side,
                           "pnl": 0, "note": "no_data_entry"})
@@ -236,15 +257,16 @@ ERROR: No MNQ data available for entry"""
     log.info(f"Entrada: {direction_str} @ {entry_price:.2f}")
     log.info(f"ATR={atr:.2f}  TP={tp_price:.2f} (+{tp_pts:.2f}pts)  SL={sl_price:.2f} (-{sl_pts:.2f}pts)")
 
-    msg = (f"GLITCH DETECTED - COMBO2D\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'}\n"
-           f"STATUS: OPEN\n"
-           f"{direction_str}: {entry_price:,.2f}\n"
-           f"TP/SL: {tp_price:,.2f} - {sl_price:,.2f}\n"
-           f"ASSET: MNQ\n"
-           f"SIZE: {NC} Contracts\n"
+    msg = (f"{PREFIX}\n"
+           f"[OPEN]\n"
+           f"Symbol: MNQ\n"
+           f"Direction: {direction_str}\n"
+           f"Entry: {entry_price:,.2f}\n"
+           f"Contracts: {NC}\n"
+           f"TP: {tp_price:,.2f}\n"
+           f"SL: {sl_price:,.2f}\n"
            f"ATR: {atr:.2f}\n"
-           f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+           f"{utc_now_str()}")
     send(msg)
 
     # ── 4. Monitorea la posición ─────────────────────────────────────────────
@@ -290,12 +312,12 @@ ERROR: No MNQ data available for entry"""
     pnl = (exit_price - entry_price) * side * MNQ_POINT * NC
     log.info(f"EXIT {result} @ {exit_price:.2f} | PnL={pnl:+.2f}")
 
-    msg = (f"GLITCH CLOSED - COMBO2D\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'} | {result}\n"
-           f"{direction_str}: {entry_price:,.2f} → {exit_price:,.2f}\n"
-           f"PnL: ${pnl:+,.2f} USD\n"
-           f"ASSET: MNQ\n"
-           f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+    msg = (f"{PREFIX}\n"
+           f"[CLOSE] [{result}]\n"
+           f"Symbol: MNQ\n"
+           f"Contracts: {NC}\n"
+           f"PnL: ${pnl:+,.2f}\n"
+           f"{utc_now_str()}")
     send(msg)
 
     paper_log.append({
@@ -314,10 +336,11 @@ ERROR: No MNQ data available for entry"""
     total = sum(1 for e in paper_log if e.get('result') in ('TP','SL','FLATTEN'))
     wr    = wins/total if total > 0 else 0
 
-    summary = (f"GLITCH - COMBO2D | DAILY SUMMARY\n"
+    summary = (f"{PREFIX}\n"
                f"Trades: {total}\n"
                f"Win Rate: {wr:.1%}\n"
-               f"PnL Total: ${total_pnl:+,.2f} USD")
+               f"PnL Total: ${total_pnl:+,.2f}\n"
+               f"{utc_now_str()}")
     send(summary)
     log.info("Done — saliendo")
 

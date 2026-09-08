@@ -806,3 +806,79 @@ requiere ninguna acción humana.**
 roll trimestral, MESZ6/MNQZ6 en dic-2026, y para cualquier producto
 nuevo que se agregue): `scripts/verify_front_month_roll_history.py`.
 
+## Rediseño de templates de Telegram — Cerebro 1, Cerebro 2, COMBO2D (09-sep-2026)
+
+**Objetivo:** distinguir de un vistazo cuál mensaje es de cuál
+cerebro/producto en Telegram, sin ambigüedad, texto plano sin emojis.
+Prefijo nuevo en TODO mensaje de cada scheduler: `S10GLITCH - COMBINE -
+[PRODUCTO]` (Cerebro 1, `geometry_scheduler.py`), `S10GLITCH - XFA -
+[PRODUCTO]` (Cerebro 2, `geometry_mgc_scheduler.py`), `S10GLITCH -
+COMBO2D - MNQ` (estrategia descartada, aplicado por consistencia visual
+según confirmación explícita del usuario). Timestamps cambiados de CT a
+UTC en los mensajes (no en los logs del servidor — `setup_ct_logging()`
+sigue en CT, sin cambios).
+
+**Decisiones de campo, reportadas y confirmadas ANTES de implementar**
+(ver mapeo completo campo-por-campo en el turno anterior de esta
+sesión):
+
+1. **"WR:" no "Pass Rate:" en el template XFA.** Evita reintroducir la
+   confusión WR-vs-pass-rate que este proyecto ya resolvió una vez (ver
+   "HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2" en `cerebro2-dev`) — WR
+   (~50%) y el pass rate de Combine de ese mismo candidato (46.9%/47.5%)
+   son números distintos, y el template de Combine sí usa "Pass Rate"
+   correctamente para SU propia métrica.
+2. **"Progreso a Target" y "Dias vs. Estimado" son acumulados sin límite
+   de intento**, documentado explícitamente en comentarios inline en
+   ambos schedulers — el código no detecta pass/blow del Combine ni
+   resetea nada; tracking real de límites de intento queda como tarea
+   futura separada, fuera de este cambio puramente de formato.
+3. **"Dias vs. Estimado" calculado formalmente, no a mano.** G2 ya tenía
+   el número documentado (`dias_calendario_esperados=4.49`, ver
+   "Duración recomendada del período de paper trading", 25-ago-2026) —
+   se reusó tal cual. Para MGC, el número que se había mencionado
+   informalmente (~4.5 días) resultó ser un mix-up con el propio número
+   de G2 — se calculó desde cero con `scripts/mgc_dias_esperados.py`
+   (mismo motor `TopstepMonteCarloSimulator` ya auditado, misma fórmula
+   que G2): **13.87 días** (WR=0.5020 empírico, ventana corregida) /
+   13.99 días (WR=0.50 teórico) — prácticamente insensible a cuál WR se
+   use. `DIAS_ESPERADOS=13.9` en `geometry_mgc_scheduler.py`
+   (`cerebro2-dev`).
+4. **"Peak" (Cerebro 1) implementado sin nuevo estado persistido** —
+   `_peak_equity()`, máximo histórico rodante del PnL acumulado,
+   calculado en el momento desde `paper_log` existente en cada corrida.
+5. **"Next Payout"/"Payout Total" (Cerebro 2) con placeholder estático**
+   ("sin tracking de elegibilidad implementado todavia") — implementar
+   la regla real de elegibilidad de Topstep (5 días ganadores de $150+
+   neto, O balance ≥$55k) es lógica nueva, explícitamente fuera de
+   alcance de este cambio.
+6. **`telegram_bot.py` sin tocar** — mantiene el patrón existente
+   (f-strings inline por scheduler); las funciones `notify_brain1_*`/
+   `notify_brain2_*` (con emojis, ya existentes pero nunca usadas por
+   ningún scheduler real) quedan sin usar, tal como estaban.
+
+**Hallazgo no relacionado, encontrado y corregido al tocar
+`combo2d_scheduler.py` para este mismo cambio:** los mensajes de
+OPEN/CLOSE ya usaban `datetime.now(UTC)`, pero `UTC` nunca estaba
+importado en el archivo (`NameError` latente). Nunca se había disparado
+porque la única corrida exitosa confirmada de este scheduler (02-sep-2026,
+ver sección de arriba) tomó la rama NO_SIGNAL, que no llega a ese
+código — la primera vez que combo_2d generara una señal real, habría
+crasheado. Corregido como parte de este mismo cambio (import de
+`timezone` agregado, helper `utc_now_str()` nuevo) — no es una
+consecuencia del rediseño de templates, es un bug preexistente
+descubierto al tocar ese bloque de código.
+
+**Fuera de alcance, observado pero no tocado:** `check_expiry_alerts()`
+(`execution/contracts.py`, compartida por los 3 schedulers) sigue
+usando un emoji (⚠️) en su mensaje de alerta de vencimiento de
+contrato — contradice el objetivo de "sin emojis" de este cambio, pero
+modificar esa función no fue parte de lo pedido y afecta a los 3
+schedulers a la vez; se deja para una decisión futura explícita.
+
+**Cambio puramente de formato/presentación** — ninguna lógica de
+trading, cálculo de señal, ni persistencia en Gist fue tocada (aparte
+del fix del `NameError` de arriba, que es una corrección de bug, no un
+cambio de comportamiento de trading). Suite completa de tests verde en
+los 3 archivos antes de cada commit.
+
