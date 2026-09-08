@@ -32,23 +32,21 @@ DIFERENCIA DELIBERADA con scheduler/geometry_scheduler.py (MES/G2):
    minutos antes del cierre de la ventana validada, 15:00 CT, que
    geometry_scheduler.py ya usa para MES).
 
-3. ENTRY_WAIT_MINUTES: PENDIENTE DE CONFIRMAR. El margen de espera
-   post-apertura antes de buscar el primer precio de entrada depende
-   del delay REAL de Massive para MGC, que a la fecha de este commit
-   AUN NO SE HA MEDIDO CORRECTAMENTE (dos intentos fallidos: el primero
-   por un bug de query ya corregido, el segundo por medir en fin de
-   semana -- ver scripts/probe_massive_mgc_delay.py). Este scheduler
-   SE NIEGA A ARRANCAR (falla ruidosamente, con alerta a Telegram) si
-   ENTRY_WAIT_MINUTES sigue en None -- no correr con un margen
-   adivinado, mismo principio de "fallar explicito, no adivinar" ya
-   aplicado a MASSIVE_API_KEY/yf_ticker/etc. en el resto del repo.
-
-   Para completar: correr `python scripts/probe_massive_mgc_delay.py`
-   lunes-viernes en horario de mercado activo, tomar el delay promedio
-   medido (redondeado hacia arriba con margen de seguridad, mismo
-   criterio que ya se aplico a Yahoo -- ver el margen de 9:35 vs el
-   umbral confirmado de 9:40:09 para MES), y reemplazar el valor de
-   ENTRY_WAIT_MINUTES abajo antes de desplegar.
+3. ENTRY_WAIT_MINUTES: CONFIRMADO (09-sep-2026). El margen de espera
+   post-apertura antes de buscar el primer precio de entrada se midio
+   con `scripts/probe_massive_mgc_delay.py` en 2 corridas, en horarios
+   distintos del dia (manana y tarde/noche): 9.43 min y 9.50 min
+   promedio respectivamente, maximo observado 9.94 min -- diferencia
+   de 0.07 min entre corridas, rangos solapados. Delay de Massive
+   confirmado ESTABLE entre momentos del dia, a diferencia del de
+   Yahoo (que fue erratico y costo 2.5 semanas de incidentes con
+   MES=F). ENTRY_WAIT_MINUTES=13 incluye margen de seguridad sobre el
+   maximo observado. Ver GLITCH_RESEARCH_LOG.md, 08/09-sep-2026, para
+   el detalle de ambas corridas. Este scheduler SE NIEGA A ARRANCAR
+   (falla ruidosamente, con alerta a Telegram) si ENTRY_WAIT_MINUTES
+   alguna vez vuelve a quedar en None -- mismo principio de "fallar
+   explicito, no adivinar" ya aplicado a MASSIVE_API_KEY/yf_ticker/etc.
+   en el resto del repo.
 
 4. Reporte de progreso: WR empirico vs WR teorico (0.50), no pass_rate
    de Combine -- este candidato es de geometria pura para XFA, no para
@@ -135,23 +133,17 @@ POLL_INTERVAL = 60  # segundos entre polls, mismo valor que geometry_scheduler.p
 # ver docstring del modulo).
 THEORETICAL_WR = 0.50
 
-# PROVISIONAL -- NO es el valor definitivo (08-sep-2026, ver
-# GLITCH_RESEARCH_LOG.md). Basado en UNA sola corrida de
-# scripts/probe_massive_mgc_delay.py: delay promedio 9.43 min, rango
-# 9.07-9.78 min, N=6 mediciones dentro de esa unica corrida. Mismo
-# estandar de "medir, no asumir" ya aplicado a Yahoo -- un solo punto
-# de muestra (un solo momento del dia) no confirma que el delay sea
-# estable en otros momentos (apertura, mediodia, cierre). Valor fijado
-# con margen de seguridad sobre el maximo observado (9.78 min) para
-# permitir que el scheduler empiece a operar esta semana, NO porque el
-# numero ya este confirmado como definitivo.
-#
-# PENDIENTE: repetir scripts/probe_massive_mgc_delay.py en otros
-# momentos del dia esta semana. Si las corridas adicionales caen
-# dentro de este margen, promover este valor a definitivo (quitar este
-# comentario). Si alguna corrida excede 13 min, subir el valor y
-# volver a marcarlo como provisional hasta la siguiente confirmacion.
-ENTRY_WAIT_MINUTES = 13  # PROVISIONAL (N=1 corrida, 08-sep-2026) -- ver comentario arriba
+# CONFIRMADO (N=2 corridas, horarios distintos, 09-sep-2026): promedio
+# 9.43-9.50 min, maximo observado 9.94 min, margen de 13 min incluye
+# buffer de seguridad. Ver GLITCH_RESEARCH_LOG.md para el detalle de
+# ambas corridas -- mismo estandar de "medir, no asumir" ya aplicado a
+# Yahoo, ahora cerrado para Massive/MGC: la primera corrida (08-sep,
+# manana) dio 9.43 min promedio (rango 9.07-9.78); la segunda (09-sep,
+# tarde/noche, horario deliberadamente distinto de la primera) dio
+# 9.50 min promedio (rango 9.06-9.94) -- diferencia de solo 0.07 min
+# entre promedios, rangos solapados. Delay de Massive confirmado
+# ESTABLE entre momentos del dia, no erratico como el de Yahoo.
+ENTRY_WAIT_MINUTES = 13  # CONFIRMADO (N=2 corridas, 09-sep-2026) -- ver comentario arriba
 
 RTH_OPEN_HOUR, RTH_OPEN_MINUTE = 7, 0    # ventana de mayor liquidez de MGC confirmada, no 9:30
 FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30    # mismo margen de 30min antes del cierre de ventana (15:00 CT) que MES

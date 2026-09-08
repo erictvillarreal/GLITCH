@@ -2494,3 +2494,34 @@ python scripts/verify_front_month_roll_history.py MNQ
 ```
 y compartir el resultado antes de considerar este punto cerrado.
 
+## CERRADO: `ENTRY_WAIT_MINUTES` confirmado con 2 corridas en horarios distintos (09-sep-2026)
+
+**Resuelto.** Mismo estándar ya aplicado a Yahoo ("medir, no asumir",
+un solo punto de muestra no confirma estabilidad) — ahora cerrado para
+el delay de Massive/MGC con una segunda medición independiente:
+
+| Corrida | Fecha/horario | Promedio | Rango |
+|---|---|---|---|
+| 1 | 08-sep-2026, mañana | 9.43 min | 9.07–9.78 min |
+| 2 | 09-sep-2026, tarde/noche (deliberadamente distinto de la 1) | 9.50 min | 9.06–9.94 min |
+
+Diferencia entre promedios: **0.07 min**. Rangos solapados casi por
+completo. **Delay de Massive confirmado ESTABLE entre momentos del
+día** — a diferencia del de Yahoo, que fue errático y costó 2.5
+semanas de incidentes con MES=F (ver "Yahoo Finance MES=F opening-
+window delay" en el histórico de este repo).
+
+`ENTRY_WAIT_MINUTES = 13` en `scheduler/geometry_mgc_scheduler.py`
+queda **CONFIRMADO** (ya no PROVISIONAL) — máximo observado entre
+ambas corridas: 9.94 min, con margen de seguridad de ~3 min sobre ese
+máximo. Comentario y docstring del módulo actualizados para reflejar
+el estado confirmado, no el provisional del 08-sep.
+
+**Con esto, GEOMETRY-MGC queda sin ninguna pieza pendiente:**
+front-month/branch/path (resuelto 07-sep), `ENTRY_WAIT_MINUTES`
+(resuelto hoy), WR empírico y pass rate de Combine (validados 07-sep,
+ver secciones anteriores). Pendiente real, no de código: confirmar que
+el próximo cron real (día hábil siguiente) corre de principio a fin
+sin error — eso solo lo confirma una corrida real en Railway, no algo
+verificable desde este repo.
+
