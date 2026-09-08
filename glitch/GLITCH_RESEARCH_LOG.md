@@ -760,3 +760,49 @@ El logger UTC-como-CT se documenta aquí como lo que realmente es: un
 hallazgo y fix de HOY (07-sep-2026), no un bug histórico de la
 búsqueda de edge — timelines separados, no mezclados.
 
+## CERRADO: roll dinámico de MES/MNQ verificado ante el vencimiento de MESU6/MNQU6 (08-sep-2026)
+
+**Resuelto.** El vencimiento de MESU6/MNQU6 (18-sep-2026, 8 días
+hábiles desde que se abrió este hallazgo) está cubierto por el roll
+dinámico de `execution/contracts.py::resolve_front_month()` — **no
+requiere ninguna acción humana.**
+
+**Cadena de verificación completa:**
+1. Revisión de código: `resolve_front_month()` selecciona el contrato
+   correcto por construcción (mismo método `date=`point-in-time +
+   `last_trade_date` ascendente ya validado en `scripts/fetch_mes_2y.py`),
+   y no requiere intervención manual (`_front_month_cache` es puramente
+   en memoria, se re-resuelve contra la API en vivo en cada invocación
+   del cron, sin ningún dato persistido entre días).
+2. Lo único que el código no podía confirmar por sí solo — el timing
+   exacto del roll relativo al `last_trade_date` real de un contrato,
+   un comportamiento externo de la API de Massive — se verificó
+   empíricamente con `scripts/verify_front_month_roll_history.py`
+   contra el roll MESM6→MESU6 (jun-2026), que ya ocurrió, en vez de
+   esperar a observar el de MESU6→MESZ6 en vivo.
+3. **Bug encontrado y corregido en el script de verificación mismo**
+   (no en `resolve_front_month()`): la primera versión calculaba el
+   veredicto final ("RESULTADO") a partir de una variable que medía
+   el PRIMER día en que aparecía el contrato NUEVO, pero lo
+   interpretaba como si midiera el ÚLTIMO día en que seguía
+   apareciendo el contrato VIEJO — dos condiciones distintas. Esto
+   producía un mensaje de "peligroso" que contradecía la propia tabla
+   impresa (que sí mostraba el comportamiento correcto). Corregido
+   para derivar el veredicto de `last_offset_still_prior` — el último
+   offset en que el front month resuelto fue el contrato viejo,
+   calculado con la misma condición por fila que ya se imprime en la
+   tabla — y re-verificado contra 3 escenarios sintéticos (caso
+   reportado por el usuario, caso peligroso genuino, caso de roll
+   temprano) antes de pedir la re-corrida real.
+4. **Resultado real, confirmado por el usuario en MES y MNQ:** el
+   script corregido da veredicto **SEGURO** en ambos productos, y el
+   RESULTADO coincide con la tabla impresa. `resolve_front_month()`
+   queda confirmado correcto tal como está — **sin ningún cambio**,
+   evitando tocar una función que ya usan GEOMETRY y COMBO2D en
+   producción por un bug que resultó estar solo en la herramienta de
+   diagnóstico.
+
+**Script de verificación commiteado a `main`** (útil para el próximo
+roll trimestral, MESZ6/MNQZ6 en dic-2026, y para cualquier producto
+nuevo que se agregue): `scripts/verify_front_month_roll_history.py`.
+
