@@ -135,12 +135,23 @@ POLL_INTERVAL = 60  # segundos entre polls, mismo valor que geometry_scheduler.p
 # ver docstring del modulo).
 THEORETICAL_WR = 0.50
 
-# PENDIENTE DE CONFIRMAR -- ver docstring del modulo, punto 3. Correr
-# scripts/probe_massive_mgc_delay.py lunes-viernes en horario de
-# mercado activo y reemplazar este valor antes de desplegar. El
-# scheduler se niega a arrancar mientras siga en None (ver check mas
-# abajo, antes de is_trading_day()).
-ENTRY_WAIT_MINUTES = None  # PENDIENTE: confirmar con probe_massive_mgc_delay.py el lunes
+# PROVISIONAL -- NO es el valor definitivo (08-sep-2026, ver
+# GLITCH_RESEARCH_LOG.md). Basado en UNA sola corrida de
+# scripts/probe_massive_mgc_delay.py: delay promedio 9.43 min, rango
+# 9.07-9.78 min, N=6 mediciones dentro de esa unica corrida. Mismo
+# estandar de "medir, no asumir" ya aplicado a Yahoo -- un solo punto
+# de muestra (un solo momento del dia) no confirma que el delay sea
+# estable en otros momentos (apertura, mediodia, cierre). Valor fijado
+# con margen de seguridad sobre el maximo observado (9.78 min) para
+# permitir que el scheduler empiece a operar esta semana, NO porque el
+# numero ya este confirmado como definitivo.
+#
+# PENDIENTE: repetir scripts/probe_massive_mgc_delay.py en otros
+# momentos del dia esta semana. Si las corridas adicionales caen
+# dentro de este margen, promover este valor a definitivo (quitar este
+# comentario). Si alguna corrida excede 13 min, subir el valor y
+# volver a marcarlo como provisional hasta la siguiente confirmacion.
+ENTRY_WAIT_MINUTES = 13  # PROVISIONAL (N=1 corrida, 08-sep-2026) -- ver comentario arriba
 
 RTH_OPEN_HOUR, RTH_OPEN_MINUTE = 7, 0    # ventana de mayor liquidez de MGC confirmada, no 9:30
 FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30    # mismo margen de 30min antes del cierre de ventana (15:00 CT) que MES

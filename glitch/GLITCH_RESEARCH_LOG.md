@@ -2414,3 +2414,83 @@ raíz del repo, igual que GEOMETRY/COMBO2D, dado el path del crash
 Start Command y apuntar el servicio al process type
 `worker-geometry-mgc` de este Procfile.
 
+## `ENTRY_WAIT_MINUTES` fijado como PROVISIONAL, no definitivo (08-sep-2026)
+
+El usuario corrió `scripts/probe_massive_mgc_delay.py` una vez:
+promedio 9.43 min, rango 9.07-9.78 min, N=6 mediciones dentro de esa
+única corrida. Mismo estándar ya aplicado a Yahoo ("medir, no
+asumir"): **un solo punto de muestra (un solo momento del día) no
+confirma que el delay sea estable en apertura/mediodía/cierre** —
+instrucción explícita del usuario de NO tratar este número como
+definitivo todavía.
+
+**Decisión aplicada:** `ENTRY_WAIT_MINUTES` se fijó en **13** (margen
+sobre el máximo observado de 9.78 min) para que el scheduler pueda
+empezar a operar esta semana — pero marcado explícitamente como
+PROVISIONAL en el código (`scheduler/geometry_mgc_scheduler.py`,
+comentario extenso arriba de la constante), no como el valor
+calibrado final. Pendiente: repetir el probe en otros momentos del día
+esta semana; si las corridas adicionales caen dentro de este margen,
+promover a definitivo; si alguna lo excede, subir el valor y volver a
+marcarlo provisional.
+
+## URGENTE: verificación del roll automático de MES/MNQ ante vencimiento de MESU6/MNQU6 (08-sep-2026)
+
+**Motivo:** MESU6/MNQU6 vencen en 8 días hábiles (18-sep-2026).
+GEOMETRY y COMBO2D dependen de `execution/contracts.py::resolve_front_month()`
+para rolear automáticamente a MESZ6/MNQZ6 sin intervención manual —
+Cerebro 1 está en su ventana crítica de observación de 20 días, así
+que esto se verificó AHORA, no cerca de la fecha.
+
+**Revisión de código (evidencia directa, no suposición):**
+
+1. **Selección del contrato correcto:** `resolve_front_month()` usa
+   `date=<hoy>` point-in-time + `active=true`, excluye combos/spreads
+   (`type != "single"`), valida el formato del ticker, y ordena por
+   `last_trade_date` ascendente — el mismo método ya validado en
+   `scripts/fetch_mes_2y.py` para el histórico de 2 años. Selecciona
+   correctamente el contrato con vencimiento más próximo entre los
+   activos — por construcción, correcto.
+2. **Sin intervención manual:** `_front_month_cache` es un dict
+   puramente en memoria (module-level), NUNCA persistido vía
+   `execution/gist_store.py` (el único mecanismo de persistencia del
+   repo, usado solo para el log de paper trading). Dado el filesystem
+   efímero ya documentado (ver "Persistencia de estado — hallazgo
+   crítico", 27-ago-2026), cada invocación del cron arranca con
+   `_front_month_cache = {}` vacío — `resolve_front_month()` se
+   re-ejecuta contra la API en vivo TODOS los días, sin ningún dato
+   cacheado de un día anterior que pudiera quedar obsoleto. Confirmado
+   contra `geometry_scheduler.py` y `combo2d_scheduler.py` — ningún
+   valor hardcodeado, ningún paso manual requerido.
+3. **Timing del roll (antes del vencimiento, no el mismo día):** esto
+   es lo único que el código NO puede confirmar por sí solo — depende
+   de CUÁNDO Massive apaga el flag `active=true` de un contrato
+   relativo a su `last_trade_date`, un comportamiento externo de la
+   API nunca antes verificado empíricamente en este repo para este
+   endpoint específico. **No se asumió que funciona — se preparó un
+   script para medirlo contra un roll que YA OCURRIÓ**
+   (`scripts/verify_front_month_roll_history.py`, MESM6→MESU6,
+   jun-2026), reutilizando la función de producción real, no una
+   reimplementación aparte. Pendiente de ejecución por el usuario
+   (requiere `MASSIVE_API_KEY`, no pasada a esta sesión).
+
+**Hallazgo lateral, útil como confirmación independiente:** con 8 días
+hábiles restantes hoy, `FRONT_MONTH_EXPIRY_ALERT_DAYS = 10` en
+`execution/contracts.py` significa que la alerta
+"CONTRATO PROXIMO A VENCER" YA debería estar disparándose en cada
+corrida de GEOMETRY y COMBO2D desde hace ~1-2 días. Si el usuario
+confirma haber recibido esa alerta por Telegram, es evidencia
+independiente de que `resolve_front_month()` sigue ejecutándose
+exitosamente día tras día sin error — no resuelve el punto 3 (timing
+exacto del roll), pero descarta que la resolución del contrato esté
+fallando silenciosamente.
+
+**No se pudo cerrar el punto 3 sin acceso a `MASSIVE_API_KEY`** —
+siguiendo la regla del proyecto de nunca pasar API keys a esta sesión.
+El usuario debe correr:
+```
+python scripts/verify_front_month_roll_history.py MES
+python scripts/verify_front_month_roll_history.py MNQ
+```
+y compartir el resultado antes de considerar este punto cerrado.
+
