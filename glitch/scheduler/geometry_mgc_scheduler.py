@@ -120,8 +120,14 @@ DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 # flexibilidad, refactorizar entonces -- explicito ahora es mejor que
 # implicito con un solo candidato real.
 PRODUCT_KEY = "MGC_XFA_150K"
-DISPLAY_LABEL = "GEOMETRY-MGC-XFA"
+DISPLAY_LABEL = "GEOMETRY-MGC-XFA"  # usado solo para check_expiry_alerts() (execution/contracts.py, sin tocar)
 CFG = CANDIDATES[PRODUCT_KEY]
+
+# Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar en los
+# 3 schedulers, ver GLITCH_RESEARCH_LOG.md. PREFIX identifica el mensaje
+# como Cerebro 2/XFA de un vistazo, sin ambiguedad con Cerebro 1/COMBINE
+# (geometry_scheduler.py) ni con COMBO2D.
+PREFIX = f"S10GLITCH - XFA - {CFG.spec.product_code}"
 
 LOG_FILE = "geometry_mgc_log.json"  # namespace nuevo y separado, ver docstring
 POLL_INTERVAL = 60  # segundos entre polls, mismo valor que geometry_scheduler.py
@@ -148,6 +154,24 @@ ENTRY_WAIT_MINUTES = 13  # CONFIRMADO (N=2 corridas, 09-sep-2026) -- ver comenta
 RTH_OPEN_HOUR, RTH_OPEN_MINUTE = 7, 0    # ventana de mayor liquidez de MGC confirmada, no 9:30
 FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30    # mismo margen de 30min antes del cierre de ventana (15:00 CT) que MES
 
+# "Dias vs. Estimado" (template de Telegram, 09-sep-2026) --
+# dias_calendario_esperados = dias_promedio_resolucion (avg de TODOS los
+# intentos de Combine resueltos, pase o truene -- SimResult.avg_resolution_days)
+# x (1 / pass_rate) (intentos esperados hasta pasar). MISMA formula y mismo
+# motor (simulation/monte_carlo.py::TopstepMonteCarloSimulator, ya
+# auditado) que el numero equivalente de G2 (4.49 dias, ver
+# GLITCH_RESEARCH_LOG.md, "Duracion recomendada del periodo de paper
+# trading", 25-ago-2026) -- NO un numero de servilleta, calculado
+# formalmente con scripts/mgc_dias_esperados.py (09-sep-2026), reusando la
+# misma distribucion/geometria de scripts/cerebro2_cashflow_monte_carlo.py
+# (SL=TP=364 ticks, nc=6, TOPSTEP_150K). Con WR=0.5020 (empirico, ventana
+# horaria corregida -- dataset de referencia actual para este candidato):
+# pass_rate=47.35%, avg_pass_days=7.58, avg_blown_days=5.66,
+# dias_promedio_resolucion=6.57, dias_calendario_esperados=13.8726.
+# Redondeado a 13.9. (Con WR=0.50 teorico el resultado es casi identico,
+# 13.99 -- insensible a cual WR se use.)
+DIAS_ESPERADOS = 13.9
+
 _front_month_cache: dict[str, tuple[str, str]] = {}
 
 
@@ -158,7 +182,7 @@ def _fail_if_entry_wait_not_confirmed():
     'que el codigo falle explicitamente si se intenta desplegar sin ese
     valor confirmado, no que corra con un default adivinado'."""
     if ENTRY_WAIT_MINUTES is None:
-        msg = (f"GLITCH - {DISPLAY_LABEL}\nSTATUS: ERROR\n"
+        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
                f"ERROR: ENTRY_WAIT_MINUTES sin confirmar (sigue en None).\n"
                f"Correr scripts/probe_massive_mgc_delay.py lunes-viernes en horario "
                f"de mercado activo y setear el valor real antes de desplegar.")
@@ -172,6 +196,14 @@ def _fail_if_entry_wait_not_confirmed():
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 def ct_now(): return dt.datetime.now(CT)
+
+
+def utc_now_str():
+    """Timestamp UTC para los mensajes de Telegram (template 09-sep-2026)
+    -- distinto de ct_now(), que sigue usandose para el timing operativo
+    del scheduler (apertura, flatten, etc). No afecta setup_ct_logging()
+    (execution/ct_logging.py) -- los logs del servidor siguen en CT."""
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def load_log():
@@ -283,7 +315,7 @@ def run():
         check_expiry_alerts(_front_month_cache, send, DISPLAY_LABEL)
     except Exception as e:
         log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
-        send(f"GLITCH - {DISPLAY_LABEL}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
+        send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
         return
 
     # ── 2. Señal: sin predictiva, funcion pura de la fecha ──
@@ -307,12 +339,12 @@ def run():
     else:
         wr_line = "sin ciclos resueltos todavia"
 
-    kickoff = (f"GLITCH - {DISPLAY_LABEL} | INICIO DE DIA\n"
+    kickoff = (f"{PREFIX} | INICIO DE DIA\n"
                f"Dia {progress['days_elapsed']} de paper  |  Ciclos completados: {progress['n_cycles']}\n"
                f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={CFG.direction})\n"
                f"Resultado de ayer: {yesterday_line}\n"
                f"WR acumulado: {wr_line}\n"
-               f"{ct_now().strftime('%Y-%m-%d %H:%M CT')}")
+               f"{utc_now_str()}")
     send(kickoff)
     log.info(kickoff.replace("\n", " | "))
 
@@ -338,7 +370,7 @@ def run():
 
     if entry_price is None:
         gave_up_at = ct_now().strftime("%H:%M:%S")
-        msg = (f"GLITCH - {DISPLAY_LABEL}\nSTATUS: ERROR\n"
+        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
                f"ERROR: no entry data available\n"
                f"Se rindio tras {attempt + 1} intentos a las {gave_up_at} CT")
         send(msg)
@@ -354,14 +386,15 @@ def run():
     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
     log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
 
-    msg = (f"GLITCH DETECTED - {DISPLAY_LABEL}\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'}\n"
-           f"STATUS: OPEN\n"
-           f"{direction_str}: {entry_price:,.4f}\n"
-           f"TP/SL: {tp_price:,.4f} - {sl_price:,.4f}\n"
-           f"ASSET: {CFG.spec.label} ({ticker})\n"
-           f"SIZE: {CFG.nc} Contracts\n"
-           f"{ct_now().strftime('%Y-%m-%d %H:%M CT')}")
+    msg = (f"{PREFIX}\n"
+           f"[OPEN]\n"
+           f"Symbol: {CFG.spec.label} ({ticker})\n"
+           f"Direction: {direction_str}\n"
+           f"Entry: {entry_price:,.4f}\n"
+           f"Contracts: {CFG.nc}\n"
+           f"TP: {tp_price:,.4f}\n"
+           f"SL: {sl_price:,.4f}\n"
+           f"{utc_now_str()}")
     send(msg)
 
     # ── 4. Monitorea la posicion -- flatten obligatorio a las 14:30 CT ──
@@ -406,12 +439,13 @@ def run():
     pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
     log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
 
-    msg = (f"GLITCH CLOSED - {DISPLAY_LABEL}\n"
-           f"{'PAPER LIVE' if DRY_RUN else 'LIVE'} | {result}\n"
-           f"{direction_str}: {entry_price:,.4f} → {exit_price:,.4f}\n"
-           f"PnL: ${pnl:+,.2f} USD\n"
-           f"ASSET: {CFG.spec.label}\n"
-           f"{ct_now().strftime('%Y-%m-%d %H:%M CT')}")
+    msg = (f"{PREFIX}\n"
+           f"[CLOSE] [{result}]\n"
+           f"Symbol: {CFG.spec.label} ({ticker})\n"
+           f"Contracts: {CFG.nc}\n"
+           f"PnL: ${pnl:+,.2f}\n"
+           f"Dia de paper: {progress['days_elapsed']}\n"
+           f"{utc_now_str()}")
     send(msg)
 
     paper_log.append({
@@ -428,14 +462,32 @@ def run():
 
     if progress["wr_empirico"] is not None:
         gap_pp = (progress["wr_empirico"] - THEORETICAL_WR) * 100
-        wr_line = f"{progress['wr_empirico']:.1%} empirico vs {THEORETICAL_WR:.1%} teorico ({gap_pp:+.1f}pp)"
+        wr_line = f"{progress['wr_empirico']:.1%} vs {THEORETICAL_WR:.1%} ({gap_pp:+.1f}pp)"
     else:
-        wr_line = "sin ciclos resueltos todavia"
+        wr_line = "—"
 
-    summary = (f"GLITCH - {DISPLAY_LABEL} | DAILY SUMMARY\n"
-               f"Dia {progress['days_elapsed']} de paper  |  Ciclos: {progress['n_cycles']}\n"
+    # NOTA (09-sep-2026): Equity y Dias vs. Estimado son ACUMULADOS desde
+    # el dia 1 de paper trading, SIN limite de intento (el codigo no
+    # detecta pass/blow del Combine ni resetea nada -- ver
+    # GLITCH_RESEARCH_LOG.md, decision explicita del usuario de no agregar
+    # esa logica en este cambio de formato). Si el paper trading corre lo
+    # suficiente, Equity puede superar $3,000 o caer por debajo del floor
+    # sin que el mensaje lo refleje como "intento resuelto" -- tracking
+    # real de limites de intento queda como tarea futura separada.
+    #
+    # Next Payout / Payout Total: placeholder deliberado -- este scheduler
+    # no implementa la regla de elegibilidad real de Topstep (5 dias
+    # ganadores de $150+ neto, O balance >= $55k). Implementar eso es
+    # logica nueva, fuera de alcance de este cambio (que es puramente de
+    # formato/presentacion).
+    summary = (f"{PREFIX}\n"
+               f"Next Payout: sin tracking de elegibilidad implementado todavia\n"
+               f"Payout Total: sin tracking de elegibilidad implementado todavia\n"
+               f"Equity: ${total_pnl:,.2f}\n"
+               f"PnL Hoy: ${pnl:+,.2f}\n"
                f"WR: {wr_line}\n"
-               f"PnL Total: ${total_pnl:+,.2f} USD")
+               f"Dias vs. Estimado: {progress['days_elapsed']} / {DIAS_ESPERADOS} esperados\n"
+               f"{utc_now_str()}")
     send(summary)
     log.info("Done — saliendo")
 
