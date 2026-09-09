@@ -938,5 +938,46 @@ spam, va a repetirse en cada roll futuro. Tres opciones evaluadas:
 10/5/2/1), pero reduce el volumen real (~60%+) sin estado nuevo, sin
 riesgo de condición de carrera, y sin cambio de arquitectura — el
 trade-off honesto de "más simple, sin tocar lógica de trading".
-Pendiente de aprobación del usuario antes de implementar.
+
+## Opción (b) implementada — checkpoints con detección de salto por feriado, sin estado (09-sep-2026)
+
+**Aprobado y aplicado.** `check_expiry_alerts()` ahora dispara solo en
+`FRONT_MONTH_ALERT_CHECKPOINTS = (10, 5, 2, 1)` días hábiles restantes,
+no cada día dentro de la ventana.
+
+**Caso pedido explícitamente por el usuario antes de implementar:** ¿qué
+pasa si un feriado/fin de semana hace que el conteo salte sobre un
+checkpoint exacto entre dos corridas reales (ej. `days_left` pasa de 11
+a 9 sin nunca valer 10 exactamente, porque el scheduler no corrió el
+día del feriado)? `np.busday_count` no conoce el calendario de
+feriados custom del proyecto — solo excluye fines de semana — así que
+un feriado SÍ puede producir un salto de 2 en vez de 1.
+
+**Solución, sin estado persistido (evita exactamente la coordinación
+que se descartó en la opción (a)):** `_previous_trading_day()` calcula
+el día hábil anterior de forma puramente determinística (mismo
+calendario de feriados que los 3 schedulers, duplicado aquí con el
+mismo criterio ya establecido). `check_expiry_alerts()` compara
+`days_left` de hoy contra `days_left` calculado para ese día hábil
+anterior — si algún checkpoint cae estrictamente entre ambos valores,
+se considera "cruzado" y dispara, incluso si el salto fue de 2 días en
+vez de 1. El checkpoint nunca se pierde por un feriado, y no requiere
+ningún Gist ni coordinación entre servicios — es una función pura de la
+fecha de hoy y el calendario ya conocido.
+
+**Verificado con `tests/test_contracts.py` (9 tests nuevos), no solo
+revisado:** dispara exactamente en checkpoint 10 (caso normal), no
+dispara en días intermedios, no re-dispara el día siguiente a un
+checkpoint ya disparado, y — el caso crítico — un escenario que
+reproduce exactamente el feriado del 07-sep-2026 (última corrida real
+viernes 04-sep con `days_left=11`, siguiente corrida real martes 08-sep
+con `days_left=9`, saltándose el 10 exacto) confirma que el checkpoint
+10 SÍ dispara en la corrida del martes, no se pierde. También verificado:
+el prefijo pasado por el llamador se usa tal cual, sin hardcodear nada
+internamente.
+
+Aplicado en ambas ramas: `main` (`geometry_scheduler.py`,
+`combo2d_scheduler.py`) y `cerebro2-dev` (`geometry_mgc_scheduler.py`,
+copia separada de `execution/contracts.py`). Suite completa verde en
+ambas ramas antes de cada push.
 
