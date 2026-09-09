@@ -269,7 +269,7 @@ def run():
     try:
         ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
         log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
-        check_expiry_alerts(_front_month_cache, send, f"GEOMETRY-{PRODUCT_KEY}")
+        check_expiry_alerts(_front_month_cache, send, PREFIX)
     except Exception as e:
         log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
         send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")

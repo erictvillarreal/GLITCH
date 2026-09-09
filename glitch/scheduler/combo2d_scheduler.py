@@ -208,7 +208,7 @@ def run():
     direction_str = {1: "LONG", -1: "SHORT", 0: "NO_TRADE"}[side]
     log.info(f"Señal: {direction_str} | {reason}")
     log.info(f"Contratos en uso: {_front_month_cache}")
-    check_expiry_alerts(_front_month_cache, send, "COMBO2D")
+    check_expiry_alerts(_front_month_cache, send, PREFIX)
 
     if side == 0:
         msg = (f"{PREFIX}\n"

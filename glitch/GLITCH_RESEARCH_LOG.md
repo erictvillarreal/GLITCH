@@ -882,3 +882,61 @@ del fix del `NameError` de arriba, que es una corrección de bug, no un
 cambio de comportamiento de trading). Suite completa de tests verde en
 los 3 archivos antes de cada commit.
 
+## Dos problemas reportados tras el primer día en producción del rediseño de templates (09-sep-2026)
+
+**1. `check_expiry_alerts()` (`execution/contracts.py`) nunca se
+actualizó al prefijo nuevo — corregido.** Quedó explícitamente fuera
+del cambio anterior por decisión de scope (afecta a los 3 schedulers a
+la vez), pero el usuario reportó que rompía la consistencia visual que
+era el objetivo del rediseño — seguía mandando `GLITCH - GEOMETRY-MES`
+con emoji (⚠️) en vez de `S10GLITCH - COMBINE - MES` sin emoji.
+
+Fix: `check_expiry_alerts(cache, send_fn, prefix)` ahora recibe el
+prefijo COMPLETO ya construido por el llamador (mismo `PREFIX` que cada
+scheduler ya usa en sus propios mensajes), no lo construye internamente
+— cada scheduler sigue siendo la única fuente de verdad de su propia
+identificación visual. Emoji removido, timestamp UTC agregado para
+consistencia con el resto de los mensajes. Los 3 call sites
+actualizados: `geometry_scheduler.py` (`PREFIX`),
+`geometry_mgc_scheduler.py` (`PREFIX`, rama `cerebro2-dev`),
+`combo2d_scheduler.py` (`PREFIX`).
+
+**Imprecisión menor heredada, no nueva:** el cache de `combo2d_scheduler.py`
+contiene AMBOS productos (MES y MNQ) bajo el mismo `PREFIX = "S10GLITCH
+- COMBO2D - MNQ"` — una alerta de vencimiento de la pata MES muestra el
+encabezado "- MNQ" aunque el cuerpo del mensaje sí dice correctamente
+"MES: MESU6". Este comportamiento ya existía antes (el `label` plano
+"COMBO2D" tampoco distinguía producto) — no se empeoró, pero tampoco se
+resolvió; queda como posible refinamiento futuro si se decide que vale
+la pena.
+
+**2. Bug real: la alerta de vencimiento se dispara de forma
+independiente en CADA servicio que comparte el mismo contrato**
+(GEOMETRY-MES y COMBO2D ambos alertan sobre MESU6 el mismo día, todos
+los días dentro de la ventana de 10 días hábiles) — reportado como
+spam, va a repetirse en cada roll futuro. Tres opciones evaluadas:
+
+- **(a) Deduplicar via estado compartido** (Gist): requiere una clave
+  nueva, coordinación read-then-write entre servicios con cron
+  independientes, y riesgo real de condición de carrera (la API REST
+  de Gist no tiene check-and-set atómico) — la opción más compleja y
+  frágil, y acopla operacionalmente servicios que hoy son
+  independientes.
+- **(b) Reducir frecuencia** a puntos de control clave (10, 5, 2, 1
+  días restantes) en vez de cada día dentro de la ventana — cambio de
+  una línea en una sola función compartida, sin estado nuevo, sin
+  acoplamiento entre servicios.
+- **(c) Consolidar** en un solo mensaje diario de estado de contratos:
+  requiere un nuevo servicio de Railway dedicado, o designar a uno de
+  los 3 schedulers existentes como dueño único (crea un hueco
+  silencioso si ese scheduler no corre ese día por cualquier razón —
+  ej. la salida temprana NO_SIGNAL de combo2d) — la opción más invasiva
+  arquitectónicamente.
+
+**Recomendado: (b).** No elimina el todo la duplicación del mismo día
+(GEOMETRY y COMBO2D seguirían alertando cada uno sobre MES en los días
+10/5/2/1), pero reduce el volumen real (~60%+) sin estado nuevo, sin
+riesgo de condición de carrera, y sin cambio de arquitectura — el
+trade-off honesto de "más simple, sin tocar lógica de trading".
+Pendiente de aprobación del usuario antes de implementar.
+
