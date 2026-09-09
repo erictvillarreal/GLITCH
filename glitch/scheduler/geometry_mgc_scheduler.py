@@ -101,6 +101,7 @@ from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
 from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
+from core.prop_firm import TOPSTEP_150K  # noqa: E402
 
 CT = ZoneInfo("America/Chicago")
 # Logging con timestamp SIEMPRE en America/Chicago -- mismo fix del
@@ -172,6 +173,17 @@ FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30    # mismo margen de 30min antes del cierr
 # 13.99 -- insensible a cual WR se use.)
 DIAS_ESPERADOS = 13.9
 
+# Logica de reinicio de intento de Combine (09-sep-2026, ver
+# GLITCH_RESEARCH_LOG.md) -- misma logica que geometry_scheduler.py,
+# umbrales confirmados contra core/prop_firm.py (fuente ya auditada), NO
+# hardcodeados a mano: este candidato usa una cuenta 150K (ver
+# PRODUCT_KEY="MGC_XFA_150K" arriba), TOPSTEP_150K.profit_target=$9,000,
+# TOPSTEP_150K.mll_distance=$4,500 -- DISTINTOS de los $3,000/$2,000 de
+# G2 (cuenta 50K). Confirmar SIEMPRE el tamaño de cuenta real de cada
+# candidato antes de reusar estos numeros en un candidato nuevo.
+PROFIT_TARGET = TOPSTEP_150K.profit_target      # $9,000
+MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500
+
 _front_month_cache: dict[str, tuple[str, str]] = {}
 
 
@@ -233,6 +245,51 @@ def is_trading_day():
         (2026,5,25),(2026,7,3),(2026,9,7),(2026,11,26),(2026,12,25)
     }
     return (now.year, now.month, now.day) not in holidays
+
+
+def _current_intento(paper_log: list) -> int:
+    """Misma logica que geometry_scheduler.py::_current_intento -- ver
+    ese archivo para el razonamiento completo. Duplicado deliberadamente
+    (no importado de geometry_scheduler.py) -- este scheduler NO debe
+    acoplarse a codigo de Cerebro 1, mismo principio ya establecido en
+    el docstring de geometry_scheduler.py."""
+    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
+    if not resolved:
+        return 1
+    return max(e.get("intento", 1) for e in resolved)
+
+
+def _attempt_entries(paper_log: list, intento: int) -> list:
+    return [e for e in paper_log
+            if e.get("result") in ("TP", "SL", "FLATTEN") and e.get("intento", 1) == intento]
+
+
+def _attempt_pnl(paper_log: list, intento: int) -> float:
+    return sum(e.get('pnl', 0) for e in _attempt_entries(paper_log, intento))
+
+
+def _attempt_days_elapsed(paper_log: list, intento: int, today_str: str) -> int:
+    """0 si el intento todavia no tiene ningun ciclo resuelto (justo
+    despues de un reinicio) -- distinto de _paper_progress()['days_elapsed']
+    (historico, devuelve 1 en ese caso)."""
+    entries = _attempt_entries(paper_log, intento)
+    dates_seen = sorted({e["date"] for e in entries if e.get("date")})
+    if not dates_seen:
+        return 0
+    first_date = dt.datetime.strptime(dates_seen[0], "%Y-%m-%d").date()
+    today = dt.datetime.strptime(today_str, "%Y-%m-%d").date()
+    return (today - first_date).days + 1
+
+
+def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_threshold: float) -> Optional[str]:
+    """Misma logica que geometry_scheduler.py::_check_attempt_reset --
+    funcion PURA, testeable en aislamiento. mll_threshold ya viene
+    NEGATIVO (ver MLL_THRESHOLD arriba)."""
+    if attempt_pnl_after >= profit_target:
+        return "PASE"
+    if attempt_pnl_after <= mll_threshold:
+        return "QUIEBRE"
+    return None
 
 
 def _paper_progress(paper_log: list, today_str: str) -> dict:
@@ -307,6 +364,12 @@ def run():
 
     today_str = str(dt.date.today())
     paper_log = load_log()
+    # Logica de reinicio de intento (09-sep-2026, ver GLITCH_RESEARCH_LOG.md)
+    # -- resuelve la limitacion documentada anteriormente ("Equity/Dias
+    # vs. Estimado acumulados sin limite de intento"). WR/Ciclos NO se
+    # reinician -- siguen siendo historicos de TODOS los intentos.
+    intento_actual = _current_intento(paper_log)
+    attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
 
     # ── 1. Resuelve el contrato en uso ──
     try:
@@ -454,11 +517,35 @@ def run():
         "exit": exit_price, "result": result,
         "pnl": round(pnl, 2), "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
         "nc": CFG.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
+        "intento": intento_actual,
     })
     save_log(paper_log)
 
-    total_pnl = sum(e.get('pnl', 0) for e in paper_log)
-    progress = _paper_progress(paper_log, today_str)
+    # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) -- 09-sep-2026,
+    #         ver GLITCH_RESEARCH_LOG.md. Mensaje separado del resumen
+    #         diario normal, enviado el mismo dia que ocurre. ──
+    attempt_pnl_after = attempt_pnl_before + pnl
+    event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, MLL_THRESHOLD)
+    if event is not None:
+        attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
+        historic_progress = _paper_progress(paper_log, today_str)  # ya incluye el ciclo de hoy
+        if historic_progress["wr_empirico"] is not None:
+            gap_pp = (historic_progress["wr_empirico"] - THEORETICAL_WR) * 100
+            hist_wr_line = f"{historic_progress['wr_empirico']:.1%} vs {THEORETICAL_WR:.1%} ({gap_pp:+.1f}pp)"
+        else:
+            hist_wr_line = "—"
+
+        reset_msg = (f"{PREFIX} [INTENTO #{intento_actual} COMPLETADO: {event}]\n"
+                     f"PnL final del intento: ${attempt_pnl_after:+,.2f}\n"
+                     f"Dias que tomo este intento: {attempt_days}\n"
+                     f"WR acumulado historico: {hist_wr_line}\n"
+                     f"Iniciando intento #{intento_actual + 1} desde $0\n"
+                     f"{utc_now_str()}")
+        send(reset_msg)
+        log.info(reset_msg.replace("\n", " | "))
+        intento_actual += 1  # para el resumen diario de abajo -- ya pertenece al intento nuevo
+
+    progress = _paper_progress(paper_log, today_str)  # historico -- recalculado, incluye el ciclo de hoy
 
     if progress["wr_empirico"] is not None:
         gap_pp = (progress["wr_empirico"] - THEORETICAL_WR) * 100
@@ -466,27 +553,25 @@ def run():
     else:
         wr_line = "—"
 
-    # NOTA (09-sep-2026): Equity y Dias vs. Estimado son ACUMULADOS desde
-    # el dia 1 de paper trading, SIN limite de intento (el codigo no
-    # detecta pass/blow del Combine ni resetea nada -- ver
-    # GLITCH_RESEARCH_LOG.md, decision explicita del usuario de no agregar
-    # esa logica en este cambio de formato). Si el paper trading corre lo
-    # suficiente, Equity puede superar $3,000 o caer por debajo del floor
-    # sin que el mensaje lo refleje como "intento resuelto" -- tracking
-    # real de limites de intento queda como tarea futura separada.
+    # Acotado al intento actual (ya incrementado arriba si hubo
+    # PASE/QUIEBRE hoy) -- si el intento acaba de reiniciarse, Equity y
+    # Dias vs. Estimado caen naturalmente en 0.00/0, consistente con
+    # "Iniciando intento #N+1 desde $0" del mensaje de reinicio de arriba.
     #
     # Next Payout / Payout Total: placeholder deliberado -- este scheduler
     # no implementa la regla de elegibilidad real de Topstep (5 dias
     # ganadores de $150+ neto, O balance >= $55k). Implementar eso es
-    # logica nueva, fuera de alcance de este cambio (que es puramente de
-    # formato/presentacion).
+    # logica nueva, fuera de alcance de este cambio.
+    attempt_equity = _attempt_pnl(paper_log, intento_actual)
+    attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
+
     summary = (f"{PREFIX}\n"
                f"Next Payout: sin tracking de elegibilidad implementado todavia\n"
                f"Payout Total: sin tracking de elegibilidad implementado todavia\n"
-               f"Equity: ${total_pnl:,.2f}\n"
+               f"Equity: ${attempt_equity:,.2f}\n"
                f"PnL Hoy: ${pnl:+,.2f}\n"
                f"WR: {wr_line}\n"
-               f"Dias vs. Estimado: {progress['days_elapsed']} / {DIAS_ESPERADOS} esperados\n"
+               f"Dias vs. Estimado: {attempt_days} / {DIAS_ESPERADOS} esperados\n"
                f"{utc_now_str()}")
     send(summary)
     log.info("Done — saliendo")

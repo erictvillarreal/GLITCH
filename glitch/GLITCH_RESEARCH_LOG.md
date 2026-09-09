@@ -2525,3 +2525,75 @@ el próximo cron real (día hábil siguiente) corre de principio a fin
 sin error — eso solo lo confirma una corrida real en Railway, no algo
 verificable desde este repo.
 
+## Nota retroactiva: 2 fixes ya aplicados a esta rama, documentados en `main` pero no aquí (09-sep-2026)
+
+Los siguientes cambios fueron implementados y pusheados a
+`cerebro2-dev` (`execution/contracts.py`, copia separada de la de
+`main`) pero su documentación completa quedó solo en el `GLITCH_RESEARCH_LOG.md`
+de `main`, no en este archivo — corregido aquí con un resumen, remitiendo
+al detalle completo en `main`:
+
+1. **`check_expiry_alerts()` actualizado al prefijo nuevo** (commit
+   `67a3ea6`) — `geometry_mgc_scheduler.py` ahora pasa `PREFIX`
+   ("S10GLITCH - XFA - MGC") en vez de `DISPLAY_LABEL`, mismo fix que
+   `main`.
+2. **Alertas de vencimiento reducidas a checkpoints (10/5/2/1 días)**
+   (commit `544d3d1`) — misma lógica de `_previous_trading_day()` sin
+   estado persistido, mismos 9 tests en `tests/test_contracts.py`.
+
+Ver `GLITCH_RESEARCH_LOG.md` en `main` (secciones "Fix
+check_expiry_alerts()..." y "Opción (b) implementada...") para el
+detalle completo de ambos — no repetido aquí para no duplicar contenido
+entre ramas.
+
+## Lógica de reinicio de intento de Combine — geometry_mgc_scheduler.py (09-sep-2026)
+
+**Misma lógica que `geometry_scheduler.py` (ver `main`, sección
+equivalente), aplicada a este scheduler — cambio de LÓGICA real, no de
+formato.** Cierra el mismo gap ya documentado ("Equity"/"Dias vs.
+Estimado" acumulados sin límite de intento).
+
+**Umbrales confirmados contra `core/prop_firm.py` para la cuenta REAL
+de este candidato — 150K, NO 50K:** `TOPSTEP_150K.profit_target =
+$9,000`, `TOPSTEP_150K.mll_distance = $4,500` (umbral de quiebre =
+-$4,500). Explícitamente DISTINTOS de los $3,000/$2,000 de G2 — el
+candidato `MGC_XFA_150K` usa la cuenta 150K desde su propio nombre
+(`PRODUCT_KEY = "MGC_XFA_150K"`), confirmado antes de hardcodear nada,
+no asumido de memoria.
+
+**Mismo diseño sin estado separado** (`_current_intento`,
+`_attempt_pnl`, `_attempt_days_elapsed`, `_check_attempt_reset` —
+duplicados deliberadamente desde `geometry_scheduler.py`, no
+importados: este scheduler no debe acoplarse a código de Cerebro 1,
+mismo principio ya establecido en el docstring de ese archivo). Único
+ajuste real frente a G2: el mensaje de reinicio usa **"WR acumulado
+historico"**, no "Pass Rate acumulado historico" — consistente con la
+distinción WR-vs-pass-rate ya establecida para este candidato
+específico (ver "HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2" — el WR de
+este candidato y su propio pass rate de Combine son números distintos,
+46.9%/47.5%, y el resto de sus mensajes ya usa "WR:" por la misma
+razón).
+
+```
+S10GLITCH - XFA - MGC [INTENTO #N COMPLETADO: PASE/QUIEBRE]
+PnL final del intento: $X
+Dias que tomo este intento: X
+WR acumulado historico: X% vs 50.0% teorico
+Iniciando intento #N+1 desde $0
+```
+
+`_attempt_peak()` NO se agregó aquí — el template XFA nunca incluyó un
+campo "Peak" (a diferencia del template COMBINE de G2), así que no hay
+call site para esa función en este scheduler; agregarla sería código
+muerto.
+
+**Verificado con 20 tests nuevos** en
+`tests/test_geometry_mgc_scheduler.py` (archivo nuevo — este scheduler
+no tenía ningún test dedicado hasta ahora), mismo patrón que los 23 de
+G2: los 3 casos pedidos explícitamente (pase, quiebre, normal — con
+variantes de umbral exacto y overshoot), los helpers en aislamiento, un
+test de integración del ciclo completo, un test explícito de que
+WR/Ciclos no se reinician, y — específico de este archivo — un test
+que confirma que los umbrales NO son por accidente los $3,000/$2,000 de
+G2. Suite completa de la rama: 169 tests, verde.
+
