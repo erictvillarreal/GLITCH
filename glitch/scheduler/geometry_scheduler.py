@@ -54,6 +54,7 @@ import sys
 import logging
 import time
 from datetime import datetime, date
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
@@ -77,6 +78,7 @@ from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
 from execution.contracts import get_front_month, check_expiry_alerts
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
+from core.prop_firm import TOPSTEP_50K
 
 CT = ZoneInfo("America/Chicago")
 # Logging con timestamp SIEMPRE en America/Chicago -- fix del
@@ -132,6 +134,17 @@ PREFIX = f"S10GLITCH - COMBINE - {PRODUCT_KEY}"
 # scripts/mgc_dias_esperados.py, 09-sep-2026).
 DIAS_ESPERADOS = 4.49
 
+# Logica de reinicio de intento de Combine (09-sep-2026) -- confirmado
+# contra core/prop_firm.py (fuente ya auditada, usada por
+# scripts/cerebro2_cashflow_monte_carlo.py), NO hardcodeado a mano:
+# TOPSTEP_50K.profit_target=$3,000, TOPSTEP_50K.mll_distance=$2,000.
+# Cuenta 50K es correcta para ESTE scheduler independientemente de que
+# producto este activo via GLITCH_PRODUCT -- todo Camino B (MES/MGC/M2K/
+# etc. como CANDIDATES) se disenio y valido contra nc_cap de una cuenta
+# 50K, no es especifico de MES.
+PROFIT_TARGET = TOPSTEP_50K.profit_target      # $3,000
+MLL_THRESHOLD = -TOPSTEP_50K.mll_distance      # -$2,000 (perdida acumulada del intento)
+
 _front_month_cache: dict[str, tuple[str, str]] = {}
 
 
@@ -143,18 +156,71 @@ def utc_now_str():
     return datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _peak_equity(paper_log: list) -> float:
-    """Maximo historico rodante del PnL acumulado -- calculado en el
-    momento desde paper_log existente, sin nuevo estado persistido
-    (template de Telegram, 09-sep-2026). paper_log ya esta en orden
-    cronologico (una entrada por dia, appendeada en secuencia)."""
+def _current_intento(paper_log: list) -> int:
+    """
+    Numero de intento de Combine actual -- derivado de paper_log, SIN
+    estado separado (mismo principio que _paper_progress: la fecha de
+    la primera entrada ES el dia 1, aqui el "intento" mas alto ya visto
+    ES el intento actual). 1 si no hay ciclos resueltos todavia.
+    """
+    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
+    if not resolved:
+        return 1
+    return max(e.get("intento", 1) for e in resolved)
+
+
+def _attempt_entries(paper_log: list, intento: int) -> list:
+    """Ciclos resueltos que pertenecen a un intento especifico."""
+    return [e for e in paper_log
+            if e.get("result") in ("TP", "SL", "FLATTEN") and e.get("intento", 1) == intento]
+
+
+def _attempt_pnl(paper_log: list, intento: int) -> float:
+    """PnL acumulado de UN intento especifico -- distinto de total_pnl
+    (historico, todos los intentos). Ver logica de reinicio, 09-sep-2026."""
+    return sum(e.get('pnl', 0) for e in _attempt_entries(paper_log, intento))
+
+
+def _attempt_days_elapsed(paper_log: list, intento: int, today_str: str) -> int:
+    """Dias transcurridos DENTRO de un intento especifico. 0 si el
+    intento todavia no tiene ningun ciclo resuelto (ej. justo despues de
+    un reinicio, antes de que se resuelva el primer trade del intento
+    nuevo) -- distinto de _paper_progress()['days_elapsed'] (historico,
+    devuelve 1 en ese caso, porque ese cuenta "dias desde el inicio del
+    paper trading", no de un intento especifico)."""
+    entries = _attempt_entries(paper_log, intento)
+    dates_seen = sorted({e["date"] for e in entries if e.get("date")})
+    if not dates_seen:
+        return 0
+    first_date = datetime.strptime(dates_seen[0], "%Y-%m-%d").date()
+    today = datetime.strptime(today_str, "%Y-%m-%d").date()
+    return (today - first_date).days + 1
+
+
+def _attempt_peak(paper_log: list, intento: int) -> float:
+    """Maximo rodante del PnL acumulado DENTRO de un intento especifico
+    -- se reinicia junto con el intento (ver _check_attempt_reset)."""
     peak = 0.0
     running = 0.0
-    for e in paper_log:
+    for e in _attempt_entries(paper_log, intento):
         running += e.get('pnl', 0)
         if running > peak:
             peak = running
     return peak
+
+
+def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_threshold: float) -> Optional[str]:
+    """
+    Retorna "PASE", "QUIEBRE", o None -- funcion PURA, sin efectos
+    secundarios (no manda mensajes, no toca paper_log), para poder
+    testearla en aislamiento del resto de run() (que si tiene llamadas
+    de red). mll_threshold ya viene NEGATIVO (ver MLL_THRESHOLD arriba).
+    """
+    if attempt_pnl_after >= profit_target:
+        return "PASE"
+    if attempt_pnl_after <= mll_threshold:
+        return "QUIEBRE"
+    return None
 
 
 def _paper_progress(paper_log: list, today_str: str) -> dict:
@@ -253,15 +319,18 @@ def run():
     now = ct_now()
     today_str = str(date.today())
     paper_log = load_log()
-    # NOTA (09-sep-2026): "Progreso a Target" es ACUMULADO desde el dia 1
-    # de paper trading, SIN limite de intento (el codigo no detecta
-    # pass/blow del Combine ni resetea nada -- decision explicita del
-    # usuario de no agregar esa logica en este cambio de formato, ver
-    # GLITCH_RESEARCH_LOG.md). Si el paper trading corre lo suficiente,
-    # puede superar $3,000 o caer por debajo del floor sin que el mensaje
-    # lo refleje como "intento resuelto" -- tracking real de limites de
-    # intento queda como tarea futura separada.
-    total_pnl_before = sum(e.get('pnl', 0) for e in paper_log)
+    # Logica de reinicio de intento (09-sep-2026, ver GLITCH_RESEARCH_LOG.md)
+    # -- resuelve la limitacion documentada anteriormente ("Progreso a
+    # Target acumulado sin limite de intento"). "Progreso a
+    # Target"/"Equity"/"Peak"/"Dias vs. Estimado" ahora estan acotados al
+    # intento actual, que se reinicia a $0 cuando el PnL acumulado del
+    # intento cruza PROFIT_TARGET (PASE) o MLL_THRESHOLD (QUIEBRE) --
+    # ver paso 5b abajo. "Dia de paper", "Pass Rate", y "Ciclos" NO se
+    # reinician -- siguen siendo historicos de TODOS los intentos
+    # (decision explicita del usuario: esa es la metrica que importa
+    # para juzgar si la geometria se sostiene con mas muestra).
+    intento_actual = _current_intento(paper_log)
+    attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
 
     # ── 1. Resuelve el contrato en uso (para logging/alertas de vencimiento --
     #        ver docstring de arriba: el feed de precio en vivo usa el simbolo
@@ -369,7 +438,7 @@ def run():
     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
     log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
 
-    pct_target_before = total_pnl_before / 3000 * 100
+    pct_target_before = attempt_pnl_before / PROFIT_TARGET * 100
     msg = (f"{PREFIX}\n"
            f"[OPEN]\n"
            f"Symbol: {CFG.spec.label} ({ticker})\n"
@@ -378,7 +447,7 @@ def run():
            f"Contracts: {CFG.nc}\n"
            f"TP: {tp_price:,.4f}\n"
            f"SL: {sl_price:,.4f}\n"
-           f"Progreso a Target: ${total_pnl_before:,.2f} / $3,000 ({pct_target_before:.1f}%)\n"
+           f"Progreso a Target: ${attempt_pnl_before:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_before:.1f}%)\n"
            f"{utc_now_str()}")
     send(msg)
 
@@ -427,14 +496,14 @@ def run():
     pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
     log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
 
-    progreso_acumulado = total_pnl_before + pnl
-    pct_target_acumulado = progreso_acumulado / 3000 * 100
+    attempt_pnl_after = attempt_pnl_before + pnl
+    pct_target_acumulado = attempt_pnl_after / PROFIT_TARGET * 100
     msg = (f"{PREFIX}\n"
            f"[CLOSE] [{result}]\n"
            f"Symbol: {CFG.spec.label} ({ticker})\n"
            f"PnL: ${pnl:+,.2f}\n"
            f"Contracts: {CFG.nc}\n"
-           f"Progreso a Target: ${progreso_acumulado:,.2f} / $3,000 ({pct_target_acumulado:.1f}%)\n"
+           f"Progreso a Target: ${attempt_pnl_after:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_acumulado:.1f}%)\n"
            f"Dia de paper: {progress['days_elapsed']}\n"
            f"Pass Rate: {pass_rate_line}\n"
            f"{utc_now_str()}")
@@ -446,11 +515,36 @@ def run():
         "exit": exit_price, "result": result,
         "pnl": round(pnl, 2), "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
         "nc": CFG.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
+        "intento": intento_actual,
     })
     save_log(paper_log)
 
-    total_pnl = sum(e.get('pnl', 0) for e in paper_log)
-    progress = _paper_progress(paper_log, today_str)  # recalculado -- incluye el ciclo de hoy
+    # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) --
+    #         09-sep-2026, ver GLITCH_RESEARCH_LOG.md. El evento se
+    #         registra el mismo dia que ocurre -- mensaje separado del
+    #         resumen diario normal. ──
+    event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, MLL_THRESHOLD)
+    if event is not None:
+        attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
+        historic_progress = _paper_progress(paper_log, today_str)  # ya incluye el ciclo de hoy
+        if historic_progress["pass_rate_empirico"] is not None:
+            gap_pp = (historic_progress["pass_rate_empirico"] - THEORETICAL_PASS_RATE) * 100
+            hist_pass_rate_line = (f"{historic_progress['pass_rate_empirico']:.1%} empirico vs "
+                                     f"{THEORETICAL_PASS_RATE:.1%} teorico ({gap_pp:+.1f}pp)")
+        else:
+            hist_pass_rate_line = "sin ciclos resueltos todavia"
+
+        reset_msg = (f"{PREFIX} [INTENTO #{intento_actual} COMPLETADO: {event}]\n"
+                     f"PnL final del intento: ${attempt_pnl_after:+,.2f}\n"
+                     f"Dias que tomo este intento: {attempt_days}\n"
+                     f"Pass Rate acumulado historico: {hist_pass_rate_line}\n"
+                     f"Iniciando intento #{intento_actual + 1} desde $0\n"
+                     f"{utc_now_str()}")
+        send(reset_msg)
+        log.info(reset_msg.replace("\n", " | "))
+        intento_actual += 1  # para el resumen diario de abajo -- ya pertenece al intento nuevo
+
+    progress = _paper_progress(paper_log, today_str)  # historico -- recalculado, incluye el ciclo de hoy
 
     if progress["pass_rate_empirico"] is not None:
         gap_pp = (progress["pass_rate_empirico"] - THEORETICAL_PASS_RATE) * 100
@@ -459,15 +553,22 @@ def run():
     else:
         pass_rate_line = "sin ciclos resueltos todavia"
 
-    peak = _peak_equity(paper_log)
+    # Acotado al intento actual (ya incrementado arriba si hubo
+    # PASE/QUIEBRE hoy) -- si el intento acaba de reiniciarse, estos tres
+    # caen naturalmente en 0/0.00/0 (sin ciclos resueltos todavia para el
+    # intento nuevo), consistente con "Iniciando intento #N+1 desde $0"
+    # del mensaje de reinicio de arriba.
+    attempt_equity = _attempt_pnl(paper_log, intento_actual)
+    attempt_peak = _attempt_peak(paper_log, intento_actual)
+    attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
 
     summary = (f"{PREFIX}\n"
-               f"Equity: ${total_pnl:,.2f}\n"
-               f"Peak: ${peak:,.2f}\n"
+               f"Equity: ${attempt_equity:,.2f}\n"
+               f"Peak: ${attempt_peak:,.2f}\n"
                f"PnL Hoy: ${pnl:+,.2f}\n"
                f"Ciclos: {progress['n_cycles']}\n"
                f"Pass Rate: {pass_rate_line}\n"
-               f"Dias vs. Estimado: {progress['days_elapsed']} / {DIAS_ESPERADOS} esperados\n"
+               f"Dias vs. Estimado: {attempt_days} / {DIAS_ESPERADOS} esperados\n"
                f"{utc_now_str()}")
     send(summary)
     log.info("Done — saliendo")

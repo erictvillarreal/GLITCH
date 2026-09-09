@@ -981,3 +981,65 @@ Aplicado en ambas ramas: `main` (`geometry_scheduler.py`,
 copia separada de `execution/contracts.py`). Suite completa verde en
 ambas ramas antes de cada push.
 
+## Lógica de reinicio de intento de Combine — geometry_scheduler.py (09-sep-2026)
+
+**Cambio de LÓGICA real, no de formato** — cierra el gap documentado
+explícitamente en el rediseño de templates anterior ("Progreso a
+Target"/"Equity"/"Peak"/"Dias vs. Estimado" eran acumulados sin límite
+de intento, sin detección de pase/quiebre).
+
+**Umbrales confirmados contra `core/prop_firm.py`** (fuente ya
+auditada, usada por `scripts/cerebro2_cashflow_monte_carlo.py`) — NO
+hardcodeados a mano: `TOPSTEP_50K.profit_target = $3,000`,
+`TOPSTEP_50K.mll_distance = $2,000` (umbral de quiebre = -$2,000).
+Cuenta 50K es correcta para este scheduler independientemente de qué
+producto esté activo vía `GLITCH_PRODUCT` — todo Camino B se diseñó y
+validó contra el `nc_cap` de una cuenta 50K.
+
+**Diseño — sin estado separado, todo derivado de `paper_log`** (mismo
+principio que `_paper_progress()` ya establecido): cada trade cerrado
+se etiqueta con `"intento": N` en el entry que se appendea al Gist.
+`_current_intento()` deriva el intento activo como el máximo valor de
+`"intento"` visto en el log (1 si está vacío — compatibilidad hacia
+atrás con entradas de antes de este cambio, que no tienen el campo).
+`_attempt_pnl()`, `_attempt_days_elapsed()`, `_attempt_peak()` filtran
+por ese intento específico.
+
+**Reinicio:** al cerrar cada trade, `_check_attempt_reset()` (función
+pura, sin efectos secundarios — testeada en aislamiento) compara el
+PnL acumulado del intento contra los 2 umbrales. Si cruza cualquiera,
+se envía un mensaje NUEVO y separado del resumen diario:
+
+```
+S10GLITCH - COMBINE - MES [INTENTO #N COMPLETADO: PASE/QUIEBRE]
+PnL final del intento: $X
+Dias que tomo este intento: X
+Pass Rate acumulado historico: X% empirico vs 81.4% teorico
+Iniciando intento #N+1 desde $0
+```
+
+**Confirmado explícitamente por el usuario (punto 3): Pass Rate y
+Ciclos NO se reinician** — siguen siendo históricos de TODOS los
+intentos (pasados y quebrados), porque esa es la métrica que importa
+para juzgar si la geometría se sostiene con más muestra. "Dia de
+paper" (histórico, desde el inicio del paper trading) tampoco cambia
+de significado. Solo "Progreso a Target"/"Equity"/"Peak"/"Dias vs.
+Estimado" (en OPEN/CLOSE/SUMMARY) pasan a estar acotados al intento
+actual — resolviendo correctamente la limitación ya documentada, no
+como un cambio nuevo sin relación.
+
+**Verificado con 23 tests nuevos** en `tests/test_geometry_parity.py`
+(no solo revisado) — cubre exactamente los 3 casos pedidos
+(`_check_attempt_reset`: pase exacto, pase con overshoot, quiebre
+exacto, quiebre con overshoot, y el caso normal sin cruce de umbral en
+ambas direcciones) más `_current_intento`/`_attempt_pnl`/
+`_attempt_days_elapsed`/`_attempt_peak` en aislamiento, un test de
+integración del ciclo completo (pase → el intento siguiente arranca en
+$0, el intento anterior queda intacto sin tocarse), y un test explícito
+confirmando que Pass Rate/Ciclos NO se reinician entre intentos.
+Suite completa: 153 tests, verde.
+
+`_peak_equity()` (histórico, todos los intentos sumados — ya no se usa
+en ningún mensaje tras este cambio) se eliminó por no tener ningún call
+site restante, reemplazada por `_attempt_peak()`.
+

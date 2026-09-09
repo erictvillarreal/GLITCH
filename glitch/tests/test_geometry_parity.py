@@ -201,3 +201,185 @@ class TestUnifiedStartupCheck:
         monkeypatch.setenv("MASSIVE_API_KEY", "test-key-not-real")
         monkeypatch.setenv("GLITCH_PRODUCT", "MES")
         importlib.reload(scheduler)
+
+
+class TestAttemptResetThresholds:
+    """
+    09-sep-2026: los umbrales de PASE/QUIEBRE deben venir de
+    core/prop_firm.py (fuente ya auditada), no de numeros hardcodeados a
+    mano -- ver GLITCH_RESEARCH_LOG.md.
+    """
+
+    def test_profit_target_matches_topstep_50k(self):
+        from core.prop_firm import TOPSTEP_50K
+        assert scheduler.PROFIT_TARGET == TOPSTEP_50K.profit_target == 3_000
+
+    def test_mll_threshold_matches_topstep_50k_negated(self):
+        from core.prop_firm import TOPSTEP_50K
+        assert scheduler.MLL_THRESHOLD == -TOPSTEP_50K.mll_distance == -2_000
+
+
+class TestCurrentIntento:
+    def test_empty_log_is_attempt_1(self):
+        assert scheduler._current_intento([]) == 1
+
+    def test_no_resolved_cycles_is_attempt_1(self):
+        log = [{"date": "2026-09-01", "note": "no_data_entry", "pnl": 0}]
+        assert scheduler._current_intento(log) == 1
+
+    def test_single_attempt_so_far(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 500, "intento": 1},
+            {"date": "2026-09-02", "result": "SL", "pnl": -300, "intento": 1},
+        ]
+        assert scheduler._current_intento(log) == 1
+
+    def test_returns_highest_intento_seen(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 500, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 3000, "intento": 1},
+            {"date": "2026-09-03", "result": "SL", "pnl": -200, "intento": 2},
+        ]
+        assert scheduler._current_intento(log) == 2
+
+    def test_entries_without_intento_field_default_to_1(self):
+        """Compatibilidad hacia atras -- entradas de antes de este cambio
+        no tienen el campo 'intento' todavia."""
+        log = [{"date": "2026-09-01", "result": "TP", "pnl": 500}]
+        assert scheduler._current_intento(log) == 1
+
+
+class TestAttemptPnl:
+    def test_sums_only_current_attempt(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 3000, "intento": 1},
+            {"date": "2026-09-02", "result": "SL", "pnl": -300, "intento": 2},
+            {"date": "2026-09-03", "result": "TP", "pnl": 500, "intento": 2},
+        ]
+        assert scheduler._attempt_pnl(log, 1) == 3000
+        assert scheduler._attempt_pnl(log, 2) == 200
+
+    def test_empty_attempt_is_zero(self):
+        assert scheduler._attempt_pnl([], 5) == 0
+
+    def test_ignores_unresolved_entries(self):
+        log = [
+            {"date": "2026-09-01", "note": "no_data_entry", "pnl": 0, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 500, "intento": 1},
+        ]
+        assert scheduler._attempt_pnl(log, 1) == 500
+
+
+class TestAttemptDaysElapsed:
+    def test_no_entries_yet_is_zero(self):
+        """Justo despues de un reinicio, antes del primer trade del
+        intento nuevo -- 0, no 1 (distinto de _paper_progress historico)."""
+        assert scheduler._attempt_days_elapsed([], 3, "2026-09-10") == 0
+
+    def test_first_day_of_attempt_is_1(self):
+        log = [{"date": "2026-09-10", "result": "TP", "pnl": 500, "intento": 1}]
+        assert scheduler._attempt_days_elapsed(log, 1, "2026-09-10") == 1
+
+    def test_counts_from_first_entry_of_that_attempt_only(self):
+        log = [
+            {"date": "2026-09-01", "result": "SL", "pnl": -2000, "intento": 1},
+            {"date": "2026-09-05", "result": "TP", "pnl": 500, "intento": 2},
+        ]
+        # Intento 2 empezo el 2026-09-05, no el 2026-09-01 (eso es intento 1)
+        assert scheduler._attempt_days_elapsed(log, 2, "2026-09-08") == 4
+
+
+class TestAttemptPeak:
+    def test_tracks_running_max_within_attempt(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 500, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 300, "intento": 1},
+            {"date": "2026-09-03", "result": "SL", "pnl": -600, "intento": 1},
+        ]
+        # running: 500, 800, 200 -> peak=800
+        assert scheduler._attempt_peak(log, 1) == 800
+
+    def test_does_not_leak_across_attempts(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 3000, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 100, "intento": 2},
+        ]
+        assert scheduler._attempt_peak(log, 2) == 100
+
+
+class TestCheckAttemptReset:
+    """Los 3 casos pedidos explicitamente: pase, quiebre, y normal (ningun
+    umbral cruzado, sigue igual)."""
+
+    def test_pase_at_exact_target(self):
+        assert scheduler._check_attempt_reset(3000, 3000, -2000) == "PASE"
+
+    def test_pase_when_overshooting_target(self):
+        assert scheduler._check_attempt_reset(3450, 3000, -2000) == "PASE"
+
+    def test_quiebre_at_exact_mll(self):
+        assert scheduler._check_attempt_reset(-2000, 3000, -2000) == "QUIEBRE"
+
+    def test_quiebre_when_overshooting_floor(self):
+        assert scheduler._check_attempt_reset(-2400, 3000, -2000) == "QUIEBRE"
+
+    def test_normal_case_no_event_between_thresholds(self):
+        assert scheduler._check_attempt_reset(500, 3000, -2000) is None
+        assert scheduler._check_attempt_reset(-500, 3000, -2000) is None
+        assert scheduler._check_attempt_reset(0, 3000, -2000) is None
+
+    def test_normal_case_just_short_of_either_threshold(self):
+        assert scheduler._check_attempt_reset(2999.99, 3000, -2000) is None
+        assert scheduler._check_attempt_reset(-1999.99, 3000, -2000) is None
+
+
+class TestAttemptResetIntegration:
+    """
+    Simula el flujo completo de un reinicio: un intento que pasa, y
+    confirma que el intento siguiente arranca limpio en $0 -- sin
+    invocar run() (que tiene llamadas de red), solo las funciones puras
+    que run() usa para decidir y calcular.
+    """
+
+    def test_full_reset_cycle_after_pass(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 1900, "intento": 1},  # acumulado 3100 -> PASE
+        ]
+        intento = scheduler._current_intento(log)
+        assert intento == 1
+        attempt_pnl = scheduler._attempt_pnl(log, intento)
+        assert attempt_pnl == 3100
+        event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
+        assert event == "PASE"
+
+        # El siguiente trade ya pertenece al intento 2
+        log.append({"date": "2026-09-03", "result": "SL", "pnl": -150, "intento": 2})
+        intento_nuevo = scheduler._current_intento(log)
+        assert intento_nuevo == 2
+        assert scheduler._attempt_pnl(log, intento_nuevo) == -150
+        # El intento 1 sigue intacto historicamente, no se borra ni se toca
+        assert scheduler._attempt_pnl(log, 1) == 3100
+
+    def test_full_reset_cycle_after_blow(self):
+        log = [
+            {"date": "2026-09-01", "result": "SL", "pnl": -1200, "intento": 1},
+            {"date": "2026-09-02", "result": "SL", "pnl": -900, "intento": 1},  # acumulado -2100 -> QUIEBRE
+        ]
+        intento = scheduler._current_intento(log)
+        attempt_pnl = scheduler._attempt_pnl(log, intento)
+        assert attempt_pnl == -2100
+        event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
+        assert event == "QUIEBRE"
+
+    def test_historic_pass_rate_and_cycles_never_reset_across_attempts(self):
+        """Punto 3 explicito del usuario: Pass Rate y Ciclos son
+        historicos de TODOS los intentos, nunca se reinician."""
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1500, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 1600, "intento": 1},  # PASE, intento 1
+            {"date": "2026-09-03", "result": "SL", "pnl": -400, "intento": 2},
+        ]
+        progress = scheduler._paper_progress(log, "2026-09-03")
+        assert progress["n_cycles"] == 3  # los 3 ciclos cuentan, de ambos intentos
+        assert progress["pass_rate_empirico"] == pytest.approx(2 / 3)  # 2 TP de 3 total, sin importar el intento
