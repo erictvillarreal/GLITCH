@@ -36,9 +36,55 @@ if not MASSIVE_API_KEY:
 
 BASE = "https://api.massive.com"
 HEADERS = {"Authorization": f"Bearer {MASSIVE_API_KEY}"}
-FRONT_MONTH_EXPIRY_ALERT_DAYS = 10  # dias habiles minimos antes de avisar
+
+# Puntos de control para la alerta de vencimiento (09-sep-2026) -- antes
+# alertaba TODOS los dias dentro de la ventana de 10 dias habiles,
+# multiplicado por cada servicio que comparte el mismo contrato
+# (GEOMETRY-MES y COMBO2D ambos alertando sobre MESU6 el mismo dia,
+# todos los dias) -- reportado como spam. Ver GLITCH_RESEARCH_LOG.md,
+# "Dos problemas reportados...", opcion (b) elegida sobre dedup via
+# estado compartido (opcion a, requeria coordinacion entre servicios con
+# riesgo de condicion de carrera) o consolidacion en un solo mensaje
+# (opcion c, la mas invasiva arquitectonicamente).
+FRONT_MONTH_ALERT_CHECKPOINTS = (10, 5, 2, 1)  # dias habiles restantes
+
+# Mismo calendario de feriados que los 3 schedulers (duplicado
+# deliberadamente, mismo criterio ya aplicado en cada uno -- dato
+# estatico trivial, bajo riesgo de duplicacion). Usado SOLO para
+# calcular el dia habil anterior (ver _previous_trading_day) -- no para
+# decidir si ESTE modulo debe hacer nada, eso lo decide is_trading_day()
+# de cada scheduler. Si algun scheduler actualiza su propio calendario
+# sin actualizar este, la deteccion de checkpoints salteados podria
+# desalinearse -- riesgo aceptado, mismo que ya existe entre los 3
+# schedulers.
+_HOLIDAYS = {
+    (2026,1,1),(2026,1,19),(2026,2,16),(2026,4,3),
+    (2026,5,25),(2026,7,3),(2026,9,7),(2026,11,26),(2026,12,25)
+}
 
 _TICKER_RE_CACHE: dict[str, "re.Pattern"] = {}
+
+
+def _is_trading_day(d: dt.date) -> bool:
+    if d.weekday() >= 5:
+        return False
+    return (d.year, d.month, d.day) not in _HOLIDAYS
+
+
+def _previous_trading_day(d: dt.date) -> dt.date:
+    """
+    Dia habil anterior a `d` (fin de semana + feriados). Usado para
+    detectar si un checkpoint de vencimiento se salto por un feriado
+    entre dos corridas reales del scheduler (busday_count de numpy NO
+    conoce los feriados custom del calendario del proyecto, solo fines
+    de semana -- un feriado puede hacer que `days_left` salte 2 en vez
+    de 1 entre dos corridas reales, saltandose un checkpoint exacto).
+    Puramente calculado desde la fecha de hoy -- sin estado persistido.
+    """
+    prev = d - dt.timedelta(days=1)
+    while not _is_trading_day(prev):
+        prev -= dt.timedelta(days=1)
+    return prev
 
 
 def _valid_outright_ticker(product: str, ticker: str) -> bool:
@@ -98,23 +144,35 @@ def get_front_month(product: str, cache: dict) -> str:
 
 def check_expiry_alerts(cache: dict, send_fn: Callable[[str], None], prefix: str) -> None:
     """
-    Avisa via send_fn si algun contrato en `cache` vence en <10 dias
-    habiles. `prefix` es el identificador COMPLETO ya construido por el
-    llamador (ej. "S10GLITCH - COMBINE - MES", "S10GLITCH - XFA - MGC",
-    "S10GLITCH - COMBO2D - MNQ") -- mismo prefijo que ya usa cada
-    scheduler en sus propios mensajes de OPEN/CLOSE/SUMMARY (rediseño de
-    templates, 09-sep-2026, ver GLITCH_RESEARCH_LOG.md). Esta funcion NO
-    construye el prefijo por su cuenta -- se pasa completo, no
-    hardcodeado, para que cada scheduler siga siendo la unica fuente de
-    verdad de su propia identificacion visual.
+    Avisa via send_fn si algun contrato en `cache` cruzo un checkpoint de
+    FRONT_MONTH_ALERT_CHECKPOINTS desde la ultima corrida real (no cada
+    dia dentro de la ventana de 10 dias habiles -- ver
+    GLITCH_RESEARCH_LOG.md, 09-sep-2026). `prefix` es el identificador
+    COMPLETO ya construido por el llamador (ej. "S10GLITCH - COMBINE -
+    MES", "S10GLITCH - XFA - MGC", "S10GLITCH - COMBO2D - MNQ") -- mismo
+    prefijo que ya usa cada scheduler en sus propios mensajes de
+    OPEN/CLOSE/SUMMARY. Esta funcion NO construye el prefijo por su
+    cuenta -- se pasa completo, no hardcodeado.
+
+    Deteccion de checkpoint SIN estado persistido: compara `days_left`
+    de HOY contra `days_left` calculado para el dia habil anterior
+    (_previous_trading_day) -- si algun checkpoint cae estrictamente
+    entre esos dos valores, se considera "cruzado" y dispara la alerta,
+    incluso si un feriado hizo que el conteo saltara 2 en vez de 1 (el
+    checkpoint NO se pierde por el salto).
     """
+    today = dt.date.today()
+    prev_trading_day = _previous_trading_day(today)
     for product, (ticker, ltd_str) in cache.items():
         ltd = dt.datetime.strptime(ltd_str, "%Y-%m-%d").date()
-        days_left = int(np.busday_count(dt.date.today(), ltd))
-        if days_left < FRONT_MONTH_EXPIRY_ALERT_DAYS:
+        days_left = int(np.busday_count(today, ltd))
+        days_left_prev = int(np.busday_count(prev_trading_day, ltd))
+        crossed = [c for c in FRONT_MONTH_ALERT_CHECKPOINTS if days_left <= c < days_left_prev]
+        if crossed:
+            checkpoint_hit = max(crossed)
             send_fn(f"""{prefix}
 STATUS: CONTRATO PROXIMO A VENCER
 {product}: {ticker}
-Vence: {ltd_str} ({days_left} dias habiles restantes)
+Vence: {ltd_str} ({days_left} dias habiles restantes, checkpoint {checkpoint_hit})
 ACCION: verificar que el roll dinamico tome el siguiente contrato automaticamente
 {dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}""")
