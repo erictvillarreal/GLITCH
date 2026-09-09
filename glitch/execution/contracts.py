@@ -96,13 +96,25 @@ def get_front_month(product: str, cache: dict) -> str:
     return cache[product][0]
 
 
-def check_expiry_alerts(cache: dict, send_fn: Callable[[str], None], label: str) -> None:
-    """Avisa via send_fn si algun contrato en `cache` vence en <10 dias habiles."""
+def check_expiry_alerts(cache: dict, send_fn: Callable[[str], None], prefix: str) -> None:
+    """
+    Avisa via send_fn si algun contrato en `cache` vence en <10 dias
+    habiles. `prefix` es el identificador COMPLETO ya construido por el
+    llamador (ej. "S10GLITCH - COMBINE - MES", "S10GLITCH - XFA - MGC",
+    "S10GLITCH - COMBO2D - MNQ") -- mismo prefijo que ya usa cada
+    scheduler en sus propios mensajes de OPEN/CLOSE/SUMMARY (rediseño de
+    templates, 09-sep-2026, ver GLITCH_RESEARCH_LOG.md). Esta funcion NO
+    construye el prefijo por su cuenta -- se pasa completo, no
+    hardcodeado, para que cada scheduler siga siendo la unica fuente de
+    verdad de su propia identificacion visual.
+    """
     for product, (ticker, ltd_str) in cache.items():
         ltd = dt.datetime.strptime(ltd_str, "%Y-%m-%d").date()
         days_left = int(np.busday_count(dt.date.today(), ltd))
         if days_left < FRONT_MONTH_EXPIRY_ALERT_DAYS:
-            send_fn(f"""⚠️ GLITCH - {label} | CONTRATO PROXIMO A VENCER
+            send_fn(f"""{prefix}
+STATUS: CONTRATO PROXIMO A VENCER
 {product}: {ticker}
 Vence: {ltd_str} ({days_left} dias habiles restantes)
-ACCION: verificar que el roll dinamico tome el siguiente contrato automaticamente""")
+ACCION: verificar que el roll dinamico tome el siguiente contrato automaticamente
+{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}""")

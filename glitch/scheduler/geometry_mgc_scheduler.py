@@ -120,7 +120,7 @@ DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
 # flexibilidad, refactorizar entonces -- explicito ahora es mejor que
 # implicito con un solo candidato real.
 PRODUCT_KEY = "MGC_XFA_150K"
-DISPLAY_LABEL = "GEOMETRY-MGC-XFA"  # usado solo para check_expiry_alerts() (execution/contracts.py, sin tocar)
+DISPLAY_LABEL = "GEOMETRY-MGC-XFA"  # usado solo en logs internos (log.info), no en mensajes de Telegram -- ver PREFIX abajo
 CFG = CANDIDATES[PRODUCT_KEY]
 
 # Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar en los
@@ -312,7 +312,7 @@ def run():
     try:
         ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
         log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
-        check_expiry_alerts(_front_month_cache, send, DISPLAY_LABEL)
+        check_expiry_alerts(_front_month_cache, send, PREFIX)
     except Exception as e:
         log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
         send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
