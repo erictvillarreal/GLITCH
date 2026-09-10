@@ -1043,3 +1043,121 @@ Suite completa: 153 tests, verde.
 en ningún mensaje tras este cambio) se eliminó por no tener ningún call
 site restante, reemplazada por `_attempt_peak()`.
 
+## Incidente: posición SHORT MGCV6 sin CLOSE, hallazgo arquitectónico compartido por los 3 schedulers (09-sep-2026)
+
+**Síntoma reportado por el usuario:** una posición GEOMETRY-MGC
+(SHORT, MGCV6, entry 4,415.80, TP=4,379.40, SL=4,452.20, abierta
+2026-09-09 12:13 UTC) nunca recibió su mensaje de CLOSE.
+
+**Diagnóstico, con evidencia de código, no suposición:** el ciclo
+completo OPEN→monitoreo→CLOSE vive dentro de UNA sola invocación de
+`run()`, sostenida por un `while True` que hace poll cada 60s hasta
+TP/SL o el flatten de las 14:30 CT. `paper_log.append()` solo se llama
+al cerrar (o en el caso de "no entry data") — **nunca al abrir**. Si el
+proceso muere en cualquier punto entre el mensaje de OPEN y el cierre
+normal, la posición desaparece sin dejar rastro: ni un registro
+"abierto" huérfano, ni aviso — y la siguiente corrida, que no tiene
+ningún mecanismo de reconciliación, simplemente abre una posición
+nueva sin saber que la anterior existió.
+
+**Causa más probable, por correlación temporal exacta (no confirmada
+por Railway, el usuario lo está verificando por su cuenta):** las 3
+corridas de push a `cerebro2-dev` de ese mismo día cayeron en
+14:39:48 UTC, 14:48:48 UTC, y 23:19:43 UTC — las primeras DOS caen
+dentro de la ventana de vida esperada de esa posición
+(12:13–19:30 UTC). El servicio GEOMETRY-MGC está conectado a
+`cerebro2-dev` y se redeploya automáticamente en cada push — un
+redeploy en ese momento habría matado el proceso a mitad del loop de
+monitoreo, exactamente el síntoma reportado. `main` no tuvo el mismo
+riesgo hoy porque los pushes de hoy a esa rama se retuvieron
+localmente hasta después de las 15:00 CT (freeze window normal),
+mucho después del flatten de MES.
+
+**Decisión del usuario:** NO pausar el cron manualmente — se acepta
+perder el rastro de este trade específico mientras se construye la
+solución estructural con el rigor de siempre. No es exclusivo de MGC:
+`geometry_scheduler.py` y `combo2d_scheduler.py` comparten exactamente
+el mismo patrón arquitectónico (un solo loop bloqueante sostiene la
+posición, append-only al cierre, sin lógica de reanudación) — hoy se
+manifestó en MGC porque fue el único servicio cuya rama recibió push
+durante su propia ventana de mercado en vivo, pero el mismo riesgo
+existe en los otros dos bajo el timing equivocado.
+
+### Mitigación inmediata (opción b) — aplicada ya, sin código
+
+`cerebro2-dev` ahora se trata con la misma disciplina de freeze window
+que `main`, pero **solo durante la ventana de MGC (07:00–14:30 CT)** —
+no un freeze general de la rama completa, que frenaría trabajo de
+investigación de Cerebro 2 sin relación con este scheduler. Regla de
+sesión, no un cambio de código; documentada aquí para que una sesión
+futura la herede.
+
+### Fix estructural (opción a) — implementado, con el mismo rigor de siempre
+
+**Diseño aprobado antes de tocar `run()` en ningún scheduler** (ver
+turno anterior de esta sesión para el análisis completo de opciones a
+vs. b vs. c): un segundo archivo de Gist por scheduler
+(`geometry_mes_pending.json`, `geometry_mgc_pending.json`,
+`combo2d_pending.json`), separado del historial append-only, con a lo
+sumo un registro: la posición actualmente abierta, o vacío.
+
+- `execution/gist_store.py`: nuevas `load_state(filename) -> dict` /
+  `save_state(filename, data: dict)`, refactorizadas para compartir el
+  I/O de red con `load_log`/`save_log` vía helpers internos
+  `_read_file`/`_write_file` — sin duplicar la lógica HTTP/manejo de
+  errores. 10 tests nuevos en `tests/test_gist_store.py` (20 en total).
+- Cada scheduler: `save_pending(...)` se llama **antes** del mensaje de
+  Telegram de apertura (estado durable primero, notificación después —
+  mismo criterio que el módulo ya documentaba), y se limpia
+  (`save_pending({})`) en el cierre normal.
+- Al inicio de `run()` (paso 0, antes de resolver el front-month de
+  hoy — el registro pendiente ya trae su propio ticker): si hay una
+  posición pendiente, se reconcilia con el precio actual ANTES de
+  considerar abrir una posición nueva.
+
+**Fix encontrado y corregido en el mismo trabajo, no como tarea
+aparte:** `_current_intento()` (MES y MGC) filtraba por
+`result in ("TP","SL","FLATTEN")` antes de tomar el máximo `intento`
+visto. Una entrada `"RECONCILED"` (deliberadamente fuera de ese set,
+para excluirla de Pass Rate/WR/attempt_pnl) habría quedado invisible
+también ahí, causando que el siguiente trade real reutilizara un
+número de intento ya consumido por el intento reconciliado. Corregido:
+"qué intento vamos" ahora mira CUALQUIER entrada con el campo
+`"intento"` presente (reconciliada o no); "qué entradas cuentan para
+el desempeño de ese intento" sigue usando el filtro de resueltas —
+misma exclusión de siempre, sin código nuevo en esos otros cálculos.
+
+**Limitación honesta, documentada en el propio mensaje de Telegram, no
+solo en un comentario de código:** comparar el precio ACTUAL contra
+TP/SL no puede recuperar el camino real del precio durante el hueco —
+si el precio tocó TP y luego se revirtió antes de la siguiente
+corrida, esto no lo detecta. Por eso el resultado de una
+reconciliación SIEMPRE es `"result": "RECONCILED"` (nunca
+`"TP"/"SL"/"FLATTEN"`) y `"pnl_estimated": True` — decisión aprobada
+explícitamente por el usuario: excluir por completo de Pass Rate/WR,
+`attempt_pnl`, y detección de PASE/QUIEBRE, mismo trato que ya recibe
+`"no_data_entry"`, sin necesitar código nuevo en `_paper_progress()`,
+`_attempt_pnl()`, ni `_check_attempt_reset()` — la exclusión sale
+gratis de reusar el mismo filtro ya existente.
+
+**Verificado con tests nuevos, no solo revisado** (todos con `pytest`,
+sin red real):
+- `tests/test_gist_store.py`: `load_state`/`save_state` — config
+  ausente lanza, vacío/ausente/malformado da `{}`, fallo de red no
+  tumba el proceso, limpieza con `{}` explícito.
+- `tests/test_geometry_parity.py`: `_build_pending_record`,
+  `_reconcile_pending_position` (LONG y SHORT × TP confirmado / SL
+  confirmado / inconcluso, siempre `result="RECONCILED"`), el fix de
+  `_current_intento` (una entrada reconciliada sola SÍ avanza el
+  intento; el PnL estimado NUNCA se filtra a `attempt_pnl`/dispara
+  PASE-QUIEBRE aunque cruzaría el umbral si se contara), y un test de
+  integración de extremo a extremo simulando el escenario real
+  reportado (corrida interrumpida → reconciliación → trade nuevo sin
+  colisionar).
+- `tests/test_combo2d_parity.py`: mismos casos, sin el campo
+  `"intento"` (combo2d no tiene lógica de reinicio de intento) — y un
+  test explícito de que la entrada reconciliada nunca cuenta en
+  `wins`/`total` del Win Rate, aunque su `estimated_outcome` sea "TP".
+
+Suite completa: 216 tests, verde, antes de cada commit.
+

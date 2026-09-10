@@ -156,6 +156,138 @@ class TestLoadSaveLogDelegatesToGistStore:
         assert captured["filename"] == "combo2d_log.json"
         assert captured["data"] == payload
 
+    def test_load_pending_calls_gist_store_with_combo2d_pending_filename(self, monkeypatch):
+        captured = {}
+
+        def _fake_load_state(filename):
+            captured["filename"] = filename
+            return {"side": 1}
+
+        monkeypatch.setattr(scheduler, "_gist_load_state", _fake_load_state)
+        result = scheduler.load_pending()
+        assert captured["filename"] == "combo2d_pending.json"
+        assert result == {"side": 1}
+
+    def test_save_pending_calls_gist_store_with_combo2d_pending_filename_and_data(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(scheduler, "_gist_save_state",
+                             lambda filename, data: captured.update(filename=filename, data=data))
+        scheduler.save_pending({"side": -1, "entry": 21000.0})
+        assert captured["filename"] == "combo2d_pending.json"
+        assert captured["data"] == {"side": -1, "entry": 21000.0}
+
+
+class TestBuildPendingRecord:
+    """09-sep-2026, ver GLITCH_RESEARCH_LOG.md -- mismo mecanismo que
+    geometry_scheduler.py, sin campo 'intento' (combo2d no tiene logica
+    de reinicio de intento)."""
+
+    def test_captures_everything_needed_to_reconcile(self):
+        record = scheduler._build_pending_record(
+            side=1, direction_str="LONG", entry_price=21000.0,
+            tp_price=21050.0, sl_price=20970.0, ticker="MNQ=F",
+            today_str="2026-09-09", atr=20.0, tp_pts=50.0, sl_pts=30.0,
+            nc=6, dry_run=True,
+        )
+        assert record == {
+            "date": "2026-09-09", "side": 1, "direction": "LONG",
+            "entry": 21000.0, "tp_price": 21050.0, "sl_price": 20970.0,
+            "ticker": "MNQ=F", "atr": 20.0, "tp_pts": 50.0, "sl_pts": 30.0,
+            "nc": 6, "dry_run": True,
+        }
+        assert "intento" not in record
+
+
+class TestReconcilePendingPosition:
+    """Mismos 3 casos que geometry_scheduler.py, para LONG y SHORT."""
+
+    def _pending_long(self):
+        return {
+            "date": "2026-09-09", "side": 1, "direction": "LONG",
+            "entry": 21000.0, "tp_price": 21050.0, "sl_price": 20970.0,
+            "ticker": "MNQ=F", "atr": 20.0, "tp_pts": 50.0, "sl_pts": 30.0,
+            "nc": 6, "dry_run": True,
+        }
+
+    def _pending_short(self):
+        return {
+            "date": "2026-09-09", "side": -1, "direction": "SHORT",
+            "entry": 21000.0, "tp_price": 20950.0, "sl_price": 21030.0,
+            "ticker": "MNQ=F", "atr": 20.0, "tp_pts": 50.0, "sl_pts": 30.0,
+            "nc": 6, "dry_run": True,
+        }
+
+    def test_result_is_always_reconciled_never_a_normal_outcome(self):
+        for price in (21100.0, 20900.0, 21010.0):
+            entry = scheduler._reconcile_pending_position(self._pending_long(), price, point_value=2.0)
+            assert entry["result"] == "RECONCILED"
+            assert entry["reconciled"] is True
+            assert entry["pnl_estimated"] is True
+
+    def test_long_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 21100.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "TP"
+        assert entry["exit"] == pending["tp_price"]
+        expected_pnl = (pending["tp_price"] - pending["entry"]) * 1 * 2.0 * pending["nc"]
+        assert entry["pnl"] == pytest.approx(round(expected_pnl, 2))
+
+    def test_long_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 20900.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "SL"
+        assert entry["exit"] == pending["sl_price"]
+        assert entry["pnl"] < 0
+
+    def test_long_price_inconclusive_between_barriers(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 21010.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "INCONCLUSIVE"
+        assert entry["exit"] == 21010.0
+
+    def test_short_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 20900.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "TP"
+        assert entry["exit"] == pending["tp_price"]
+        assert entry["pnl"] > 0
+
+    def test_short_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 21100.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "SL"
+        assert entry["exit"] == pending["sl_price"]
+        assert entry["pnl"] < 0
+
+    def test_short_price_inconclusive_between_barriers(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 20990.0, point_value=2.0)
+        assert entry["estimated_outcome"] == "INCONCLUSIVE"
+        assert entry["exit"] == 20990.0
+
+
+class TestReconciledEntryExcludedFromWinRate:
+    """El mecanismo de exclusion de run() (total/wins filtran por result
+    in ('TP','SL','FLATTEN')) -- probado directamente contra la salida
+    real de _reconcile_pending_position, sin reimplementar el filtro."""
+
+    def test_reconciled_result_never_counted_as_win_or_total(self):
+        pending = {
+            "date": "2026-09-09", "side": 1, "direction": "LONG",
+            "entry": 21000.0, "tp_price": 21050.0, "sl_price": 20970.0,
+            "ticker": "MNQ=F", "atr": 20.0, "tp_pts": 50.0, "sl_pts": 30.0,
+            "nc": 6, "dry_run": True,
+        }
+        reconciled = scheduler._reconcile_pending_position(pending, 21100.0, point_value=2.0)
+        paper_log = [
+            {"date": "2026-09-05", "result": "TP", "pnl": 100.0},
+            reconciled,
+        ]
+        wins = sum(1 for e in paper_log if e.get("result") == "TP")
+        total = sum(1 for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN"))
+        assert wins == 1
+        assert total == 1  # la reconciliada NO cuenta, aunque su estimated_outcome sea "TP"
+
 
 class TestUnifiedStartupCheck:
     """

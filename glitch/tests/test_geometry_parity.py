@@ -177,6 +177,33 @@ class TestLoadSaveLogDelegatesToGistStore:
         assert captured["filename"] == "geometry_mes_log.json"
         assert captured["data"] == payload
 
+    def test_load_pending_calls_gist_store_with_product_specific_filename(self, monkeypatch):
+        captured = {}
+
+        def _fake_load_state(filename):
+            captured["filename"] = filename
+            return {"side": 1}
+
+        monkeypatch.setattr(scheduler, "_gist_load_state", _fake_load_state)
+        result = scheduler.load_pending()
+        assert captured["filename"] == "geometry_mes_pending.json"
+        assert result == {"side": 1}
+
+    def test_save_pending_calls_gist_store_with_product_specific_filename_and_data(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(scheduler, "_gist_save_state",
+                             lambda filename, data: captured.update(filename=filename, data=data))
+        scheduler.save_pending({"side": -1, "entry": 4415.80})
+        assert captured["filename"] == "geometry_mes_pending.json"
+        assert captured["data"] == {"side": -1, "entry": 4415.80}
+
+    def test_save_pending_can_clear_with_empty_dict(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(scheduler, "_gist_save_state",
+                             lambda filename, data: captured.update(filename=filename, data=data))
+        scheduler.save_pending({})
+        assert captured["data"] == {}
+
 
 class TestUnifiedStartupCheck:
     """
@@ -383,3 +410,184 @@ class TestAttemptResetIntegration:
         progress = scheduler._paper_progress(log, "2026-09-03")
         assert progress["n_cycles"] == 3  # los 3 ciclos cuentan, de ambos intentos
         assert progress["pass_rate_empirico"] == pytest.approx(2 / 3)  # 2 TP de 3 total, sin importar el intento
+
+
+class TestCurrentIntentoConsidersReconciledEntries:
+    """
+    09-sep-2026 -- fix encontrado al diseñar la reconciliacion: antes,
+    _current_intento() solo miraba entradas resueltas (TP/SL/FLATTEN),
+    asi que una entrada "RECONCILED" (deliberadamente fuera de ese set,
+    para excluirla de Pass Rate/attempt_pnl) habria quedado invisible
+    tambien aqui, causando que el siguiente trade real reusara un
+    numero de intento ya consumido. Ver GLITCH_RESEARCH_LOG.md.
+    """
+
+    def test_reconciled_only_entry_still_advances_current_intento(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 1900, "intento": 1},  # PASE -> intento 2
+            {"date": "2026-09-03", "result": "RECONCILED", "pnl": -500,
+             "pnl_estimated": True, "reconciled": True, "intento": 2},
+        ]
+        # Sin el fix, esto daria 1 (el ultimo TP/SL/FLATTEN real) -- con
+        # el fix, debe ver la entrada RECONCILED e informar 2.
+        assert scheduler._current_intento(log) == 2
+
+    def test_reconciled_entry_excluded_from_attempt_pnl_and_pass_rate(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},
+            {"date": "2026-09-02", "result": "RECONCILED", "pnl": -9999,
+             "pnl_estimated": True, "reconciled": True, "intento": 1},
+        ]
+        # El PnL estimado (-9999) NUNCA debe filtrarse a attempt_pnl.
+        assert scheduler._attempt_pnl(log, 1) == 1200
+        progress = scheduler._paper_progress(log, "2026-09-02")
+        assert progress["n_cycles"] == 1  # solo el TP real cuenta
+        assert progress["pass_rate_empirico"] == 1.0
+
+    def test_reconciled_entry_alone_never_triggers_reset(self):
+        """Aunque el PnL estimado de una reconciliacion, si se contara,
+        cruzaria QUIEBRE -- no debe disparar nada porque esta excluido
+        de attempt_pnl por diseño."""
+        log = [{"date": "2026-09-01", "result": "RECONCILED", "pnl": -5000,
+                "pnl_estimated": True, "reconciled": True, "intento": 1}]
+        attempt_pnl = scheduler._attempt_pnl(log, scheduler._current_intento(log))
+        assert attempt_pnl == 0  # la reconciliada no cuenta
+        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) is None
+
+
+class TestBuildPendingRecord:
+    def test_captures_everything_needed_to_reconcile(self):
+        record = scheduler._build_pending_record(
+            side=-1, direction_str="SHORT", entry_price=4415.80,
+            tp_price=4379.40, sl_price=4452.20, ticker="MES=F",
+            today_str="2026-09-09", intento=1, nc=40, sl_ticks=100,
+            tp_ticks=40, product_key="MES", dry_run=True,
+        )
+        assert record == {
+            "date": "2026-09-09", "side": -1, "direction": "SHORT",
+            "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20,
+            "ticker": "MES=F", "nc": 40, "sl_ticks": 100, "tp_ticks": 40,
+            "product": "MES", "dry_run": True, "intento": 1,
+        }
+
+
+class TestReconcilePendingPosition:
+    """
+    09-sep-2026 -- funcion PURA, sin red. Los 3 casos: precio confirma
+    TP, precio confirma SL, precio inconcluso (todavia entre las dos
+    barreras) -- para LONG y SHORT.
+    """
+
+    def _pending_long(self):
+        return {
+            "date": "2026-09-09", "side": 1, "direction": "LONG",
+            "entry": 4415.80, "tp_price": 4452.20, "sl_price": 4379.40,
+            "ticker": "MES=F", "nc": 40, "sl_ticks": 100, "tp_ticks": 40,
+            "product": "MES", "dry_run": True, "intento": 3,
+        }
+
+    def _pending_short(self):
+        return {
+            "date": "2026-09-09", "side": -1, "direction": "SHORT",
+            "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20,
+            "ticker": "MES=F", "nc": 40, "sl_ticks": 100, "tp_ticks": 40,
+            "product": "MES", "dry_run": True, "intento": 3,
+        }
+
+    def test_result_is_always_reconciled_never_a_normal_outcome(self):
+        """La entrada MISMA que garantiza la exclusion de Pass
+        Rate/attempt_pnl -- nunca debe ser 'TP'/'SL'/'FLATTEN'."""
+        for pending, price in [(self._pending_long(), 4460.0),
+                                (self._pending_long(), 4370.0),
+                                (self._pending_long(), 4400.0)]:
+            entry = scheduler._reconcile_pending_position(pending, price, tick_value_usd=1.25, tick_size=0.25)
+            assert entry["result"] == "RECONCILED"
+            assert entry["reconciled"] is True
+            assert entry["pnl_estimated"] is True
+
+    def test_long_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 4470.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "TP"
+        assert entry["exit"] == pending["tp_price"]  # clipped, no el precio crudo 4470.0
+        expected_pnl = (pending["tp_price"] - pending["entry"]) * 1 * 1.25 / 0.25 * pending["nc"]
+        assert entry["pnl"] == pytest.approx(round(expected_pnl, 2))
+
+    def test_long_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 4360.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "SL"
+        assert entry["exit"] == pending["sl_price"]
+        assert entry["pnl"] < 0
+
+    def test_long_price_inconclusive_between_barriers(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 4400.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "INCONCLUSIVE"
+        assert entry["exit"] == 4400.0  # sin clip -- no se confirmo ningun cruce
+
+    def test_short_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 4360.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "TP"
+        assert entry["exit"] == pending["tp_price"]
+        assert entry["pnl"] > 0
+
+    def test_short_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 4470.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "SL"
+        assert entry["exit"] == pending["sl_price"]
+        assert entry["pnl"] < 0
+
+    def test_short_price_inconclusive_between_barriers(self):
+        pending = self._pending_short()
+        entry = scheduler._reconcile_pending_position(pending, 4400.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["estimated_outcome"] == "INCONCLUSIVE"
+        assert entry["exit"] == 4400.0
+
+    def test_preserves_intento_and_identity_fields(self):
+        pending = self._pending_long()
+        entry = scheduler._reconcile_pending_position(pending, 4400.0, tick_value_usd=1.25, tick_size=0.25)
+        assert entry["intento"] == 3
+        assert entry["date"] == "2026-09-09"
+        assert entry["product"] == "MES"
+        assert entry["nc"] == 40
+
+
+class TestPendingPositionFullCycle:
+    """
+    Integracion end-to-end de las funciones puras (sin red, sin run())
+    -- simula exactamente el escenario reportado: una corrida se
+    interrumpe a mitad del monitoreo, la siguiente corrida reconcilia,
+    y un trade nuevo despues no colisiona con la posicion reconciliada.
+    """
+
+    def test_interrupted_run_reconciled_then_new_trade_opens_clean(self):
+        paper_log = [{"date": "2026-09-05", "result": "TP", "pnl": 1000, "intento": 1}]
+
+        # Se abre una posicion (equivalente a save_pending() antes del
+        # mensaje de OPEN) -- el proceso "muere" aqui, antes de resolverla.
+        intento = scheduler._current_intento(paper_log)
+        pending = scheduler._build_pending_record(
+            side=-1, direction_str="SHORT", entry_price=4415.80,
+            tp_price=4379.40, sl_price=4452.20, ticker="MES=F",
+            today_str="2026-09-08", intento=intento, nc=40, sl_ticks=100,
+            tp_ticks=40, product_key="MES", dry_run=True,
+        )
+        assert intento == 1  # todavia no hay PASE/QUIEBRE
+
+        # La siguiente corrida encuentra `pending` no vacio y reconcilia.
+        reconciled = scheduler._reconcile_pending_position(pending, 4460.0, tick_value_usd=1.25, tick_size=0.25)
+        paper_log.append(reconciled)
+        pending = {}  # save_pending({}) -- limpio
+
+        assert not pending
+        assert reconciled["result"] == "RECONCILED"
+        assert scheduler._attempt_pnl(paper_log, 1) == 1000  # SIN cambio -- la reconciliada no cuenta
+
+        # Un trade nuevo, real, del mismo intento -- no colisiona con la reconciliada.
+        paper_log.append({"date": "2026-09-09", "result": "SL", "pnl": -200, "intento": 1})
+        assert scheduler._current_intento(paper_log) == 1
+        assert scheduler._attempt_pnl(paper_log, 1) == 800  # 1000 - 200, la reconciliada sigue sin contar

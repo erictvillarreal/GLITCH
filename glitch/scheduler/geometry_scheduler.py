@@ -78,6 +78,7 @@ from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
 from execution.contracts import get_front_month, check_expiry_alerts
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
+from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state
 from core.prop_firm import TOPSTEP_50K
 
 CT = ZoneInfo("America/Chicago")
@@ -105,6 +106,11 @@ if CFG.spec.yf_ticker is None:
     sys.exit(1)
 
 LOG_FILE = f"geometry_{PRODUCT_KEY.lower()}_log.json"  # nombre del archivo DENTRO del gist compartido -- ver execution/gist_store.py
+# Estado volatil de "posicion actualmente abierta, si hay una" (09-sep-2026,
+# ver GLITCH_RESEARCH_LOG.md) -- archivo SEPARADO de LOG_FILE (historial
+# append-only). Reconciliacion de crash-a-mitad-de-monitoreo: ver
+# _reconcile_pending_position() y el paso 0 de run().
+PENDING_FILE = f"geometry_{PRODUCT_KEY.lower()}_pending.json"
 POLL_INTERVAL = 60  # segundos entre polls
 
 # Benchmark teorico para el reporte diario de pass_rate -- ver
@@ -161,12 +167,24 @@ def _current_intento(paper_log: list) -> int:
     Numero de intento de Combine actual -- derivado de paper_log, SIN
     estado separado (mismo principio que _paper_progress: la fecha de
     la primera entrada ES el dia 1, aqui el "intento" mas alto ya visto
-    ES el intento actual). 1 si no hay ciclos resueltos todavia.
+    ES el intento actual). 1 si no hay ninguna entrada con el campo
+    "intento" todavia.
+
+    CORREGIDO (09-sep-2026, ver GLITCH_RESEARCH_LOG.md -- logica de
+    reconciliacion tras crash a mitad de monitoreo): considera CUALQUIER
+    entrada que tenga el campo "intento", no solo las resueltas
+    (TP/SL/FLATTEN). Antes de este fix, una entrada "RECONCILED"
+    (result fuera de ese set, a proposito, para excluirla de Pass
+    Rate/attempt_pnl) habria quedado invisible aqui tambien -- causando
+    que el siguiente trade real se etiquetara con un numero de intento
+    YA CONSUMIDO por el intento reconciliado, en vez de avanzar al
+    siguiente. "Que intento vamos" y "que entradas cuentan para el
+    desempeño de ese intento" son dos preguntas distintas -- esta
+    funcion resuelve la primera; _attempt_entries() (mas abajo) resuelve
+    la segunda, con el filtro de "resuelto" que SI le corresponde.
     """
-    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
-    if not resolved:
-        return 1
-    return max(e.get("intento", 1) for e in resolved)
+    tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
+    return max(tags) if tags else 1
 
 
 def _attempt_entries(paper_log: list, intento: int) -> list:
@@ -223,6 +241,77 @@ def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_thr
     return None
 
 
+def _build_pending_record(side: int, direction_str: str, entry_price: float, tp_price: float,
+                           sl_price: float, ticker: str, today_str: str, intento: int,
+                           nc: int, sl_ticks: int, tp_ticks: int, product_key: str, dry_run: bool) -> dict:
+    """
+    Todo lo necesario para reconciliar esta posicion si el proceso
+    muere antes de resolverla (09-sep-2026, ver GLITCH_RESEARCH_LOG.md
+    -- hallazgo de la posicion SHORT MGCV6 del 09-sep que nunca recibio
+    su CLOSE). Se guarda con save_pending() ANTES del mensaje de
+    Telegram de apertura -- estado durable primero, notificacion
+    despues, mismo criterio que execution/gist_store.py ya documenta.
+    """
+    return {
+        "date": today_str, "side": side, "direction": direction_str,
+        "entry": entry_price, "tp_price": tp_price, "sl_price": sl_price,
+        "ticker": ticker, "nc": nc, "sl_ticks": sl_ticks, "tp_ticks": tp_ticks,
+        "product": product_key, "dry_run": dry_run, "intento": intento,
+    }
+
+
+def _reconcile_pending_position(pending: dict, current_price: float,
+                                 tick_value_usd: float, tick_size: float) -> dict:
+    """
+    Funcion PURA (sin red, sin Telegram) -- reconstruye la mejor
+    estimacion posible de como termino una posicion que quedo
+    "pendiente" porque el proceso murio a mitad del monitoreo.
+
+    LIMITACION HONESTA, documentada en el propio registro (no solo en
+    un comentario): comparar el precio ACTUAL contra TP/SL no puede
+    recuperar el camino real del precio durante el hueco -- si el
+    precio toco TP y luego se revirtio antes de la siguiente corrida,
+    esto no lo detecta, solo ve donde esta el precio AHORA. Por eso el
+    resultado SIEMPRE se marca "RECONCILED" (nunca "TP"/"SL"/"FLATTEN")
+    y "pnl_estimated": True -- excluido a proposito de Pass Rate/WR,
+    attempt_pnl, y deteccion de PASE/QUIEBRE, porque todos esos filtran
+    por result in ("TP","SL","FLATTEN") y "RECONCILED" nunca califica
+    (mismo mecanismo que ya excluye "no_data_entry", sin codigo nuevo
+    en esos otros calculos).
+    """
+    side = pending["side"]
+    entry_price = pending["entry"]
+    tp_price = pending["tp_price"]
+    sl_price = pending["sl_price"]
+
+    if side == 1:
+        if current_price >= tp_price:
+            estimated_outcome, exit_price = "TP", tp_price
+        elif current_price <= sl_price:
+            estimated_outcome, exit_price = "SL", sl_price
+        else:
+            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
+    else:
+        if current_price <= tp_price:
+            estimated_outcome, exit_price = "TP", tp_price
+        elif current_price >= sl_price:
+            estimated_outcome, exit_price = "SL", sl_price
+        else:
+            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
+
+    pnl = (exit_price - entry_price) * side * tick_value_usd / tick_size * pending["nc"]
+
+    return {
+        "date": pending["date"], "side": side, "direction": pending.get("direction"),
+        "entry": entry_price, "exit": exit_price, "result": "RECONCILED",
+        "estimated_outcome": estimated_outcome,
+        "pnl": round(pnl, 2), "pnl_estimated": True, "reconciled": True,
+        "sl_ticks": pending.get("sl_ticks"), "tp_ticks": pending.get("tp_ticks"),
+        "nc": pending["nc"], "dry_run": pending.get("dry_run"),
+        "product": pending.get("product"), "intento": pending["intento"],
+    }
+
+
 def _paper_progress(paper_log: list, today_str: str) -> dict:
     """
     Deriva el progreso del periodo de paper SIN estado separado -- la
@@ -267,6 +356,17 @@ def load_log():
 
 def save_log(l):
     _gist_save_log(LOG_FILE, l)
+
+
+def load_pending() -> dict:
+    """{} si no hay ninguna posicion pendiente de reconciliar -- ver
+    PENDING_FILE arriba y GLITCH_RESEARCH_LOG.md, 09-sep-2026."""
+    return _gist_load_state(PENDING_FILE)
+
+
+def save_pending(d: dict):
+    """Pasar {} para limpiar (posicion resuelta normalmente o ya reconciliada)."""
+    _gist_save_state(PENDING_FILE, d)
 
 
 def is_trading_day():
@@ -331,6 +431,47 @@ def run():
     # para juzgar si la geometria se sostiene con mas muestra).
     intento_actual = _current_intento(paper_log)
     attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
+
+    # ── 0. Reconciliar posicion pendiente de una corrida anterior
+    #        interrumpida (09-sep-2026, ver GLITCH_RESEARCH_LOG.md --
+    #        hallazgo de la posicion SHORT MGCV6 que nunca recibio su
+    #        CLOSE). El propio ticker de la posicion pendiente ya esta
+    #        guardado en `pending`, no hace falta resolver el
+    #        front-month de HOY para esto. ──
+    pending = load_pending()
+    if pending:
+        log.info(f"Posicion pendiente encontrada de {pending.get('date')} -- reconciliando antes de continuar...")
+        recon_bars = fetch_intraday(pending["ticker"])
+        recon_price = float(recon_bars.iloc[-1]['close']) if recon_bars is not None and len(recon_bars) > 0 else None
+        if recon_price is None:
+            msg = (f"{PREFIX}\nSTATUS: ERROR\n"
+                   f"ERROR: posicion pendiente de {pending.get('date')} no se pudo reconciliar "
+                   f"(sin datos de precio) -- reintentando la proxima corrida. No se abre "
+                   f"posicion nueva hoy.\n{utc_now_str()}")
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
+        reconciled_entry = _reconcile_pending_position(pending, recon_price, CFG.spec.tick_value_usd, CFG.spec.tick_size)
+        paper_log.append(reconciled_entry)
+        save_log(paper_log)
+        save_pending({})
+        recon_msg = (f"{PREFIX} [POSICION RECONCILIADA TRAS INTERRUPCION]\n"
+                     f"Intento #{reconciled_entry['intento']}  |  {pending.get('direction')}: "
+                     f"{reconciled_entry['entry']:,.4f} → {reconciled_entry['exit']:,.4f}\n"
+                     f"Resultado estimado: {reconciled_entry['estimated_outcome']} (NO CONFIRMADO)\n"
+                     f"PnL estimado: ${reconciled_entry['pnl']:+,.2f} (reconciliado, no confirmado -- "
+                     f"el precio pudo haber tocado TP o SL y revertido durante la interrupcion, "
+                     f"esto solo ve donde esta el precio ahora)\n"
+                     f"Excluido de Pass Rate/attempt_pnl -- ver GLITCH_RESEARCH_LOG.md\n"
+                     f"{utc_now_str()}")
+        send(recon_msg)
+        log.info(recon_msg.replace("\n", " | "))
+        # Recalcular -- la entrada reconciliada puede ser la UNICA con el
+        # intento que estaba pendiente (ej. crasheo antes de que ningun
+        # trade real de ese intento se resolviera), asi que
+        # _current_intento podria cambiar tras appendear.
+        intento_actual = _current_intento(paper_log)
+        attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
 
     # ── 1. Resuelve el contrato en uso (para logging/alertas de vencimiento --
     #        ver docstring de arriba: el feed de precio en vivo usa el simbolo
@@ -438,6 +579,19 @@ def run():
     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
     log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
 
+    # Estado durable ANTES de la notificacion -- si el proceso muere en
+    # cualquier punto desde aqui hasta el cierre normal, la PROXIMA
+    # corrida encuentra esto y reconcilia en vez de perder el rastro por
+    # completo (ver paso 0 arriba). NOTA: se guarda CFG.spec.yf_ticker
+    # (el simbolo continuo que fetch_intraday() realmente consulta en el
+    # loop de monitoreo), NO `ticker` (el contrato especifico de Massive,
+    # solo usado para logging/alertas de vencimiento) -- la reconciliacion
+    # necesita el mismo simbolo que el monitoreo en vivo habria usado.
+    save_pending(_build_pending_record(
+        side, direction_str, entry_price, tp_price, sl_price, CFG.spec.yf_ticker,
+        today_str, intento_actual, CFG.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
+    ))
+
     pct_target_before = attempt_pnl_before / PROFIT_TARGET * 100
     msg = (f"{PREFIX}\n"
            f"[OPEN]\n"
@@ -518,6 +672,7 @@ def run():
         "intento": intento_actual,
     })
     save_log(paper_log)
+    save_pending({})  # posicion resuelta normalmente -- nada pendiente que reconciliar
 
     # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) --
     #         09-sep-2026, ver GLITCH_RESEARCH_LOG.md. El evento se

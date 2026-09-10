@@ -33,6 +33,7 @@ from strategies.combo2d import decide_side
 from simulation.triple_barrier import compute_atr as _shared_compute_atr
 from execution.contracts import MASSIVE_API_KEY, get_front_month, check_expiry_alerts
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
+from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state
 
 CT = ZoneInfo("America/Chicago")
 # Logging con timestamp SIEMPRE en America/Chicago -- fix del
@@ -48,6 +49,11 @@ ATR_PT_MULT   = 2.5                                 # TP = 2.5 * ATR
 ATR_SL_MULT   = 1.5                                 # SL = 1.5 * ATR
 ATR_WINDOW    = 20                                  # barras para ATR
 LOG_FILE      = "combo2d_log.json"  # nombre del archivo DENTRO del gist compartido -- ver execution/gist_store.py
+# Estado volatil de "posicion actualmente abierta, si hay una" (09-sep-2026,
+# ver GLITCH_RESEARCH_LOG.md -- mismo mecanismo que geometry_scheduler.py/
+# geometry_mgc_scheduler.py, aplicado aqui tambien porque el problema es
+# arquitectonico y compartido por los 3 schedulers, no exclusivo de MGC).
+PENDING_FILE  = "combo2d_pending.json"
 POLL_INTERVAL = 60  # segundos entre polls
 
 # Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar que
@@ -83,6 +89,69 @@ def load_log():
 
 def save_log(l):
     _gist_save_log(LOG_FILE, l)
+
+def load_pending() -> dict:
+    """{} si no hay ninguna posicion pendiente de reconciliar -- ver
+    PENDING_FILE arriba y GLITCH_RESEARCH_LOG.md, 09-sep-2026."""
+    return _gist_load_state(PENDING_FILE)
+
+def save_pending(d: dict):
+    """Pasar {} para limpiar (posicion resuelta normalmente o ya reconciliada)."""
+    _gist_save_state(PENDING_FILE, d)
+
+def _build_pending_record(side, direction_str, entry_price, tp_price, sl_price, ticker,
+                           today_str, atr, tp_pts, sl_pts, nc, dry_run) -> dict:
+    """Mismo mecanismo que geometry_scheduler.py::_build_pending_record --
+    sin campo 'intento' (combo2d no tiene logica de reinicio de intento,
+    solo geometry_scheduler.py/geometry_mgc_scheduler.py la tienen)."""
+    return {
+        "date": today_str, "side": side, "direction": direction_str,
+        "entry": entry_price, "tp_price": tp_price, "sl_price": sl_price,
+        "ticker": ticker, "atr": atr, "tp_pts": tp_pts, "sl_pts": sl_pts,
+        "nc": nc, "dry_run": dry_run,
+    }
+
+def _reconcile_pending_position(pending: dict, current_price: float, point_value: float) -> dict:
+    """
+    Funcion PURA -- mismo diseño y misma limitacion honesta que
+    geometry_scheduler.py::_reconcile_pending_position (ver ese archivo
+    para el razonamiento completo): comparar el precio ACTUAL contra
+    TP/SL no puede recuperar el camino real durante el hueco, por eso
+    result SIEMPRE es "RECONCILED" (nunca "TP"/"SL"/"FLATTEN") --
+    excluido a proposito de Win Rate (ver `total`/`wins` en run(), que
+    filtran por result in ("TP","SL","FLATTEN"), igual que
+    "no_data_entry" ya queda excluido sin cambios de codigo ahi).
+    """
+    side = pending["side"]
+    entry_price = pending["entry"]
+    tp_price = pending["tp_price"]
+    sl_price = pending["sl_price"]
+
+    if side == 1:
+        if current_price >= tp_price:
+            estimated_outcome, exit_price = "TP", tp_price
+        elif current_price <= sl_price:
+            estimated_outcome, exit_price = "SL", sl_price
+        else:
+            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
+    else:
+        if current_price <= tp_price:
+            estimated_outcome, exit_price = "TP", tp_price
+        elif current_price >= sl_price:
+            estimated_outcome, exit_price = "SL", sl_price
+        else:
+            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
+
+    pnl = (exit_price - entry_price) * side * point_value * pending["nc"]
+
+    return {
+        "date": pending["date"], "side": side, "direction": pending.get("direction"),
+        "entry": entry_price, "exit": exit_price, "result": "RECONCILED",
+        "estimated_outcome": estimated_outcome,
+        "pnl": round(pnl, 2), "pnl_estimated": True, "reconciled": True,
+        "atr": pending.get("atr"), "tp_pts": pending.get("tp_pts"), "sl_pts": pending.get("sl_pts"),
+        "nc": pending["nc"], "dry_run": pending.get("dry_run"),
+    }
 
 def is_trading_day():
     now = ct_now()
@@ -197,6 +266,37 @@ def run():
     today_str = str(date.today())
     paper_log = load_log()
 
+    # ── 0. Reconciliar posicion pendiente de una corrida anterior
+    #        interrumpida (09-sep-2026, ver GLITCH_RESEARCH_LOG.md). ──
+    pending = load_pending()
+    if pending:
+        log.info(f"Posicion pendiente encontrada de {pending.get('date')} -- reconciliando antes de continuar...")
+        recon_bars = fetch_intraday(pending.get("ticker", "MNQ=F"))
+        recon_price = float(recon_bars.iloc[-1]['close']) if recon_bars is not None and len(recon_bars) > 0 else None
+        if recon_price is None:
+            msg = (f"{PREFIX}\nSTATUS: ERROR\n"
+                   f"ERROR: posicion pendiente de {pending.get('date')} no se pudo reconciliar "
+                   f"(sin datos de precio) -- reintentando la proxima corrida. No se abre "
+                   f"posicion nueva hoy.\n{utc_now_str()}")
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
+        reconciled_entry = _reconcile_pending_position(pending, recon_price, MNQ_POINT)
+        paper_log.append(reconciled_entry)
+        save_log(paper_log)
+        save_pending({})
+        recon_msg = (f"{PREFIX} [POSICION RECONCILIADA TRAS INTERRUPCION]\n"
+                     f"{pending.get('direction')}: {reconciled_entry['entry']:,.2f} → "
+                     f"{reconciled_entry['exit']:,.2f}\n"
+                     f"Resultado estimado: {reconciled_entry['estimated_outcome']} (NO CONFIRMADO)\n"
+                     f"PnL estimado: ${reconciled_entry['pnl']:+,.2f} (reconciliado, no confirmado -- "
+                     f"el precio pudo haber tocado TP o SL y revertido durante la interrupcion, "
+                     f"esto solo ve donde esta el precio ahora)\n"
+                     f"Excluido de Win Rate -- ver GLITCH_RESEARCH_LOG.md\n"
+                     f"{utc_now_str()}")
+        send(recon_msg)
+        log.info(recon_msg.replace("\n", " | "))
+
     # Espera hasta 9:25 CT si arrancamos antes
     while ct_now().hour * 60 + ct_now().minute < 9*60+25:
         log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura...")
@@ -256,6 +356,12 @@ def run():
 
     log.info(f"Entrada: {direction_str} @ {entry_price:.2f}")
     log.info(f"ATR={atr:.2f}  TP={tp_price:.2f} (+{tp_pts:.2f}pts)  SL={sl_price:.2f} (-{sl_pts:.2f}pts)")
+
+    # Estado durable ANTES de la notificacion -- ver paso 0 arriba.
+    save_pending(_build_pending_record(
+        side, direction_str, entry_price, tp_price, sl_price, "MNQ=F",
+        today_str, round(atr, 2), round(tp_pts, 2), round(sl_pts, 2), NC, DRY_RUN,
+    ))
 
     msg = (f"{PREFIX}\n"
            f"[OPEN]\n"
@@ -329,6 +435,7 @@ def run():
         "nc": NC, "dry_run": DRY_RUN
     })
     save_log(paper_log)
+    save_pending({})  # posicion resuelta normalmente -- nada pendiente que reconciliar
 
     # Resumen acumulado
     total_pnl = sum(e.get('pnl', 0) for e in paper_log)
