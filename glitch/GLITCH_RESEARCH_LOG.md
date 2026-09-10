@@ -1205,3 +1205,59 @@ estructuralmente por (a) para cualquier otra causa de interrupción
 (crash, OOM, reinicio de plataforma) que todavía podría ocurrir.
 Incidente cerrado.
 
+## URGENTE, resuelto: `ModuleNotFoundError: No module named 'yaml'` — GEOMETRY y GEOMETRY-MGC caídos (10-sep-2026)
+
+**Síntoma:** ambos schedulers de Combine/XFA (GEOMETRY en `main`,
+GEOMETRY-MGC en `cerebro2-dev`) caídos con `ModuleNotFoundError: No
+module named 'yaml'`. Causa directa: `core/prop_firm.py`, importado por
+ambos como parte de la lógica de reinicio de intento (09-sep-2026, para
+`TOPSTEP_50K`/`TOPSTEP_150K`), tiene `import yaml, os` en la línea 33
+— `yaml` (PyYAML) nunca estuvo en ningún `requirements.txt` real del
+repo.
+
+**Antes de aplicar el fix a ciegas, mismo estándar que el incidente
+`massive`/Railpack de semanas atrás:** se verificó qué archivo de
+requirements lee cada servicio realmente — resultado: **ninguno de
+los 4** (`requirements.txt` raíz y `glitch/scheduler/requirements.txt`,
+en ambas ramas) tiene `pyyaml`, y la ambigüedad Railpack-vs-Nixpacks
+documentada en el incidente anterior (`nixpacks.toml` apunta a
+`glitch/scheduler/requirements.txt`, pero el servicio real corre por
+Railpack, que lee el de la raíz) **sigue sin resolverse
+definitivamente** — sin acceso al dashboard de Railway para confirmar
+Builder/Root Directory de cada servicio, no se puede saber cuál lee
+cada uno con certeza.
+
+**Esa ambigüedad terminó siendo irrelevante: `yaml` nunca se usa en
+`core/prop_firm.py`.** Auditoría completa de los imports del archivo —
+`from __future__ import annotations`, `dataclasses.dataclass/field`,
+`typing.Optional`, `import yaml, os` — confirmó, vía `grep` (no
+suposición), que **ni `yaml.` ni `os.` aparecen en ningún otro punto
+del archivo**, y que ningún otro módulo del repo importa `yaml`/`os`
+DESDE `core.prop_firm`. Import completamente muerto, arrastrado desde
+que el archivo se escribió (antes de este incidente, sin relación con
+el trabajo del 09-sep).
+
+**Fix aplicado — más simple y de menor riesgo que agregar una
+dependencia nueva:** se eliminó la línea `import yaml, os` de
+`core/prop_firm.py` en ambas ramas. **Cero cambios a ningún
+`requirements.txt`** — no hace falta agregar `pyyaml` a ningún archivo,
+ni resolver la ambigüedad de cuál lee Railway, porque no se necesita
+el paquete en absoluto. `dataclasses.field` y `typing.Optional`
+también resultaron no usarse en el archivo (stdlib, sin relación con
+el crash, no tocados en este fix urgente — limpieza cosmética
+pendiente, no bloqueante).
+
+**Smoke test antes de push, con el mismo estándar de siempre:**
+confirmado que `core/prop_firm.py` y `scheduler/geometry_scheduler.py`
+importan limpio incluso con `yaml` BLOQUEADO explícitamente a nivel de
+`builtins.__import__` (reproduce exactamente el `ModuleNotFoundError`
+real de producción, no solo "el paquete ya está instalado localmente
+por casualidad" — PyYAML sí está instalado en el venv local, así que
+un smoke test ingenuo habría pasado sin probar nada real). Suite
+completa: 216 tests, verde.
+
+**Push inmediato, sin freeze window** — ambos servicios estaban caídos
+en el momento del fix, más urgente que el riesgo de interrumpir un
+trade en curso (que de todos modos no podía estar corriendo, dado que
+el `ImportError` ocurre antes de llegar a esa lógica).
+
