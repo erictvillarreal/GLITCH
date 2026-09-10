@@ -271,14 +271,30 @@ def _current_intento(paper_log: list) -> int:
     acoplarse a codigo de Cerebro 1, mismo principio ya establecido en
     el docstring de geometry_scheduler.py.
 
-    CORREGIDO (09-sep-2026, mismo fix que geometry_scheduler.py): mira
+    CORREGIDO #1 (09-sep-2026, mismo fix que geometry_scheduler.py): mira
     CUALQUIER entrada con el campo "intento" presente, no solo las
     resueltas (TP/SL/FLATTEN) -- una entrada "RECONCILED" (fuera de ese
     set, a proposito) habria quedado invisible aqui, causando que el
     siguiente trade real reusara un numero de intento ya consumido.
+
+    CORREGIDO #2 (10-sep-2026, mismo fix que geometry_scheduler.py --
+    ver GLITCH_RESEARCH_LOG.md, incidente portado desde `main`): el
+    incremento `intento_actual += 1` en run() (paso 5b) nunca se
+    persistia -- variable local, se perdia al salir del proceso. La
+    corrida del dia siguiente recalculaba este `max(tags)` desde cero,
+    encontraba el mismo intento ya completado, y nunca avanzaba por su
+    cuenta. Corregido para que el intento actual se derive COMPLETO de
+    los datos guardados: si el intento mas alto YA cruzo PROFIT_TARGET
+    o MLL_THRESHOLD, el intento actual real es el SIGUIENTE.
     """
     tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
-    return max(tags) if tags else 1
+    if not tags:
+        return 1
+    latest = max(tags)
+    latest_pnl = _attempt_pnl(paper_log, latest)
+    if _check_attempt_reset(latest_pnl, PROFIT_TARGET, MLL_THRESHOLD) is not None:
+        return latest + 1
+    return latest
 
 
 def _attempt_entries(paper_log: list, intento: int) -> list:
@@ -668,7 +684,14 @@ def run():
                      f"{utc_now_str()}")
         send(reset_msg)
         log.info(reset_msg.replace("\n", " | "))
-        intento_actual += 1  # para el resumen diario de abajo -- ya pertenece al intento nuevo
+        # CORREGIDO (10-sep-2026, mismo fix que geometry_scheduler.py): re-derivar
+        # via _current_intento() en vez de un "+= 1" local -- ese incremento nunca
+        # se persistia, asi que la corrida del dia siguiente volvia a calcular el
+        # mismo intento ya completado desde cero. _current_intento() ahora detecta
+        # este mismo caso directamente desde paper_log, asi que reusar la MISMA
+        # funcion aqui es lo que hace que el fix sea consistente para HOY y para
+        # MAÑANA -- una sola fuente de verdad.
+        intento_actual = _current_intento(paper_log)
 
     progress = _paper_progress(paper_log, today_str)  # historico -- recalculado, incluye el ciclo de hoy
 

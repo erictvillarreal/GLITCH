@@ -116,15 +116,21 @@ class TestCheckAttemptReset:
 
 class TestAttemptResetIntegration:
     def test_full_reset_cycle_after_pass(self):
+        # Intento 1: dos TP que acumulan a 9200 -> PASE.
         log = [
             {"date": "2026-09-01", "result": "TP", "pnl": 5000, "intento": 1},
             {"date": "2026-09-02", "result": "TP", "pnl": 4200, "intento": 1},  # acumulado 9200 -> PASE
         ]
-        intento = scheduler._current_intento(log)
-        attempt_pnl = scheduler._attempt_pnl(log, intento)
+        attempt_pnl = scheduler._attempt_pnl(log, 1)
         assert attempt_pnl == 9200
         event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
         assert event == "PASE"
+
+        # CORREGIDO (10-sep-2026): _current_intento() ahora detecta esto
+        # directamente desde los datos guardados, sin necesitar que ya
+        # exista ninguna entrada del intento 2 -- mismo fix portado desde
+        # geometry_scheduler.py, ver GLITCH_RESEARCH_LOG.md.
+        assert scheduler._current_intento(log) == 2
 
         log.append({"date": "2026-09-03", "result": "SL", "pnl": -300, "intento": 2})
         intento_nuevo = scheduler._current_intento(log)
@@ -137,9 +143,10 @@ class TestAttemptResetIntegration:
             {"date": "2026-09-01", "result": "SL", "pnl": -2500, "intento": 1},
             {"date": "2026-09-02", "result": "SL", "pnl": -2100, "intento": 1},  # acumulado -4600 -> QUIEBRE
         ]
-        attempt_pnl = scheduler._attempt_pnl(log, scheduler._current_intento(log))
+        attempt_pnl = scheduler._attempt_pnl(log, 1)
         assert attempt_pnl == -4600
         assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) == "QUIEBRE"
+        assert scheduler._current_intento(log) == 2  # mismo fix del 10-sep-2026, caso QUIEBRE
 
     def test_historic_wr_and_cycles_never_reset_across_attempts(self):
         log = [
@@ -150,6 +157,71 @@ class TestAttemptResetIntegration:
         progress = scheduler._paper_progress(log, "2026-09-03")
         assert progress["n_cycles"] == 3
         assert progress["wr_empirico"] == pytest.approx(2 / 3)
+
+
+class TestCurrentIntentoAdvancesPastCompletedAttempt:
+    """
+    10-sep-2026, ver GLITCH_RESEARCH_LOG.md -- mismo fix portado desde
+    geometry_scheduler.py (bug real reportado en GEOMETRY/MES): el
+    `intento_actual += 1` de run() nunca se persistia -- era una
+    variable local, se perdia al salir del proceso, y la corrida del
+    dia siguiente volvia a calcular el mismo intento ya completado
+    desde cero. Estos tests confirman el mismo fix aqui, con los
+    umbrales reales de MGC/150K (PROFIT_TARGET=9000, MLL_THRESHOLD=-4500).
+    """
+
+    def test_reproduces_the_reported_bug_scenario(self):
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},  # acumulado exacto: 9000
+        ]
+        assert scheduler._current_intento(paper_log) == 2  # antes del fix: 1 (el bug reportado)
+
+    def test_attempt_pnl_for_the_new_attempt_is_zero_not_stale_9000(self):
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},
+        ]
+        intento = scheduler._current_intento(paper_log)
+        assert scheduler._attempt_pnl(paper_log, intento) == 0
+
+    def test_advances_past_a_completed_quiebre_too(self):
+        paper_log = [
+            {"date": "2026-09-08", "result": "SL", "pnl": -2500, "intento": 1},
+            {"date": "2026-09-09", "result": "SL", "pnl": -2100, "intento": 1},  # acumulado: -4600, cruza -4500
+        ]
+        assert scheduler._current_intento(paper_log) == 2
+
+    def test_does_not_advance_an_attempt_still_in_progress(self):
+        """Guardia de regresion -- un intento normal, todavia sin
+        cruzar ningun umbral, NO debe avanzar de mas."""
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 2000, "intento": 1},
+            {"date": "2026-09-09", "result": "SL", "pnl": -500, "intento": 1},  # acumulado: 1500, normal
+        ]
+        assert scheduler._current_intento(paper_log) == 1
+
+    def test_advances_correctly_even_with_a_reconciled_entry_in_the_mix(self):
+        paper_log = [
+            {"date": "2026-09-07", "result": "TP", "pnl": 4500, "intento": 1},
+            {"date": "2026-09-08", "result": "RECONCILED", "pnl": -9999,
+             "pnl_estimated": True, "reconciled": True, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},  # 4500+4500=9000, la RECONCILED no cuenta
+        ]
+        assert scheduler._current_intento(paper_log) == 2
+
+    def test_full_next_day_simulation_matches_expected_open_message(self):
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},
+        ]
+        intento_fin_dia1 = scheduler._current_intento(paper_log)
+
+        intento_inicio_dia2 = scheduler._current_intento(paper_log)
+        attempt_pnl_dia2 = scheduler._attempt_pnl(paper_log, intento_inicio_dia2)
+
+        assert intento_inicio_dia2 == intento_fin_dia1 == 2
+        assert attempt_pnl_dia2 == 0  # $0 / $9,000 (0.0%) -- NO $9,000 / $9,000 (100.0%)
 
 
 class TestPendingPositionWrappers:

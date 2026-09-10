@@ -2692,3 +2692,44 @@ bloqueado, `PROFIT_TARGET=9000`/`MLL_THRESHOLD=-4500` intactos. Suite
 completa: 193 tests, verde. Push inmediato, sin freeze window —
 servicio caído.
 
+## Resuelto en esta rama: `_current_intento()` nunca avanzaba tras PASE/QUIEBRE, portado desde `main` (10-sep-2026)
+
+**Mismo bug reportado por el usuario en GEOMETRY (MES, `main`) —
+"Progreso a Target" nunca vuelve a $0 tras un PASE/QUIEBRE —
+confirmado también en `geometry_mgc_scheduler.py`, esta rama, misma
+causa raíz exacta:** `_current_intento()` aquí es deliberadamente una
+copia (no un import) de la de `geometry_scheduler.py` — ver su propio
+docstring, "este scheduler NO debe acoplarse a código de Cerebro 1" —
+así que comparte el mismo diseño y, por lo tanto, el mismo defecto: el
+`intento_actual += 1` en `run()` (paso 5b, `scheduler/geometry_mgc_scheduler.py`)
+era una variable local de Python, nunca persistida al Gist. La
+siguiente corrida diaria recalculaba `_current_intento(paper_log)`
+desde `max(tags)` sin verificar si ese intento ya había cruzado
+`PROFIT_TARGET`/`MLL_THRESHOLD` (9000/-4500 para MGC/150K), así que
+devolvía el mismo intento ya completado indefinidamente. Ver el
+research log de `main` para el análisis completo de la causa raíz y
+la aclaración de diseño (`result='PASE'`/`'QUIEBRE'` nunca son
+valores almacenados, solo texto del mensaje de Telegram) — no
+repetido aquí.
+
+**Fix aplicado, idéntico en espíritu al de `main`:**
+`_current_intento()` ahora calcula el `_attempt_pnl()` del intento más
+reciente y lo pasa por `_check_attempt_reset()` con los umbrales
+propios de esta rama; si ya cruzó cualquiera de los dos, retorna
+`latest + 1`. `run()` paso 5b simplificado: el `intento_actual += 1`
+manual se reemplazó por `intento_actual = _current_intento(paper_log)`.
+
+**Tests:** se actualizaron los 2 tests preexistentes en
+`TestAttemptResetIntegration` (`tests/test_geometry_mgc_scheduler.py`)
+que afirmaban el contrato viejo, y se agregó la clase
+`TestCurrentIntentoAdvancesPastCompletedAttempt` con los mismos 6
+casos que en `main` (adaptados a `PROFIT_TARGET=9000`/
+`MLL_THRESHOLD=-4500`). Suite completa: 203 tests, verde.
+
+**Freeze window respetado:** a diferencia del incidente `yaml`
+(servicio caído), esto no es una caída de producción — el scheduler
+sigue funcionando, solo con una cifra de progreso incorrecta en el
+mensaje informativo. Commit local hecho dentro de la ventana MGC de
+`cerebro2-dev` (07:00–14:30 CT); push retenido hasta salir de esa
+ventana.
+
