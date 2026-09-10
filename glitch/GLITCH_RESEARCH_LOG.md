@@ -1393,3 +1393,61 @@ ningún dato ya corrompido por el bug que necesitara reparación
 retroactiva — el `_current_intento()` corregido y el dato real
 existente coinciden. **Incidente cerrado por completo.**
 
+## Falsa alarma, cerrada con evidencia: "Running" 5h+ tras completar el ciclo — GEOMETRY y GEOMETRY-MGC (10-sep-2026)
+
+**Síntoma reportado:** ambos servicios (GEOMETRY en `main`, GEOMETRY-MGC
+en `cerebro2-dev`), lanzados a las 09:10 CT vía "Run now" manual (la
+misma corrida que ya había confirmado el fix de `yaml`), seguían
+mostrando "Running" en la tarjeta de servicio del dashboard de Railway
+5h31min después, pese a que MES ya había cerrado por FLATTEN (14:30 CT)
+y MGC por SL — ambos con su mensaje de Telegram correspondiente ya
+recibido. Preocupación explícita: mismo patrón de proceso colgado que
+causó la pérdida de la posición SHORT MGCV6 (09-sep-2026).
+
+**Diagnóstico de código, ANTES de cualquier acción sobre Railway (para
+no destruir evidencia con un redeploy a mitad de la investigación):**
+revisión completa de `run()` en ambos schedulers — ambos llegan a
+`log.info("Done — saliendo")` inmediatamente después del SUMMARY y
+retornan sin ningún paso adicional; `if __name__ == "__main__": run()`
+no tiene nada después. Auditoría de cada módulo compartido en el
+camino (`telegram_bot.send()`, `gist_store.load_log/save_log/
+load_state/save_state`, `contracts.get_front_month/check_expiry_alerts`,
+`env_check`) confirmó que todos usan llamadas `requests` de una sola
+vez, sin `Session()` persistente, sin `ThreadPoolExecutor`, sin
+`threading.Thread`, sin `atexit`. Verificado EMPÍRICAMENTE (no solo
+leído) que `yfinance.Ticker(...).history()` no deja ningún thread
+no-daemon vivo (`threading.enumerate()` antes/después de una llamada
+real: solo `MainThread` en ambos casos). El `while True` de monitoreo
+en ambos archivos tiene condiciones de salida claras y estas SÍ
+dispararon correctamente (FLATTEN a las 14:30 en MES, SL en MGC,
+coincide con lo reportado). Además: el contenedor colgado arrancó
+ANTES de que el fix de `_current_intento()` de esta misma sesión
+existiera desplegado, descartándolo como causa por pura cronología.
+
+**Conclusión de código: limpio. Cero threads, cero conexiones sin
+cerrar, cero paso faltante.**
+
+**Verificación real, confirmada por el usuario:** el log de Railway de
+AMBOS servicios muestra `"Done — saliendo"` como la ÚLTIMA línea
+(GEOMETRY: `EXIT FLATTEN -$2,750 -> Done — saliendo`; GEOMETRY-MGC:
+`EXIT SL -$2,184 -> Done — saliendo`). Y, decisivo: **el dashboard de
+Railway marca el DEPLOYMENT individual de ambos servicios como
+"Completed"** — es la tarjeta lateral del servicio la que seguía
+mostrando "Running", no el deployment real. Confirma la hipótesis:
+**desincronización entre el indicador de la tarjeta de servicio y el
+estado real del deployment — un artefacto de la plataforma, no un bug
+de nuestro código.**
+
+**Lección para no repetir esta alarma:** cuando un servicio Cron
+Schedule de Railway parece seguir "Running" mucho después de que sus
+mensajes de Telegram ya confirmaron el cierre del ciclo, **revisar
+primero el estado del DEPLOYMENT específico** (no solo la tarjeta
+lateral del servicio) antes de asumir un proceso colgado real. La
+tarjeta de servicio puede quedar desincronizada, especialmente tras un
+disparo manual "Run now" (a diferencia de un disparo de cron
+programado) — no se investigó si esto es exclusivo de "Run now" o
+también ocurre en corridas normales, dato para la próxima vez que se
+observe el mismo patrón.
+
+**Ningún cambio de código fue necesario.** Incidente cerrado.
+
