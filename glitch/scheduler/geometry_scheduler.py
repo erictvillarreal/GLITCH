@@ -167,10 +167,11 @@ def _current_intento(paper_log: list) -> int:
     Numero de intento de Combine actual -- derivado de paper_log, SIN
     estado separado (mismo principio que _paper_progress: la fecha de
     la primera entrada ES el dia 1, aqui el "intento" mas alto ya visto
-    ES el intento actual). 1 si no hay ninguna entrada con el campo
-    "intento" todavia.
+    ES el intento actual, A MENOS que ese intento ya haya cruzado un
+    umbral de reinicio -- ver el segundo fix de abajo). 1 si no hay
+    ninguna entrada con el campo "intento" todavia.
 
-    CORREGIDO (09-sep-2026, ver GLITCH_RESEARCH_LOG.md -- logica de
+    CORREGIDO #1 (09-sep-2026, ver GLITCH_RESEARCH_LOG.md -- logica de
     reconciliacion tras crash a mitad de monitoreo): considera CUALQUIER
     entrada que tenga el campo "intento", no solo las resueltas
     (TP/SL/FLATTEN). Antes de este fix, una entrada "RECONCILED"
@@ -182,9 +183,31 @@ def _current_intento(paper_log: list) -> int:
     desempeño de ese intento" son dos preguntas distintas -- esta
     funcion resuelve la primera; _attempt_entries() (mas abajo) resuelve
     la segunda, con el filtro de "resuelto" que SI le corresponde.
+
+    CORREGIDO #2 (10-sep-2026, ver GLITCH_RESEARCH_LOG.md -- OPEN de hoy
+    seguia mostrando "$3,000.00 / $3,000 (100.0%)" un dia DESPUES del
+    PASE real): el incremento `intento_actual += 1` en run() (paso 5b)
+    NUNCA se persistia -- era una variable local de Python, usada solo
+    para el resumen diario de ESA MISMA corrida, y se perdia al salir
+    del proceso. La corrida del dia SIGUIENTE volvia a calcular
+    _current_intento() desde cero, encontraba el mismo intento ya
+    completado (sus entradas siguen ahi, sumando exactamente el umbral),
+    y abria un trade NUEVO etiquetado con un numero de intento YA
+    PASADO -- el sistema nunca avanzaba de intento por su cuenta.
+    Corregido para que "que intento vamos" se derive COMPLETO de los
+    datos guardados, sin necesitar el incremento local de run(): si el
+    intento mas alto YA cruzo PROFIT_TARGET o MLL_THRESHOLD, el intento
+    actual real es el SIGUIENTE (que todavia no tiene ninguna entrada),
+    no el que acaba de cerrar.
     """
     tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
-    return max(tags) if tags else 1
+    if not tags:
+        return 1
+    latest = max(tags)
+    latest_pnl = _attempt_pnl(paper_log, latest)
+    if _check_attempt_reset(latest_pnl, PROFIT_TARGET, MLL_THRESHOLD) is not None:
+        return latest + 1
+    return latest
 
 
 def _attempt_entries(paper_log: list, intento: int) -> list:
@@ -697,7 +720,15 @@ def run():
                      f"{utc_now_str()}")
         send(reset_msg)
         log.info(reset_msg.replace("\n", " | "))
-        intento_actual += 1  # para el resumen diario de abajo -- ya pertenece al intento nuevo
+        # CORREGIDO (10-sep-2026): re-derivar via _current_intento() en vez
+        # de un "+= 1" local -- ese incremento nunca se persistia, asi que
+        # la corrida del dia siguiente volvia a calcular el mismo intento
+        # ya completado desde cero. _current_intento() ahora detecta este
+        # mismo caso (el intento mas alto ya cruzo un umbral) directamente
+        # desde paper_log, asi que reusar la MISMA funcion aqui (en vez de
+        # una copia manual del mismo calculo) es lo que hace que el fix sea
+        # consistente para HOY y para MAÑANA -- una sola fuente de verdad.
+        intento_actual = _current_intento(paper_log)
 
     progress = _paper_progress(paper_log, today_str)  # historico -- recalculado, incluye el ciclo de hoy
 

@@ -369,18 +369,25 @@ class TestAttemptResetIntegration:
     """
 
     def test_full_reset_cycle_after_pass(self):
+        # Intento 1: dos TP que acumulan a 3100 -> PASE.
         log = [
             {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},
             {"date": "2026-09-02", "result": "TP", "pnl": 1900, "intento": 1},  # acumulado 3100 -> PASE
         ]
-        intento = scheduler._current_intento(log)
-        assert intento == 1
-        attempt_pnl = scheduler._attempt_pnl(log, intento)
+        attempt_pnl = scheduler._attempt_pnl(log, 1)
         assert attempt_pnl == 3100
         event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
         assert event == "PASE"
 
-        # El siguiente trade ya pertenece al intento 2
+        # CORREGIDO (10-sep-2026): _current_intento() ahora detecta esto
+        # directamente desde los datos guardados, sin necesitar que ya
+        # exista ninguna entrada del intento 2 -- ver
+        # TestCurrentIntentoAdvancesPastCompletedAttempt para el bug real
+        # que esto corrige (el OPEN del dia siguiente seguia mostrando el
+        # intento ya completado).
+        assert scheduler._current_intento(log) == 2
+
+        # El siguiente trade real, cuando llegue, se etiqueta correctamente con el intento 2.
         log.append({"date": "2026-09-03", "result": "SL", "pnl": -150, "intento": 2})
         intento_nuevo = scheduler._current_intento(log)
         assert intento_nuevo == 2
@@ -393,11 +400,11 @@ class TestAttemptResetIntegration:
             {"date": "2026-09-01", "result": "SL", "pnl": -1200, "intento": 1},
             {"date": "2026-09-02", "result": "SL", "pnl": -900, "intento": 1},  # acumulado -2100 -> QUIEBRE
         ]
-        intento = scheduler._current_intento(log)
-        attempt_pnl = scheduler._attempt_pnl(log, intento)
+        attempt_pnl = scheduler._attempt_pnl(log, 1)
         assert attempt_pnl == -2100
         event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
         assert event == "QUIEBRE"
+        assert scheduler._current_intento(log) == 2  # mismo fix del 10-sep-2026, caso QUIEBRE
 
     def test_historic_pass_rate_and_cycles_never_reset_across_attempts(self):
         """Punto 3 explicito del usuario: Pass Rate y Ciclos son
@@ -591,3 +598,95 @@ class TestPendingPositionFullCycle:
         paper_log.append({"date": "2026-09-09", "result": "SL", "pnl": -200, "intento": 1})
         assert scheduler._current_intento(paper_log) == 1
         assert scheduler._attempt_pnl(paper_log, 1) == 800  # 1000 - 200, la reconciliada sigue sin contar
+
+
+class TestCurrentIntentoAdvancesPastCompletedAttempt:
+    """
+    10-sep-2026, ver GLITCH_RESEARCH_LOG.md -- bug real reportado en
+    produccion: el OPEN de hoy seguia mostrando "$3,000.00 / $3,000
+    (100.0%)" un dia DESPUES del PASE real, porque el `intento_actual
+    += 1` de run() nunca se persistia -- era una variable local, se
+    perdia al salir del proceso, y la corrida del dia siguiente volvia
+    a calcular el mismo intento ya completado desde cero. Estos tests
+    reproducen el escenario exacto reportado.
+    """
+
+    def test_reproduces_the_reported_bug_scenario(self):
+        """
+        Escenario EXACTO reportado: dos TP que suman exactamente
+        $3,000 (el umbral de G2/50K) en el intento 1. Una corrida
+        NUEVA (sin ningun estado en memoria, solo lo que hay en
+        paper_log -- exactamente como arranca run() cada dia) debe
+        calcular el intento actual como 2, NO 1 -- antes del fix,
+        esto devolvia 1, reproduciendo el bug reportado.
+        """
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 1500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 1500, "intento": 1},  # acumulado exacto: 3000
+        ]
+        assert scheduler._current_intento(paper_log) == 2  # antes del fix: 1 (el bug reportado)
+
+    def test_attempt_pnl_for_the_new_attempt_is_zero_not_stale_3000(self):
+        """Consecuencia directa del fix -- esto es lo que hace que el
+        OPEN de HOY muestre '$0.00 / $3,000 (0.0%)', no '$3,000.00 /
+        $3,000 (100.0%)' otra vez."""
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 1500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 1500, "intento": 1},
+        ]
+        intento = scheduler._current_intento(paper_log)
+        assert scheduler._attempt_pnl(paper_log, intento) == 0
+
+    def test_advances_past_a_completed_quiebre_too(self):
+        paper_log = [
+            {"date": "2026-09-08", "result": "SL", "pnl": -1200, "intento": 1},
+            {"date": "2026-09-09", "result": "SL", "pnl": -900, "intento": 1},  # acumulado: -2100, cruza -2000
+        ]
+        assert scheduler._current_intento(paper_log) == 2
+
+    def test_does_not_advance_an_attempt_still_in_progress(self):
+        """Guardia de regresion -- un intento normal, todavia sin
+        cruzar ningun umbral, NO debe avanzar de mas."""
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 1000, "intento": 1},
+            {"date": "2026-09-09", "result": "SL", "pnl": -300, "intento": 1},  # acumulado: 700, normal
+        ]
+        assert scheduler._current_intento(paper_log) == 1
+
+    def test_advances_correctly_even_with_a_reconciled_entry_in_the_mix(self):
+        """El PnL estimado de una entrada RECONCILED nunca cuenta para
+        cruzar el umbral (ver TestCurrentIntentoConsidersReconciledEntries
+        arriba) -- pero si las entradas REALES del intento ya cruzaron
+        el umbral por su cuenta, el fix debe seguir avanzando
+        correctamente aunque haya una entrada reconciliada de por
+        medio."""
+        paper_log = [
+            {"date": "2026-09-07", "result": "TP", "pnl": 1500, "intento": 1},
+            {"date": "2026-09-08", "result": "RECONCILED", "pnl": -9999,
+             "pnl_estimated": True, "reconciled": True, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 1500, "intento": 1},  # 1500+1500=3000, la RECONCILED no cuenta
+        ]
+        assert scheduler._current_intento(paper_log) == 2
+
+    def test_full_next_day_simulation_matches_expected_open_message(self):
+        """
+        Simula el flujo completo: dia 1 el PASE ocurre y run() reusa
+        _current_intento() (ya no un '+=1' manual) para el resumen de
+        ESE dia; dia 2 (una corrida COMPLETAMENTE NUEVA, sin nada en
+        memoria) debe calcular el mismo numero de intento y el mismo
+        Progreso a Target en $0 que el resumen del dia 1 ya reporto --
+        consistencia dia-a-dia, no solo dentro de una sola corrida.
+        """
+        # Dia 1: el TP que completa el PASE ya esta guardado.
+        paper_log = [
+            {"date": "2026-09-08", "result": "TP", "pnl": 1500, "intento": 1},
+            {"date": "2026-09-09", "result": "TP", "pnl": 1500, "intento": 1},
+        ]
+        intento_fin_dia1 = scheduler._current_intento(paper_log)  # lo que el resumen del dia 1 reporto
+
+        # Dia 2: corrida nueva, "sin memoria" del dia anterior -- solo paper_log.
+        intento_inicio_dia2 = scheduler._current_intento(paper_log)
+        attempt_pnl_dia2 = scheduler._attempt_pnl(paper_log, intento_inicio_dia2)
+
+        assert intento_inicio_dia2 == intento_fin_dia1 == 2
+        assert attempt_pnl_dia2 == 0  # $0 / $3,000 (0.0%) -- NO $3,000 / $3,000 (100.0%)

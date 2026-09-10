@@ -1261,3 +1261,112 @@ en el momento del fix, más urgente que el riesgo de interrumpir un
 trade en curso (que de todos modos no podía estar corriendo, dado que
 el `ImportError` ocurre antes de llegar a esa lógica).
 
+## Resuelto: "Progreso a Target" nunca se reinicia tras PASE/QUIEBRE — `intento_actual` nunca se persistía (10-sep-2026)
+
+**Síntoma reportado por el usuario:** el mensaje de OPEN de GEOMETRY
+(MES) del 10-sep-2026 seguía mostrando `Progreso a Target: $3,000.00 /
+$3,000 (100.0%)` — un valor que debería haber vuelto a $0 tras un
+evento PASE disparado el 09-sep, cuando el PnL acumulado del intento
+llegó exactamente a $3,000.
+
+**Pregunta explícita del usuario a verificar:** ¿el mecanismo de
+detección de PASE/QUIEBRE se ejecuta después del cierre de cada trade
+(y debería haber disparado ayer), o hay algún problema en su lógica
+que impide que se active? Y: ¿existe ya en el Gist real
+(`geometry_mes_log.json`) una entrada con `result='PASE'` o el tag de
+intento correspondiente?
+
+**Aclaración de diseño, confirmada por código antes de diagnosticar
+nada más:** `result='PASE'`/`'QUIEBRE'` **nunca son valores
+almacenados** en el `paper_log` — son únicamente texto del mensaje de
+Telegram que se envía en el momento de la detección
+(`_check_attempt_reset()` retorna el string `"PASE"`/`"QUIEBRE"`/`None`
+solo para decidir qué mensaje mandar, ver `run()` step 5b). El campo
+persistido relevante es `intento` en cada entrada del `paper_log`
+— por diseño, el mismo principio de "todo se deriva del paper_log, sin
+estado separado" usado en `_paper_progress()` desde el inicio del
+proyecto.
+
+**Causa raíz confirmada con evidencia de código, no suposición:** en
+`run()` step 5b, cuando `_check_attempt_reset()` detecta PASE o
+QUIEBRE, el código hacía `intento_actual += 1` — **una variable local
+de Python, nunca escrita al Gist ni a ningún store persistido.** Esa
+variable solo alcanzaba a afectar el mensaje SUMMARY de ese mismo día,
+antes de que el proceso terminara. La siguiente ejecución diaria de
+`run()` (día siguiente, proceso nuevo) recalculaba
+`intento_actual = _current_intento(paper_log)` desde cero (línea
+~432), y la implementación anterior de `_current_intento()` —
+`max(tags)` sobre los intentos ya etiquetados en las entradas, sin
+ninguna verificación de si ese intento ya había cruzado un umbral —
+devolvía el mismo número de intento ya completado, indefinidamente,
+hasta que una entrada NUEVA llegara con el intento siguiente ya
+etiquetado manualmente (lo cual nunca ocurre solo, porque es
+justamente lo que el reinicio debía producir). Resultado: `Progreso a
+Target` recalculaba el mismo $3,000 stale cada día.
+
+**Verificación en el Gist real:** confirmado por el usuario que no
+existe (ni podía existir, por diseño) ninguna entrada con
+`result='PASE'` — el bug no está en que la detección no se dispare
+(si se disparó, y mandó el Telegram correcto el 09-sep), sino en que
+su efecto de reinicio no sobrevive al reinicio del proceso al día
+siguiente.
+
+**Fix aplicado — mismo principio "derivar todo del paper_log", ahora
+extendido para que también cubra este caso:** `_current_intento()` ya
+no se limita a `max(tags)`. Sobre el intento más reciente, calcula su
+`_attempt_pnl()` y lo pasa por `_check_attempt_reset()` con los
+mismos `PROFIT_TARGET`/`MLL_THRESHOLD` de `core/prop_firm.py` — si ya
+cruzó cualquiera de los dos umbrales, retorna `latest + 1` en vez de
+`latest`, auto-detectando un intento completado sin necesitar ningún
+estado adicional persistido. `run()` step 5b se simplificó: el
+`intento_actual += 1` manual se reemplazó por una re-derivación
+`intento_actual = _current_intento(paper_log)`, eliminando la lógica
+duplicada y frágil que causó el bug.
+
+**Tests:** 6 tests nuevos en
+`TestCurrentIntentoAdvancesPastCompletedAttempt`
+(`tests/test_geometry_parity.py`) — reproducen el escenario exacto
+reportado (dos TP que suman $3,000 exacto), un caso QUIEBRE
+equivalente, un guard de regresión (no avanzar un intento aún en
+curso), interacción con una entrada RECONCILED en el medio, y una
+simulación completa de dos días confirmando que el intento y el
+`attempt_pnl` del día siguiente arrancan limpios. Estos 6 tests
+pasaron de inmediato, pero surfacearon 2 tests preexistentes
+(`TestAttemptResetIntegration::test_full_reset_cycle_after_pass` y
+`test_full_reset_cycle_after_blow`) que afirmaban el contrato viejo
+(buggy) — `_current_intento()` debía seguir devolviendo el intento ya
+completado hasta que llegara una entrada nueva etiquetada a mano.
+Se actualizaron para reflejar el contrato corregido: un intento que ya
+cruzó su umbral se reporta inmediatamente como el siguiente, sin
+necesitar ninguna entrada adicional. Suite completa tras el fix: 196
+tests, verde.
+
+**Dato para el usuario, no verificable desde el código — posible
+artefacto de datos a revisar en el Gist real:** el trade de MES que
+abrió HOY (10-sep-2026) lo hizo con el `geometry_scheduler.py` viejo
+(pre-fix) todavía desplegado, así que es probable que se haya
+etiquetado con el número de intento ya completado (el mismo que
+generaba el $3,000 stale), no con el intento nuevo correcto. Una vez
+desplegado este fix, `_current_intento()` calculará el intento
+correcto hacia adelante para cualquier trade NUEVO, pero no
+retro-etiqueta entradas ya escritas — vale la pena que el usuario
+confirme en `geometry_mes_log.json` qué valor de `intento` quedó
+grabado en la entrada de hoy y, si corresponde, corrija ese campo a
+mano (el archivo es un JSON plano en un Gist, editable directamente;
+no se toca desde código porque el log es append-only por convención
+del proyecto, no por restricción técnica del Gist).
+
+**Pendiente, mismo estándar de "arreglar la causa raíz en todos los
+lugares donde existe":** `geometry_mgc_scheduler.py` en
+`cerebro2-dev` tiene una implementación de `_current_intento()`
+idéntica (código deliberadamente duplicado entre Cerebro 1 y Cerebro
+2, sin acoplamiento) y por lo tanto el mismo bug. Fix pendiente de
+portar a esa rama con el mismo tratamiento.
+
+**Freeze window respetado:** fix completado y probado dentro de la
+ventana de freeze de `main` (08:00–15:00 CT) — commit local hecho, push
+retenido hasta salir de la ventana, ya que a diferencia del incidente
+`yaml` esto no es una caída de producción (el scheduler sigue
+funcionando, solo con una cifra de progreso incorrecta en el mensaje
+informativo).
+
