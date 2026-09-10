@@ -2674,3 +2674,21 @@ previa de esta sesión (no del usuario), en el research log de `main`
 `cerebro2-dev` durante la ventana de MGC (ambos ya implementados en
 esta rama) son el fix correcto para la causa real. Incidente cerrado.
 
+## URGENTE, resuelto en esta rama: `ModuleNotFoundError: No module named 'yaml'` (10-sep-2026)
+
+**GEOMETRY-MGC caído con el mismo error que GEOMETRY en `main`, misma
+causa exacta:** `core/prop_firm.py` (copia separada en esta rama)
+tenía `import yaml, os` sin uso real en todo el archivo (confirmado
+por `grep`, cero referencias a `yaml.`/`os.`, ningún otro módulo lo
+re-importa desde aquí). Fix: eliminada la línea, sin tocar ningún
+`requirements.txt` — ver el research log de `main` para el análisis
+completo (verificación de qué archivo de requirements lee cada
+servicio, por qué no importaba en este caso, y el smoke test con
+`yaml` bloqueado a nivel de `builtins.__import__`), no repetido aquí.
+
+Verificado en esta rama específicamente:
+`scheduler/geometry_mgc_scheduler.py` importa limpio con `yaml`
+bloqueado, `PROFIT_TARGET=9000`/`MLL_THRESHOLD=-4500` intactos. Suite
+completa: 193 tests, verde. Push inmediato, sin freeze window —
+servicio caído.
+
