@@ -1161,3 +1161,47 @@ sin red real):
 
 Suite completa: 216 tests, verde, antes de cada commit.
 
+## CERRADO: causa raíz confirmada con el log real de Railway (09-sep-2026)
+
+**Confirmado por el usuario con el Cron Run real de GEOMETRY-MGC del
+09-sep:** inicio 12:03:24 UTC, `"Stopping Container"` a las
+14:41:06 UTC — duración total ~2h38min, **sin ningún límite de tiempo
+redondo** (descarta la hipótesis de un timeout de plataforma
+independiente de los pushes). El último log de monitoreo real es
+14:40:15 UTC; `"Stopping Container"` llega 51 segundos después — y
+esto coincide casi exactamente con el push `67a3ea6` a las
+**14:39:48 UTC** (apenas ~36 segundos antes del último log de
+monitoreo, el redeploy resultante mató el contenedor ~1 minuto
+después). **La hipótesis original (push → redeploy → contenedor
+matado a mitad del monitoreo) queda CONFIRMADA con evidencia directa,
+no solo por correlación temporal.**
+
+**Corrección explícita, no un detalle menor: la verificación previa de
+"Deployments" (que no encontró nada en la ventana buscada) tenía un
+error de conversión de zona horaria propio de esta sesión, no una
+ausencia real del evento.** En el reporte anterior, el mismo mensaje
+que correctamente calculaba `67a3ea6` → **14:39:48 UTC** (tabla de
+timestamps) más adelante le pidió al usuario revisar
+**"08:39–08:49 CT"** — tomando el componente de hora LOCAL crudo del
+timestamp de git (`"2026-09-09 08:39:48 -0600"`) y etiquetándolo como
+"CT" sin convertir, en vez de usar el valor UTC ya calculado
+correctamente unas líneas arriba en el mismo mensaje. Error doble: (1)
+no reusar la conversión ya hecha, y (2) el offset `-0600` de la
+máquina donde se hizo el commit no es siquiera el de CT en
+septiembre (CDT = -0500) — pudo ser cualquier otra zona UTC-6,
+sin relación con la convención CT del proyecto. Esa inconsistencia
+mandó la primera verificación del usuario a la ventana equivocada
+(13:39–13:49 CT en vez de la 14:39–14:48 UTC real) — la hipótesis
+nunca estuvo mal, la instrucción de verificación sí.
+
+**Conclusión final:** el mecanismo de reconciliación (opción a) y la
+extensión del freeze window a `cerebro2-dev` durante la ventana de MGC
+(opción b) — ambos ya implementados — son exactamente el fix correcto
+para la causa real confirmada. No se necesita investigar timeouts de
+Railway ni replantear la arquitectura de un solo proceso bloqueante
+por ESTA razón específica — la causa fue push+redeploy durante una
+posición viva, ya mitigada por (b) hacia adelante y reparada
+estructuralmente por (a) para cualquier otra causa de interrupción
+(crash, OOM, reinicio de plataforma) que todavía podría ocurrir.
+Incidente cerrado.
+
