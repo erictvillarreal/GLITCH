@@ -1370,3 +1370,26 @@ retenido hasta salir de la ventana, ya que a diferencia del incidente
 funcionando, solo con una cifra de progreso incorrecta en el mensaje
 informativo).
 
+**Verificación final contra el Gist real, antes del push (10-sep-2026):**
+se construyó `scripts/verify_fix_intento_today.py` (solo lee por
+default; `--fix` corrige un único campo, con confirmación explícita) y
+se corrió contra el Gist real — no simulado — para confirmar el estado
+de la entrada de HOY (2026-09-10, MES, resultado FLATTEN, PnL
+−$2,750) antes de asumir que hacía falta cualquier corrección manual.
+**Resultado: el campo `intento` de esa entrada ya estaba tageado
+correctamente como `1`** — el propio script, corriendo la lógica YA
+CORREGIDA de `_current_intento()` contra el historial real anterior a
+hoy, calculó ese mismo valor (`1`) como el correcto, confirmando que el
+intento 1 no había cruzado en realidad ningún umbral (PASE/QUIEBRE)
+antes de hoy pese al "100.0%" mostrado en el mensaje de progreso —
+compatible con que ese porcentaje reflejara redondeo de visualización
+cerca del umbral, no un cruce real ya ocurrido. No se aplicó ninguna
+corrección manual — no hacía falta ninguna.
+
+Esto cierra el incidente con evidencia real en ambos sentidos: el
+fix de código es correcto (confirmado por 196/203 tests en `main`/
+`cerebro2-dev`), y su verificación contra el Gist real no encontró
+ningún dato ya corrompido por el bug que necesitara reparación
+retroactiva — el `_current_intento()` corregido y el dato real
+existente coinciden. **Incidente cerrado por completo.**
+
