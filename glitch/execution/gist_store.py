@@ -68,12 +68,13 @@ def _headers():
     }
 
 
-def load_log(filename: str) -> list:
+def _read_file(filename: str):
     """
-    Lee el archivo `filename` dentro del gist GIST_ID. Devuelve [] si el
-    gist/archivo no existe todavia o el contenido esta vacio -- mismo
-    comportamiento que el load_log() de filesystem que reemplaza
-    (primera corrida = lista vacia, nunca una excepcion por ESO).
+    Lee el archivo `filename` dentro del gist GIST_ID y lo deserializa.
+    Devuelve None si el gist/archivo no existe todavia, el contenido
+    esta vacio, o hay cualquier fallo de red/API -- el llamador decide
+    el default correcto para su tipo (list para load_log, dict para
+    load_state), no este helper.
     """
     _require_config()
     try:
@@ -82,18 +83,17 @@ def load_log(filename: str) -> list:
         gist = r.json()
         file_obj = gist.get("files", {}).get(filename)
         if not file_obj:
-            return []
+            return None
         content = file_obj.get("content", "")
         if not content.strip():
-            return []
+            return None
         return json.loads(content)
     except Exception as e:
-        log.error(f"gist_store.load_log({filename}): fallo al leer -- {e}. "
-                  f"Asumiendo lista vacia (mismo criterio que un archivo local ausente).")
-        return []
+        log.error(f"gist_store: fallo al leer {filename} -- {e}.")
+        return None
 
 
-def save_log(filename: str, data: list) -> None:
+def _write_file(filename: str, data) -> None:
     """Escribe `data` (serializado a JSON) en el archivo `filename` dentro del gist GIST_ID."""
     _require_config()
     try:
@@ -101,5 +101,42 @@ def save_log(filename: str, data: list) -> None:
         r = requests.patch(f"{_API}/gists/{GIST_ID}", headers=_headers(), json=payload, timeout=15)
         r.raise_for_status()
     except Exception as e:
-        log.error(f"gist_store.save_log({filename}): fallo al escribir -- {e}. "
+        log.error(f"gist_store: fallo al escribir {filename} -- {e}. "
                   f"El ciclo de hoy pudo no haber quedado registrado -- verificar manualmente.")
+
+
+def load_log(filename: str) -> list:
+    """
+    Lee un archivo de HISTORIAL (lista append-only de ciclos resueltos).
+    Devuelve [] si el gist/archivo no existe todavia, el contenido esta
+    vacio, o hubo un fallo de red/API -- mismo comportamiento que
+    siempre (primera corrida = lista vacia, nunca una excepcion por ESO).
+    """
+    data = _read_file(filename)
+    return data if data is not None else []
+
+
+def save_log(filename: str, data: list) -> None:
+    """Escribe una lista de HISTORIAL completa (reemplaza el contenido anterior)."""
+    _write_file(filename, data)
+
+
+def load_state(filename: str) -> dict:
+    """
+    Lee un archivo de ESTADO VOLATIL de un solo dict -- distinto de
+    load_log() (historial append-only): esto es para datos mutables de
+    "ahora mismo", ej. la posicion actualmente abierta, si hay una (ver
+    logica de reconciliacion tras un crash a mitad de monitoreo,
+    09-sep-2026, GLITCH_RESEARCH_LOG.md). Devuelve {} si el
+    gist/archivo no existe todavia, el contenido esta vacio, o hubo un
+    fallo de red/API -- {} significa "sin posicion pendiente conocida",
+    mismo criterio fail-safe que load_log() usa para su propio vacio.
+    """
+    data = _read_file(filename)
+    return data if data is not None else {}
+
+
+def save_state(filename: str, data: dict) -> None:
+    """Escribe el dict de ESTADO VOLATIL completo (reemplaza el anterior).
+    Pasar {} para marcar explicitamente 'sin posicion pendiente'."""
+    _write_file(filename, data)

@@ -118,3 +118,89 @@ class TestSaveLog:
         monkeypatch.setattr(gist_store.requests, "patch",
                              lambda *a, **k: FakeResponse({}, status_code=404))
         gist_store.save_log("combo2d_log.json", [])
+
+
+class TestConfigRequiredForState:
+    """Mismo comportamiento fail-loud que load_log/save_log -- ver
+    TestConfigRequired arriba."""
+
+    def test_load_state_raises_without_config(self, monkeypatch):
+        monkeypatch.setattr(gist_store, "GITHUB_GIST_TOKEN", None)
+        monkeypatch.setattr(gist_store, "GIST_ID", None)
+        with pytest.raises(RuntimeError, match="GITHUB_GIST_TOKEN"):
+            gist_store.load_state("whatever_pending.json")
+
+    def test_save_state_raises_without_config(self, monkeypatch):
+        monkeypatch.setattr(gist_store, "GITHUB_GIST_TOKEN", "present")
+        monkeypatch.setattr(gist_store, "GIST_ID", None)
+        with pytest.raises(RuntimeError, match="GIST_ID"):
+            gist_store.save_state("whatever_pending.json", {})
+
+
+class TestLoadState:
+    """09-sep-2026 -- estado volatil de un solo dict (ej. posicion
+    pendiente de reconciliar), distinto de load_log() (lista de
+    historial). Mismo criterio fail-safe: nunca lanza, {} es el default
+    seguro (\"sin posicion pendiente conocida\")."""
+
+    def test_returns_parsed_dict_when_file_present(self, configured, monkeypatch):
+        pending = {"side": -1, "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20}
+        fake_gist = {"files": {"geometry_mgc_pending.json": {
+            "content": '{"side": -1, "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20}'
+        }}}
+        monkeypatch.setattr(gist_store.requests, "get", lambda *a, **k: FakeResponse(fake_gist))
+        assert gist_store.load_state("geometry_mgc_pending.json") == pending
+
+    def test_returns_empty_dict_when_file_absent_from_gist(self, configured, monkeypatch):
+        fake_gist = {"files": {"other_file.json": {"content": "{}"}}}
+        monkeypatch.setattr(gist_store.requests, "get", lambda *a, **k: FakeResponse(fake_gist))
+        assert gist_store.load_state("geometry_mgc_pending.json") == {}
+
+    def test_returns_empty_dict_when_content_is_empty_string(self, configured, monkeypatch):
+        fake_gist = {"files": {"geometry_mgc_pending.json": {"content": ""}}}
+        monkeypatch.setattr(gist_store.requests, "get", lambda *a, **k: FakeResponse(fake_gist))
+        assert gist_store.load_state("geometry_mgc_pending.json") == {}
+
+    def test_returns_empty_dict_on_network_error_not_a_crash(self, configured, monkeypatch):
+        def _boom(*a, **k):
+            raise ConnectionError("simulated network failure")
+        monkeypatch.setattr(gist_store.requests, "get", _boom)
+        assert gist_store.load_state("geometry_mgc_pending.json") == {}
+
+    def test_returns_empty_dict_on_malformed_json_content(self, configured, monkeypatch):
+        fake_gist = {"files": {"geometry_mgc_pending.json": {"content": "{not valid json"}}}
+        monkeypatch.setattr(gist_store.requests, "get", lambda *a, **k: FakeResponse(fake_gist))
+        assert gist_store.load_state("geometry_mgc_pending.json") == {}
+
+
+class TestSaveState:
+
+    def test_patches_gist_with_correct_payload(self, configured, monkeypatch):
+        captured = {}
+
+        def _fake_patch(url, headers=None, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse({})
+
+        monkeypatch.setattr(gist_store.requests, "patch", _fake_patch)
+        pending = {"side": 1, "entry": 6000.0}
+        gist_store.save_state("geometry_mes_pending.json", pending)
+
+        assert captured["url"] == f"{gist_store._API}/gists/fake-gist-id"
+        assert "geometry_mes_pending.json" in captured["json"]["files"]
+
+    def test_can_clear_pending_with_empty_dict(self, configured, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(gist_store.requests, "patch",
+                             lambda url, headers=None, json=None, timeout=None: captured.update(json=json) or FakeResponse({}))
+        gist_store.save_state("geometry_mes_pending.json", {})
+        import json as json_module
+        content = captured["json"]["files"]["geometry_mes_pending.json"]["content"]
+        assert json_module.loads(content) == {}
+
+    def test_does_not_raise_on_network_error(self, configured, monkeypatch):
+        def _boom(*a, **k):
+            raise ConnectionError("simulated network failure")
+        monkeypatch.setattr(gist_store.requests, "patch", _boom)
+        gist_store.save_state("geometry_mes_pending.json", {"side": 1})

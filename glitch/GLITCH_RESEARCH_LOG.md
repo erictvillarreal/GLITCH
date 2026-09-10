@@ -2597,3 +2597,63 @@ WR/Ciclos no se reinician, y — específico de este archivo — un test
 que confirma que los umbrales NO son por accidente los $3,000/$2,000 de
 G2. Suite completa de la rama: 169 tests, verde.
 
+## Incidente: posición SHORT MGCV6 sin CLOSE, fix de reconciliación (09-sep-2026)
+
+**Síntoma:** una posición GEOMETRY-MGC (SHORT, MGCV6, entry 4,415.80,
+TP=4,379.40, SL=4,452.20, abierta 2026-09-09 12:13 UTC) nunca recibió
+su mensaje de CLOSE. Ver el análisis completo en `main` (mismo
+hallazgo, mismo día) — resumen aquí, no repetido en detalle.
+
+**Causa, confirmada por código:** el ciclo OPEN→monitoreo→CLOSE vive
+en una sola invocación de `run()`, con `paper_log.append()` solo al
+cerrar — nunca al abrir. Si el proceso muere a mitad del loop de
+monitoreo (`while True`, poll cada 60s), la posición desaparece sin
+rastro y la siguiente corrida abre una nueva sin saberlo.
+
+**Causa más probable (correlación temporal, no confirmada por
+Railway):** de los 3 pushes a `cerebro2-dev` ese día
+(14:39:48 UTC, 14:48:48 UTC, 23:19:43 UTC), las primeras DOS caen
+dentro de la ventana de vida esperada de la posición
+(12:13–19:30 UTC). GEOMETRY-MGC está conectado a `cerebro2-dev` y se
+redeploya en cada push — un redeploy en ese momento habría matado el
+proceso a mitad del monitoreo.
+
+**Decisión del usuario:** no pausar el cron manualmente, se acepta
+perder el rastro de este trade específico mientras se construye la
+solución estructural. Confirmado: el problema es arquitectónico y
+compartido por los 3 schedulers, no exclusivo de MGC.
+
+**Mitigación inmediata (opción b), aplicada ya:** `cerebro2-dev` se
+trata con la misma disciplina de freeze window que `main`, pero SOLO
+durante la ventana de MGC (07:00–14:30 CT) — no un freeze general de
+la rama, que frenaría investigación de Cerebro 2 sin relación con este
+scheduler.
+
+**Fix estructural (opción a), implementado aquí:** mismo mecanismo que
+`main` (`geometry_mes_pending.json`/`combo2d_pending.json`) — ver el
+research log de `main` para el diseño completo. En esta rama:
+`execution/gist_store.py` (copia separada) recibe las mismas
+`load_state()`/`save_state()`; `geometry_mgc_scheduler.py` recibe
+`geometry_mgc_pending.json`, `save_pending()` antes del mensaje de
+OPEN, reconciliación al inicio de `run()` usando el propio ticker de
+la posición pendiente (relevante aquí porque el contrato pudo haber
+rolleado entre la interrupción y la reconciliación — MGC no usa un
+símbolo continuo como MES=F, cada posición queda atada a un contrato
+específico de Massive, ej. MGCV6).
+
+**Mismo fix de `_current_intento()` aplicado aquí** (encontrado
+diseñando los tests en `main`, no una corrección independiente): ahora
+considera cualquier entrada con el campo `"intento"`, no solo las
+resueltas, para que una reconciliación no deje al scheduler pensando
+que sigue en el intento anterior.
+
+**Verificado con 14 tests nuevos** en
+`tests/test_geometry_mgc_scheduler.py` (34 en total en ese archivo) —
+mismos casos que `main` (LONG/SHORT × TP/SL/inconcluso, siempre
+`result="RECONCILED"`, el fix de `_current_intento`, ciclo completo de
+integración) pero usando los números reales del incidente reportado
+(SHORT MGCV6, entry 4,415.80) como uno de los escenarios de prueba, no
+solo valores genéricos. `tests/test_gist_store.py`: mismos 10 tests
+nuevos que `main` (20 en total). Suite completa de la rama: 193 tests,
+verde.
+
