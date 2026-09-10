@@ -2733,3 +2733,44 @@ mensaje informativo. Commit local hecho dentro de la ventana MGC de
 `cerebro2-dev` (07:00–14:30 CT); push retenido hasta salir de esa
 ventana.
 
+**Verificación final contra el Gist real, antes del push (10-sep-2026):**
+el mismo `scripts/verify_fix_intento_today.py` (repo compartido, ver
+research log de `main` para el detalle) se corrió contra el Gist real
+de MES antes de pushear en cualquiera de las dos ramas -- resultado: la
+entrada de hoy ya tenía el `intento` correctamente tageado, sin
+necesitar corrección manual. No se corrió una verificación equivalente
+contra `geometry_mgc_log.json` porque no hubo ningún reporte de
+síntoma equivalente en MGC -- no había ninguna entrada sospechosa que
+verificar en esta rama.
+
+## Falsa alarma, cerrada con evidencia: "Running" 5h+ tras completar el ciclo — GEOMETRY-MGC (10-sep-2026)
+
+**Mismo síntoma que en `main` (ver ese research log para el diagnóstico
+completo, no repetido aquí):** GEOMETRY-MGC, lanzado a las 09:10 CT vía
+"Run now" manual, seguía mostrando "Running" en la tarjeta de servicio
+del dashboard de Railway 5h31min después, pese a que ya había cerrado
+por SL (PnL −$2,184) con su Telegram correspondiente ya recibido.
+
+**Diagnóstico de código, mismo estándar que en `main`:** revisión
+completa de `run()` en `geometry_mgc_scheduler.py` -- llega a
+`log.info("Done — saliendo")` inmediatamente después del SUMMARY y
+retorna sin ningún paso adicional. `fetch_latest_price()` (precio via
+Massive, no yfinance) usa `requests.get` de una sola vez con timeout
+fijo, sin sesión persistente, sin threads. El `while True` de
+monitoreo tiene condición de salida clara y disparó correctamente (SL).
+El contenedor colgado arrancó antes de que el fix de
+`_current_intento()` de esta misma sesión existiera desplegado en esta
+rama -- descartado como causa por cronología.
+
+**Verificación real, confirmada por el usuario:** el log de Railway
+muestra `EXIT SL -$2,184 -> Done — saliendo` como última línea, y el
+dashboard marca el DEPLOYMENT individual como "Completed" -- solo la
+tarjeta lateral del servicio seguía mostrando "Running".
+**Desincronización de plataforma, no un bug de código** -- mismo
+hallazgo que en `main`, confirmado independientemente en esta rama con
+un scheduler que usa una fuente de precio distinta (Massive, no
+yfinance), reforzando que la causa es de plataforma y no de la lógica
+de trading de ningún producto específico.
+
+**Ningún cambio de código fue necesario.** Incidente cerrado.
+
