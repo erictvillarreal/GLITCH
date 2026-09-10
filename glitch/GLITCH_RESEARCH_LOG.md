@@ -2657,3 +2657,20 @@ solo valores genéricos. `tests/test_gist_store.py`: mismos 10 tests
 nuevos que `main` (20 en total). Suite completa de la rama: 193 tests,
 verde.
 
+## CERRADO: causa raíz confirmada con el log real de Railway (09-sep-2026)
+
+**Confirmado con el Cron Run real de GEOMETRY-MGC:** inicio
+12:03:24 UTC, `"Stopping Container"` a las 14:41:06 UTC (~2h38min, sin
+timeout redondo). El último log de monitoreo (14:40:15 UTC) queda 51
+segundos antes del `"Stopping Container"` — coincide con el push
+`67a3ea6` a las 14:39:48 UTC. **La hipótesis original (push → redeploy
+→ contenedor matado a mitad del monitoreo) queda confirmada con
+evidencia directa.** Ver el detalle completo, incluyendo la corrección
+explícita de un error de conversión de zona horaria en la verificación
+previa de esta sesión (no del usuario), en el research log de `main`
+— no repetido aquí para no duplicar contenido entre ramas.
+
+**Conclusión:** el mecanismo de reconciliación y el freeze window de
+`cerebro2-dev` durante la ventana de MGC (ambos ya implementados en
+esta rama) son el fix correcto para la causa real. Incidente cerrado.
+
