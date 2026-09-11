@@ -1451,3 +1451,56 @@ observe el mismo patrón.
 
 **Ningún cambio de código fue necesario.** Incidente cerrado.
 
+## Diagnosticado, sin fix (estrategia descartada): "No MNQ data available for entry" en combo2d_scheduler.py (11-sep-2026)
+
+**Síntoma:** `combo2d_scheduler.py` reportó `ERROR: No MNQ data available for entry` a las 2026-09-11 14:34 UTC (09:34 CT).
+
+**Causa confirmada — MISMO mecanismo que ya afectó a GEOMETRY (MES)
+el 03-sep-2026 (propagación tardía de datos intradía de Yahoo), no
+algo nuevo ni específico de MNQ:**
+
+- `fetch_intraday()` de `combo2d_scheduler.py` es código idéntico al
+  de `geometry_scheduler.py` de ANTES del fix del 03-sep-2026 (mismo
+  `yf.Ticker(...).history()`, mismo filtro RTH).
+- El timestamp del error (09:34 CT) coincide exactamente con el punto
+  de rendición del retry loop de combo2d: espera desde las 9:30 CT
+  (sin margen de propagación) + 8 intentos × 30s = 4 min → se rinde a
+  las 9:34 CT.
+- **Confirmado por `git log`**: `combo2d_scheduler.py` nunca recibió
+  el fix que sí se aplicó a `geometry_scheduler.py` (ventana 9:30→9:35
+  CT + 8→20 reintentos, presupuesto 4min→10min, calibrado contra el
+  peor caso confirmado de 9:40:09 CT). Combo2d sigue con la ventana
+  original, la misma que le falló a MES antes de ese fix.
+- **Reproducido en vivo durante el diagnóstico**: a las 09:37-09:39 CT
+  del mismo día, `MNQ=F` mostraba 0 filas RTH en tiempo real —
+  confirmado con una consulta directa a yfinance, no solo inferido del
+  log. Los datos aparecieron recién a las ~09:41 CT.
+- **Descartada la relación con el vencimiento de MNQU6** (5 días
+  hábiles al 18-sep, cifra confirmada matemáticamente vía la
+  convención estándar de 3er-viernes): a las 09:41:09 CT se consultó
+  `MES=F` y `MNQ=F` al mismo tiempo — **ambos** mostraron el mismo
+  patrón de retraso, resolviéndose simultáneamente. MES=F no está
+  cerca de ningún vencimiento, así que el retraso es del pipeline de
+  Yahoo en general, no de la proximidad al rollover de MNQ.
+
+**Decisión explícita del usuario: NO aplicar el fix a
+`combo2d_scheduler.py`** — estrategia descartada, no amerita inversión
+de tiempo. Diagnóstico completo, sin acción de código.
+
+**NOTA DE RIESGO CONOCIDO para GEOMETRY (MES) — sin acción de código
+requerida ahora, documentada para trazabilidad si se materializa:**
+el margen actual de `geometry_scheduler.py` (9:35→~9:45 CT, 20
+reintentos) fue calibrado contra el peor caso confirmado hasta hoy
+(9:40:09 CT, 03-sep-2026). **Hoy el dato real llegó a las ~09:41 CT**
+— dentro del margen, pero sin mucho colchón de sobra (el pipeline de
+Yahoo ya mostró, en dos ocasiones separadas por más de una semana,
+retrasos que rozan o superan el límite de 10 minutos de presupuesto
+actual). Si en el futuro **GEOMETRY** (no combo2d) llega a fallar con
+el mismo tipo de error `"ERROR: no entry data available"`, la causa
+más probable YA ESTÁ IDENTIFICADA (Yahoo retrasándose más allá del
+peor caso ya visto) y el fix ya está probado — bastaría con ampliar
+otra vez el margen (mismo patrón: correr `scripts/probe_mes_open.py`
+o equivalente para confirmar el nuevo umbral real, luego ajustar la
+ventana de espera + reintentos) sin necesidad de re-diagnosticar desde
+cero. **Esto es una nota de vigilancia, no un bug abierto.**
+
