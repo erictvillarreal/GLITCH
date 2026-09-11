@@ -1451,3 +1451,112 @@ observe el mismo patrón.
 
 **Ningún cambio de código fue necesario.** Incidente cerrado.
 
+## NUEVA FASE — Diseño de migración a Raspberry Pi para ejecución real (11-sep-2026)
+
+**Contexto:** Topstep prohíbe VPN/VPS/servidores remotos para la
+**ejecución** de órdenes, pero no necesariamente para el análisis/cálculo
+de señal. Este diseño mapea exactamente qué parte del sistema actual
+(Railway) tiene que migrar a un Raspberry Pi (dispositivo personal) el
+día que Cerebro 1 confirme señal positiva y se compre el hardware
+(Fase 1). **Rama `design/pi-execution`, creada desde `main` — puro
+diseño y pseudocódigo, sin tocar `main`/`cerebro2-dev`, sin
+credenciales de ProjectX activas todavía, sin Pi físico todavía.**
+
+### 1. Investigación de la API oficial (gateway.docs.projectx.com), confirmada hoy contra la fuente primaria
+
+- **Auth:** `POST https://api.topstepx.com/api/Auth/loginKey` — `{userName, apiKey}` → `{token, success}`. JWT válido 24h, se reusa como Bearer en TODAS las requests REST y en las conexiones SignalR (no hay que re-autenticar por request).
+- **Refresh:** `POST /api/Auth/validate` → `{success, newToken}` — la doc no aclara explícitamente si el token actual va como Bearer en este request específico (asumido por consistencia con el resto de la API, **sin verificar empíricamente** — pendiente para cuando existan credenciales reales).
+- **Host único:** `api.topstepx.com` (REST) / `rtc.topstepx.com` (SignalR, user hub y market hub) — **no hay un host separado para demo vs cuenta real**, la distinción es por `accountId` en el body de cada request. Confirmado explícitamente vía la página "Connection Details" — **hay que confirmar manualmente cuál `accountId` es cuál antes de operar real, vía `Account/search`, no asumir por posición en una lista.**
+- **Abrir orden:** `POST /api/Order/place` — soporta bracket TP/SL NATIVO en la misma orden (`stopLossBracket`/`takeProfitBracket`, en ticks), **pero la doc documenta un error real**: `"Brackets cannot be used with Position Brackets. You must enable Auto OCO Brackets."` — el bracket nativo depende de que la cuenta esté configurada en modo "Auto OCO Brackets". Sin esto confirmado, no se puede asumir que el camino de bracket-en-una-orden funciona.
+- **Cerrar/flatten:** `POST /api/Position/closeContract` — `{accountId, contractId}`.
+- **Monitoreo de posición:** `POST /api/Position/searchOpen` — `{accountId}` → permite **polling REST simple**, mismo patrón que ya corre en Railway (fetch cada N segundos), sin necesitar WebSocket/SignalR para nada.
+- **Resolución de contrato:** `Contract/search` / `Contract/available` (dos nombres vistos en fuentes distintas — ver discrepancia con `brokers/projectx.py` abajo, sin resolver cuál es el correcto sin acceso real a la API).
+- **Rate limits:** 200 req/60s general (50 req/30s solo para `History/retrieveBars`, que el Pi ni siquiera necesita) → ver sección de rate limits abajo para el cálculo de margen contra el diseño de polling propuesto.
+
+### 2. Comparación de SDKs de terceros — decisión: NINGUNO, ir directo con `requests`
+
+| SDK | Adopción | Licencia | Realtime | Dependencias | Veredicto |
+|---|---|---|---|---|---|
+| **project-x-py** (TexasCoding) | Maduro, muy completo | MIT | Sí (signalrcore) | numpy, polars, plotly, pydantic, uvloop, msgpack, lz4, pytz, rich, httpx... (Python ≥3.12) | ❌ Descartado — arrastra todo un stack de análisis/dataviz al Pi |
+| **projectx-api** (rundef) | 4 estrellas, bajo | MIT | "🚧 coming soon", confirmado incompleto | httpx (liviano) | ❌ Descartado — criterio explícito del usuario (WebSocket incompleto) |
+| **tsxapi4py** (mceesincus) | 82 estrellas, el más adoptado de los públicos | Apache 2.0 | Sí, ya implementado | pandas (+ pydantic v2) — arrastra numpy transitivamente | ⚠️ El más sólido de los 3 públicos, pero peso innecesario para un cliente de solo-ejecución |
+| **topstep-sdk** (mencionado por el usuario) | **No se encontró un repo público independiente** — solo referenciado como dependencia privada "sibling" de otro paquete privado (`topstep-backtest`) | Desconocida | Desconocida | Desconocida | ❌ Descartado de raíz — no auditable |
+
+**Decisión:** ir directo contra la API oficial con `requests`. Razones: (a) la API en sí es simple (JWT bearer + JSON REST plano, sin complejidad real que un SDK abstraiga que justifique la dependencia), (b) ninguno de los 4 es oficial — los 4 son mantenidos por terceros, riesgo de abandono inaceptable para algo que mueve dinero real, (c) el proyecto ya tiene este patrón establecido y deliberado (`execution/gist_store.py` para GitHub, `scheduler/telegram_bot.py` para Telegram, `execution/contracts.py`/`geometry_scheduler.py` para Massive — todos van directo con `requests`, evitando SDKs incluso cuando existen, ver el propio paquete `massive` usado en `combo2d_scheduler.py` pero deliberadamente NO en los otros dos schedulers), (d) `Position/searchOpen` vía polling REST reemplaza por completo la necesidad de SignalR/WebSocket, evitando incluso `signalrcore` como dependencia por defecto.
+
+### 3. HALLAZGO IMPORTANTE: ya existe `brokers/projectx.py` — código huérfano, con al menos una inversión crítica confirmada
+
+Antes de escribir `pi/pi_executor.py` desde cero, se encontró que **ya existe** `brokers/projectx.py` (425 líneas, cliente REST completo contra ProjectX) en el repo. Confirmado vía `grep` que **NO lo importa ningún scheduler actual** (`geometry_scheduler.py`, `geometry_mgc_scheduler.py`, `combo2d_scheduler.py`) — solo lo usan `run_glitch.py`, `run_glitch_xfa.py`, `paper_trading/runner.py`, `test_connection.py`, todos de la arquitectura ORB anterior al pivote a Cerebro 1/2. **Código huérfano, no parte del sistema en producción.**
+
+**Se decidió NO reusarlo como base**, por una discrepancia crítica confirmada:
+
+- La documentación oficial (citada TEXTUAL, verificada dos veces por separado durante esta investigación): `side: 0 = Bid (buy), 1 = Ask (sell)`.
+- `brokers/projectx.py` define la convención CONTRARIA: `OrderSide.BID = 0  # comentado "Sell"`, `OrderSide.ASK = 1  # comentado "Buy"`.
+
+**Una de las dos fuentes está invertida.** Operar con el lado equivocado movería dinero real en la dirección opuesta a la señal — el peor tipo de bug posible para este sistema. **No se resolvió cuál fuente es la correcta** (no hay credenciales reales para probar un fill de práctica) — quedó documentado como TODO CRÍTICO en `pi/pi_executor.py`, con instrucción explícita de verificar empíricamente contra una cuenta de práctica/demo ANTES de que este código toque una cuenta fondeada.
+
+Otras discrepancias menores encontradas entre `brokers/projectx.py` y la doc oficial confirmada hoy (tampoco resueltas, mismo motivo):
+- `place_order` usa el campo `price`/`stop_price`; la doc oficial usa `limitPrice`/`stopPrice`.
+- Usa `Position/search` y `Contract/available`; la investigación de hoy encontró `Position/searchOpen` y referencias tanto a `Contract/search` como `Contract/available` en fuentes distintas.
+- No usa el bracket nativo (`stopLossBracket`/`takeProfitBracket`) — coloca 3 órdenes separadas (entry+TP+SL) y cancela la que no se llenó. Esto **no se descarta como bug** — es una alternativa válida si la cuenta no está en modo "Auto OCO Brackets" (ver punto 1) — se documentó en `pi_executor.py` como fallback legítimo, no como código a ignorar.
+
+**Ideas rescatadas de `brokers/projectx.py`** (arquitectura, no los valores concretos en duda): el patrón `ensure_auth()`/`validate_session()` para refresco de token, la carga de credenciales desde variables de entorno (`TOPSTEP_USERNAME`/`TOPSTEP_API_KEY`, mismos nombres reusados en `pi_executor.py` por continuidad), y la idea de `check_combine_limits()` como gate de seguridad pre-trade (no incluido en el pseudocódigo de esta fase, candidato para una fase posterior).
+
+### 4. Mapeo Railway vs Pi
+
+**Se queda en Railway (Cerebro 1, cálculo/señal — SIN cambios de infraestructura):**
+- Cálculo de dirección (`decide_side`, `strategies/geometry_pure.py`)
+- Resolución de front-month para logging/alertas de vencimiento (Massive, `execution/contracts.py`, sin tocar)
+- Todo el tracking histórico: `_current_intento()`, `_attempt_pnl()`, `_paper_progress()`, Pass Rate, días de paper — **sin ningún cambio de código**, siguen leyendo el mismo `geometry_{producto}_log.json` de siempre, ahora alimentado por datos reales en vez de simulados el día que se pase a ejecución real
+- Persistencia en Gist (`execution/gist_store.py`) y reportes a Telegram (`scheduler/telegram_bot.py`) — mismos módulos, reusados por el Pi también (ver punto 5)
+
+**Se mueve al Pi (ejecución real, dispositivo personal):**
+- Autenticación contra ProjectX/TopstepX (credenciales viven SOLO en el Pi, nunca en Railway — misma razón por la que la ejecución no puede vivir en Railway)
+- Resolución del contractId REAL vigente (vía la API de ProjectX, independiente del front-month que Massive resuelve para Railway — son namespaces de ticker distintos, sin traducción confiable entre ambos)
+- Apertura de la orden real, monitoreo de la posición real, cierre real
+- Reconciliación tras un crash del propio Pi — ver punto 6, es estructuralmente MEJOR que la de Railway (confirmada contra el broker, no estimada contra precio de mercado)
+
+**Cambio de código NECESARIO en Railway (no solo "agregar un componente nuevo"):** confirmado vía `grep` que `DRY_RUN` en `geometry_scheduler.py` hoy es puramente una ETIQUETA — se loguea, se guarda en cada entrada, pero el código simula el ciclo completo (`while True` contra yfinance/Massive) sin importar su valor; nunca llama a ningún broker. El día que se pase a ejecución real, `run()` necesita una rama real en `DRY_RUN`: si `true`, comportamiento IDÉNTICO a hoy (sin cambios); si `false`, en vez del `while True` de monitoreo, Railway escribe `orden_pendiente_{producto}.json` (ver punto 5) y termina ahí — ya no simula, ya no manda CLOSE, ya no hace `append` al log histórico ese mismo día (eso pasa a ser trabajo del Pi). El mensaje de OPEN también cambia de contenido en modo real: sin un "Entry: $X" preciso (es una orden de mercado, el precio real lo confirma el broker, no Railway).
+
+### 5. Mecanismo de comunicación vía Gist
+
+Nuevo archivo en el MISMO Gist compartido (mismo `GIST_ID`, cero infraestructura nueva): **`orden_pendiente_{producto}.json`** (ej. `orden_pendiente_mes.json`), vía `execution/gist_store.py::load_state`/`save_state` YA EXISTENTES, sin ningún cambio en ese módulo.
+
+Schema (contrato Railway → Pi → Railway, vía el mismo archivo):
+```json
+{
+  "date": "2026-09-11", "product": "MES", "side": 1, "direction": "LONG",
+  "size": 1, "tp_ticks": 60, "sl_ticks": 80, "intento": 3, "dry_run": false,
+  "status": "pendiente_de_ejecutar", "created_at_utc": "...",
+  "contract_id": null, "order_id": null, "entry_price": null, "executed_at_utc": null,
+  "exit_price": null, "result": null, "pnl": null, "closed_at_utc": null
+}
+```
+
+Flujo y quién escribe qué (para evitar carreras):
+1. **Railway** (solo cuando `DRY_RUN=false`): calcula la señal del día, escribe este archivo con `status="pendiente_de_ejecutar"`, y termina — no vuelve a tocar este archivo ni el `LOG_FILE` histórico ese día.
+2. **Pi** (polling cada 2 min): si `status=="pendiente_de_ejecutar"`, ejecuta la orden real, actualiza `status="ejecutada"` con `contract_id`/`order_id`/`entry_price`/`executed_at_utc` reales.
+3. **Pi**: sigue poleando `Position/searchOpen` (cada 30s) hasta que cierre (TP/SL del broker, o flatten forzado a las 15:10 CT — mismo horario que Railway ya usa). Al cerrar: hace `append` de la entrada final al MISMO `geometry_{producto}_log.json` que Railway ya usa (mismo schema de siempre: date/side/direction/entry/exit/result/pnl/nc/dry_run/product/intento) y limpia este archivo a `{}`.
+4. **Railway**, al día siguiente: su paso 0 de reconciliación (hoy diseñado para SU PROPIO crash, ver incidente SHORT MGCV6) **sigue intacto y sin cambios para el archivo `geometry_{producto}_pending.json` existente** (modo `DRY_RUN=true`, simulado). El nuevo `orden_pendiente_{producto}.json` **nunca lo lee ni reconcilia Railway** — si por la mañana siguiente ese archivo sigue en `"pendiente_de_ejecutar"` o `"ejecutada"` (el Pi nunca lo resolvió), la única acción correcta de Railway es ALERTAR fuerte por Telegram y NO generar una señal nueva hasta que se resuelva a mano — nunca inventar un resultado para una posición real, a diferencia de lo que sí es aceptable en modo paper.
+
+### 6. Reconciliación del lado del Pi — mejora real sobre el mecanismo de paper trading
+
+Si el proceso del Pi muere a mitad del monitoreo (mismo tipo de incidente que SHORT MGCV6, pero ahora con dinero real en juego), el Pi **puede preguntarle al broker directamente** qué pasó, algo que Railway nunca pudo hacer contra datos de mercado simulados:
+- `Position/searchOpen` confirma si la posición SIGUE abierta de verdad (no una estimación) → si sí, simplemente retomar el monitoreo, sin pérdida de información.
+- Si ya no está abierta, `Order/search`/`Trade/search` desde `executed_at_utc` identifica CUÁL leg (TP o SL) se llenó, con precio y timestamp reales del broker.
+- **Nunca se produce un resultado `"RECONCILED"`/`pnl_estimated=True` del lado del Pi** — todo lo que sale de esta ruta es un resultado CONFIRMADO por el broker de registro. Si la consulta al broker falla por red (no por lógica), la respuesta correcta es alertar y no tocar el Gist — con dinero real, un dato ausente es preferible a uno inventado.
+
+### 7. Manejo de rate limits (200 req/60s)
+
+Diseño de polling propuesto: 1 request cada 120s (`POLL_INTERVAL_SECONDS`) mientras no hay orden pendiente/abierta, 1 request cada 30s (`ORDER_POLL_SECONDS`) mientras hay una posición real monitoreándose activamente. Peor caso realista: ~2 requests/min sostenido durante el monitoreo activo de una posición — **muy por debajo del límite de 200/60s**, con margen amplio incluso para reintentos ante un 429 ocasional (la doc no especifica `Retry-After`, así que el diseño usa un backoff simple de espera fija antes de reintentar, no cuenta con ese header).
+
+### 8. Requisitos de hardware/OS
+
+Raspberry Pi OS 64-bit (Bookworm o más reciente), Python 3.11+. La única dependencia nueva (`requests`) tiene wheels universales (`py3-none-any`), sin compilación nativa en ARM64 — confirmado por ser pure-Python con sus propias dependencias (`urllib3`, `certifi`, `idna`, `charset-normalizer`) también con soporte ARM64 estándar. **No necesita numpy/pandas/scipy** — esas siguen siendo responsabilidad exclusiva de Railway.
+
+### Archivos de este diseño
+
+- `pi/pi_executor.py` — pseudocódigo completo (funciones con `raise NotImplementedError`, docstrings detallados, TODOs explícitos en cada punto sin verificar contra la API real). NO ejecutable todavía, ni destinado a estarlo hasta Fase 1 (hardware comprado, credenciales de ProjectX activas).
+
+**Estado: diseño completo, sin implementación contra la API real (no hay credenciales de ProjectX activas ni Pi físico todavía).** Rama `design/pi-execution` aislada de `main`/`cerebro2-dev` — cero riesgo para los schedulers en producción.
+
