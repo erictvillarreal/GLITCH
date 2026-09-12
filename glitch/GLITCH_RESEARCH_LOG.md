@@ -1504,3 +1504,95 @@ o equivalente para confirmar el nuevo umbral real, luego ajustar la
 ventana de espera + reintentos) sin necesidad de re-diagnosticar desde
 cero. **Esto es una nota de vigilancia, no un bug abierto.**
 
+## CHECKPOINT DE MITAD DE VENTANA — día 12 de 20 de observación (12-sep-2026)
+
+Consolidación de estado pedida explícitamente por el usuario, para
+comparar contra el estado final del día 20 sin depender de la memoria
+de la conversación. **Puro snapshot — sin ningún cambio de lógica.**
+
+### Snapshot de estado — Cerebro 1 y Cerebro 2
+
+**Cifras reportadas por el usuario a la fecha de hoy** (no
+re-verificadas de forma independiente en esta sesión — esta sesión no
+tiene credenciales `GITHUB_GIST_TOKEN`/`GIST_ID` para consultar el
+Gist real directamente; ver auditoría estructural más abajo, que sí se
+corrió contra un chequeo puntual del propio esquema de datos, no
+contra estas cifras de negocio):
+
+- **Cerebro 1 (GEOMETRY, MES, `main`):** 6 ciclos completados, Pass
+  Rate 66.7% empírico, **1 PASE ya completado** (el mismo evento cuya
+  falta de reinicio de "intento" causó el incidente del 10-sep-2026,
+  ya diagnosticado y corregido — ver esa sección arriba).
+- **Cerebro 2 (GEOMETRY-MGC, MGC, `cerebro2-dev`):** 2 ciclos
+  completados, WR 50.0%.
+
+### Auditoría puntual del Gist real (no exhaustiva)
+
+Se preparó `scripts/audit_gist_health_2026_09_12.py` (solo lectura,
+mismo patrón de credenciales mínimas — `GITHUB_GIST_TOKEN`/`GIST_ID`
+— que `scripts/verify_fix_intento_today.py`) para que el usuario lo
+corra contra el Gist real. Cubre, para AMBOS logs
+(`geometry_mes_log.json`, `geometry_mgc_log.json`) y AMBOS pending
+(`geometry_mes_pending.json`, `geometry_mgc_pending.json`):
+
+1. Fechas duplicadas.
+2. Campos faltantes en entradas resueltas (TP/SL/FLATTEN/RECONCILED).
+3. Valores de `result`/`note` inesperados (fuera del set conocido).
+4. Que el campo `intento` nunca retroceda al ordenar por fecha.
+5. **Residuo específico del bug de "intento stale" (10-sep-2026):**
+   detecta si algún intento que ya cruzó su umbral (PASE/QUIEBRE seguí
+   recibiendo entradas DESPUÉS de haber cruzado — exactamente la firma
+   del bug ya corregido, útil para confirmar que ninguna entrada
+   escrita ANTES del fix quedó con el número de intento equivocado.
+6. Que las entradas `RECONCILED` tengan `pnl_estimated=True`.
+7. Listado de todas las entradas del 09-sep al 12-sep (ventana de los
+   dos incidentes recientes) para revisión visual directa.
+8. Que ambos archivos pending estén vacíos (esperado hoy, sábado, sin
+   mercado abierto — cualquier registro no vacío sería una señal de
+   alerta inmediata).
+
+Probado con datos simulados cubriendo cada uno de los 8 casos
+(incluyendo una reproducción deliberada del patrón exacto del bug de
+intento stale) antes de entregarlo — **no corrido todavía contra el
+Gist real en esta sesión**, pendiente de que el usuario lo ejecute y
+reporte el resultado.
+
+### Combo2d — decisión pendiente del usuario, no de este agente
+
+`combo2d_scheduler.py` fue confirmado como estrategia descartada hace
+semanas y sigue corriendo solo por higiene, sin aportar información
+nueva a ninguna decisión de negocio. El diagnóstico del 11-sep-2026
+(ver sección arriba) confirmó que tiene una vulnerabilidad latente
+conocida (ventana de reintentos insuficiente ante retrasos de Yahoo)
+que **no se parcheó por decisión explícita** (no amerita la inversión
+de tiempo). Esto significa que el mismo tipo de error
+(`"No MNQ data available for entry"`) **puede repetirse** mientras
+combo2d siga corriendo, cada vez que Yahoo tenga un retraso matutino
+mayor a ~4 minutos — sin impacto real (la estrategia ya está
+descartada, un día sin trade no cambia ninguna conclusión), pero sí
+como ruido recurrente en Telegram/logs.
+
+**Trade-off para que el usuario decida** (no una recomendación de este
+agente, solo la información para decidir):
+- **Pausar ahora:** elimina el ruido recurrente y el consumo de compute
+  de un servicio que ya no informa ninguna decisión.
+- **Dejarlo corriendo:** mantiene el historial continuo por si en algún
+  momento se quisiera revisar la serie completa sin huecos, a costa de
+  errores esporádicos ya explicados y sin acción pendiente.
+
+### Estado de branches — confirmado limpio
+
+Verificado explícitamente (`git fetch` + comparación contra `origin`
+en las 3 ramas activas):
+
+- `main`: **tenía 1 commit local sin pushear** (`81c8163`, la
+  documentación del diagnóstico de combo2d del 11-sep, retenida
+  correctamente por el freeze window de ese día) — **pusheado ahora**,
+  hoy sábado, fuera de cualquier freeze window (la regla es solo días
+  hábiles). `main` ahora está sincronizado 1:1 con `origin/main`.
+- `cerebro2-dev`: sin divergencia, sincronizado con `origin`.
+- `design/pi-execution`: sin divergencia, sincronizado con `origin`.
+
+**Estado limpio confirmado antes de seguir acumulando días de
+observación.**
+
