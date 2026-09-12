@@ -1596,3 +1596,71 @@ en las 3 ramas activas):
 **Estado limpio confirmado antes de seguir acumulando días de
 observación.**
 
+### Cierre del checkpoint — confirmación de la transición 09-sep → 10-sep → 11-sep en el campo "intento"
+
+El usuario confirmó, vía la auditoría de arriba, que las 4 entradas
+sin campo `"intento"` (27-ago, 02, 04 y 08-sep, la última de ellas el
+TP que llevó el acumulado exactamente a $3,000) son **pre-existentes
+al mecanismo de reinicio** (introducido el 09-sep-2026) — esperado,
+cubierto por el default `e.get("intento", 1)`. Se pidió confirmar
+explícitamente que `_current_intento()` interpreta correctamente la
+transición hacia 10-sep (`intento=1` explícito) y 11-sep (también
+`intento=1`), sin discontinuidad real.
+
+**Confirmado, reproduciendo la secuencia exacta contra el código real
+(no solo por inspección):**
+
+```
+Antes del 10-sep (tags vacío -- ninguna entrada tenía "intento" aún):
+  _current_intento()  = 1        (rama "if not tags: return 1")
+  _attempt_pnl(., 1)  = 3000     (suma de las 4 entradas pre-mecanismo, via el default)
+
+Con la entrada del 10-sep ya en el log (FLATTEN, pnl=-2750, intento=1
+explícito -- mismo dato ya confirmado en la verificación del incidente
+anterior):
+  _current_intento()        = 1      (NO avanza)
+  _attempt_pnl(., intento=1) = 250   (3000 + (-2750))
+  _check_attempt_reset(250, 3000, -2000) = None
+```
+
+**El comportamiento es correcto, pero vale la pena precisar POR QUÉ,
+con más detalle que "sin discontinuidad, solo diferencia de
+representación":** la rama que se ejecuta antes del 10-sep es el
+`bootstrap` (`if not tags: return 1`), que es **ciega** al PnL
+acumulado del historial sin tag — no consulta `_attempt_pnl`/
+`_check_attempt_reset` en absoluto, simplemente devuelve 1 sin mirar
+si esos $3,000 ya "deberían" haber disparado un reinicio. Esto es, de
+hecho, el mecanismo EXACTO detrás de la lectura original de
+`"$3,000.00 / $3,000 (100.0%)"` que motivó el incidente del 10-sep —
+no una coincidencia. La razón por la que esto **no generó ningún
+problema real** es que la propia entrada del 10-sep (el FLATTEN de
+−$2,750) bajó el acumulado real a $250 ANTES de que existiera ninguna
+necesidad de que el bootstrap "supiera" del PASE del 09-sep — para
+cuando `_current_intento()` vuelve a evaluarse (11-sep), ya hay un tag
+explícito (`intento=1` de 10-sep) y la rama que SÍ verifica el cruce de
+umbral (la corregida el 10-sep-2026) entra en juego con el número real
+ya reconciliado ($250, no $3,000) — y correctamente no dispara ningún
+avance.
+
+**Precisión importante para no sobre-generalizar esta confirmación:**
+si la entrada del 10-sep hubiera sido, en cambio, un TP pequeño
+positivo (en vez del FLATTEN de −$2,750), el acumulado real se habría
+mantenido en o por encima de $3,000, y en ESE escenario el resultado
+habría sido el mismo de todas formas — porque para 11-sep ya existiría
+un tag explícito y la rama corregida sí lo habría detectado
+correctamente, avanzando a intento=2. El punto ciego real (el
+`bootstrap` ignorando el acumulado sin tag) **solo puede manifestarse
+en la transición única y ya cerrada de "cero tags -> primer tag"**
+(27-ago/02/04/08-sep -> 10-sep) — no puede repetirse a partir de ahora,
+porque el log ya nunca volverá a tener `tags` vacío. No fue "suerte que
+salvó el resultado" en el sentido de que dependiera de que 10-sep
+fuera pérdida — el resultado observado (intento=1 tanto en 10-sep como
+en 11-sep) es simplemente el reflejo correcto y directo del PnL real
+acumulado en cada momento, una vez que existe al menos un tag del cual
+partir.
+
+**No se requiere ninguna corrección.** Comportamiento confirmado como
+el esperado por diseño, con la causa exacta documentada para no
+tener que re-derivarla si se vuelve a auditar en el futuro.
+**Checkpoint del día 12/20 cerrado.**
+
