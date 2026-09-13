@@ -25,13 +25,22 @@ MGC_PATH = os.path.join(DATA_DIR, "mgc_5min_2y_corrected_window.parquet")  # ven
 
 
 def build_daily_trades(parquet_path: str, product_key: str, sl_ticks: int, tp_ticks: int,
-                        max_holding_bars: int, direction: str = "alternate") -> pd.DataFrame:
+                        max_holding_bars: int, direction: str = "alternate",
+                        open_hour: int = 9, open_minute: int = 30) -> pd.DataFrame:
     """Un trade por dia de sesion RTH real, cronologico, misma logica de
     entrada que produccion. Devuelve columnas: session_date, side, label
-    (1=TP, -1=SL, 0=time-exit)."""
+    (1=TP, -1=SL, 0=time-exit).
+
+    open_hour/open_minute: CRITICO pasar el valor real de cada scheduler,
+    NO asumir el default de MES (9:30 CT). geometry_mgc_scheduler.py usa
+    7:00 CT + ENTRY_WAIT_MINUTES=13 = 7:13 CT (ventana de mayor liquidez
+    de MGC, confirmada 07/09-sep-2026, ver GLITCH_RESEARCH_LOG.md) -- NO
+    9:30 CT (esa es la convencion de MES). Usar el default de 9:30 para
+    MGC sin pasar este parametro explicitamente fue un bug real de este
+    modulo, encontrado y corregido el 13-sep-2026 (ver research log)."""
     prices = pd.read_parquet(parquet_path)
     spec = SPECS[product_key]
-    open_pos = session_open_bar_positions(prices).sort_index()
+    open_pos = session_open_bar_positions(prices, open_hour=open_hour, open_minute=open_minute).sort_index()
     sides = np.array([decide_side(trading_day_index(d), direction) for d in open_pos.index])
     entry_positions = open_pos.values.astype(int)
 
@@ -67,8 +76,10 @@ MGC_XFA = CANDIDATES["MGC_XFA_150K"]
 
 
 if __name__ == "__main__":
-    g2_df = build_daily_trades(MES_PATH, "MES", G2.sl_ticks, G2.tp_ticks, G2.max_holding_bars, G2.direction)
-    mgc_df = build_daily_trades(MGC_PATH, "MGC", MGC_XFA.sl_ticks, MGC_XFA.tp_ticks, MGC_XFA.max_holding_bars, MGC_XFA.direction)
+    g2_df = build_daily_trades(MES_PATH, "MES", G2.sl_ticks, G2.tp_ticks, G2.max_holding_bars, G2.direction,
+                                open_hour=9, open_minute=30)
+    mgc_df = build_daily_trades(MGC_PATH, "MGC", MGC_XFA.sl_ticks, MGC_XFA.tp_ticks, MGC_XFA.max_holding_bars, MGC_XFA.direction,
+                                 open_hour=7, open_minute=13)
 
     print(f"G2 (MES, SL={G2.sl_ticks}/TP={G2.tp_ticks}): {len(g2_df)} trades, "
           f"{g2_df['session_date'].min().date()} -> {g2_df['session_date'].max().date()}")

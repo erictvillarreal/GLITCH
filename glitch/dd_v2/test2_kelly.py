@@ -21,7 +21,7 @@ from strategies.geometry_pure import SPECS
 from dd_v2.common import G2, MGC_XFA
 
 G2_WR = 0.7157
-MGC_WR_DAILY = 0.4529
+MGC_WR_DAILY = 0.4940  # CORREGIDO 13-sep-2026 -- ver dd_v2/test1_friction.py y research log
 MGC_WR_DENSE = 0.5020
 
 

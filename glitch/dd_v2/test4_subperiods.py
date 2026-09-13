@@ -48,7 +48,8 @@ def subperiod_analysis(label: str, df, n_splits: int = 4):
 
 if __name__ == "__main__":
     g2_df = build_daily_trades(MES_PATH, "MES", G2.sl_ticks, G2.tp_ticks, G2.max_holding_bars, G2.direction)
-    mgc_df = build_daily_trades(MGC_PATH, "MGC", MGC_XFA.sl_ticks, MGC_XFA.tp_ticks, MGC_XFA.max_holding_bars, MGC_XFA.direction)
+    mgc_df = build_daily_trades(MGC_PATH, "MGC", MGC_XFA.sl_ticks, MGC_XFA.tp_ticks, MGC_XFA.max_holding_bars, MGC_XFA.direction,
+                                 open_hour=7, open_minute=13)  # entrada real de produccion, ver GLITCH_RESEARCH_LOG.md
 
     subperiod_analysis("G2 (MES, SL=100/TP=40, 1 trade/dia real)", g2_df, n_splits=4)
     subperiod_analysis("MGC_XFA (MGC, SL=TP=364, 1 trade/dia real)", mgc_df, n_splits=4)

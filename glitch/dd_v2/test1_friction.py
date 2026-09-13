@@ -37,9 +37,11 @@ FRICTION_LEVELS_EXTENDED_G2 = [0.0, 2.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0
 # que produccion) -- no el denso -- para que la friccion se aplique
 # sobre el WR que de verdad importa para el candidato tal como opera.
 G2_WR = 0.7157        # ver dd_v2/common.py output
-MGC_WR = 0.4529        # ver dd_v2/common.py output -- NOTA: usar tambien 0.5020
-                        # (el denso/calibracion) como comparacion, ver hallazgo
-                        # de discrepancia metodologica documentado por separado.
+MGC_WR = 0.4940        # CORREGIDO 13-sep-2026: dd_v2/common.py usaba la hora de
+                        # entrada de MES (9:30 CT) tambien para MGC -- bug real, MGC
+                        # entra a las 7:13 CT en produccion (RTH_OPEN_HOUR=7 +
+                        # ENTRY_WAIT_MINUTES=13, geometry_mgc_scheduler.py). Corregido,
+                        # el valor anterior (0.4529) esta OBSOLETO -- ver research log.
 
 
 def g2_friction_stress(levels=FRICTION_LEVELS):

@@ -3808,3 +3808,29 @@ Ninguno rechaza independencia al 5%. **Consistente con el diseño (dirección de
 **MGC_XFA (Cerebro 2) revela una debilidad real que amerita pausar antes de invertir cómputo en la Fase B (proyección de negocio a 5 cuentas):** el WR de 45.29% medido con la cadencia REAL de 1 trade/día (vs. el 50.20% denso usado en TODOS los números de negocio existentes) no es estadísticamente concluyente (p=0.07, N insuficiente) pero apunta en la dirección de que el candidato podría tener EV negativo real, no neutro — y esto se combina con evidencia de que la velocidad de resolución del bracket ha cambiado sustancialmente a lo largo de los 2 años de historia disponibles. Proyectar 5 cuentas de payout (Fase B) sobre un WR que podría estar sobreestimado en ~5pp produciría una proyección de negocio que no reflejaría el riesgo real.
 
 **Recomendación (no una decisión unilateral de este agente, dado que el usuario pidió explícitamente pausar y reportar ante cualquier debilidad seria): antes de proceder a Fase B, decidir cómo tratar esta discrepancia** — opciones no mutuamente excluyentes: (a) proceder a Fase B usando AMBOS supuestos de WR (45.29% y 50.20%) como escenario pesimista/base, mostrando la sensibilidad del resultado de negocio a este supuesto en vez de ocultarla; (b) intentar reunir más datos reales de paper trading de MGC (actualmente solo 2 entradas) antes de confiar en cualquier proyección a 5 cuentas; (c) aceptar el 50.20% denso como la mejor estimación disponible pese al gap, documentando el riesgo residual explícitamente en cualquier resultado de Fase B.
+
+## CORRECCIÓN (13-sep-2026, mismo día): el gap de WR de MGC_XFA era, en su mayor parte, un bug de `dd_v2/common.py`, no un hallazgo de producción real
+
+El usuario pidió, antes de decidir cómo proceder, la diferencia metodológica EXACTA entre el muestreo denso (50.20%) y la secuencia real de 1 trade/día (45.29%), con evidencia de código — específicamente si el 50.20% usado en TODOS los números de negocio fue calculado con una metodología que no corresponde a cómo opera producción. Al verificar esto con evidencia de código, antes de responder, se encontró un **bug real en la herramienta de esta misma sesión**, no en el trabajo previo:
+
+**`dd_v2/common.py::build_daily_trades()` usaba `session_open_bar_positions(prices)` con el default de MES (`open_hour=9, open_minute=30`) también para MGC.** Pero `geometry_mgc_scheduler.py` (confirmado vía `git show origin/cerebro2-dev:...`) usa una ventana de apertura completamente distinta para MGC: **`RTH_OPEN_HOUR, RTH_OPEN_MINUTE = 7, 0`** más **`ENTRY_WAIT_MINUTES = 13`** (confirmado empíricamente el 09-sep-2026 contra Massive, ver ese hallazgo más arriba) → entrada real a las **7:13 CT**, no 9:30 CT. El docstring del propio scheduler lo dice explícitamente: *"NO 9:30 CT (esa es la convención de equity index que geometry_scheduler.py usa para MES)"*. `dd_v2/common.py` ignoró esa distinción y midió la secuencia diaria de MGC anclada a una hora que el scheduler real nunca usa.
+
+**Corregido y re-corrido todo lo que dependía de esto:**
+
+| | Antes (bug, 9:30 CT) | Después (corregido, 7:13 CT real) |
+|---|---|---|
+| WR condicional, 1 trade/día | 45.29% (n=340) | **49.40%** (n=332) |
+| z-test vs WR denso (50.20%) | z=−1.809, p=0.0704 | **z=−0.292, p=0.7700** |
+| Test 3 (dependencia) | pasa limpio | sigue pasando limpio (autocorr=+0.0029, runs p=0.915) |
+| Test 4 (sub-períodos, chi²) | p=0.357 (4 cuartiles) | p=0.463 (4 cuartiles) — sigue sin rechazar homogeneidad |
+| Test 1 (fricción, pass_rate Combine a fricción=0) | 0.3584 | **0.4519** (vs 0.4714 del denso — gap de 2.0pp, no 11.3pp) |
+| Test 1 (payout esperado a fricción=0) | $1,231.75 | **$2,005.23** (vs $2,207.88 del denso) |
+| Test 2 (Kelly) | f*=−10.0% | f*=−1.74% (conclusión cualitativa sin cambio: Kelly<0 en ambos casos, como es esperado por diseño) |
+
+**El gap de WR prácticamente desaparece (p=0.77, igual de consistente que G2) una vez corregida la hora de entrada.** Esto significa que el 50.20% denso **no estaba mal** — la discrepancia venía de una herramienta nueva de esta sesión (`dd_v2/common.py`), no de `validate_mgc_wr_empirical.py` ni de la validación de la ventana corregida (07-sep-2026), que nunca dependieron de ninguna hora de apertura específica (`measure_wr_bracket()` samplea CADA barra del dataset, sin anclar a ningún horario de sesión).
+
+**Lo que SÍ sobrevive intacto a esta corrección:** el hallazgo del time-exit share no estacionario (Test 4) — con la hora de entrada corregida, el patrón sigue presente y sigue siendo marcado: **71.9% (Q1) → 47.3% (Q2) → 9.3% (Q3) → 14.0% (Q4)**. Este hallazgo nunca dependió del bug de horario — es una propiedad de CUÁNDO se resuelven los trades (TP/SL vs. time-exit), no de la hora de entrada específica dentro del día.
+
+**Conclusión revisada: la pausa recomendada previamente ya NO aplica por el motivo original (el gap de WR).** Con el bug corregido, MGC_XFA no muestra una discrepancia real entre su WR de calibración y su WR de cadencia real de producción — ambas metodologías convergen, igual que en G2. El único ítem que sigue abierto (y que vale la pena entender antes de Fase B, aunque ya no bloquea nada por sí solo) es la no-estacionariedad del time-exit share — ver respuesta directa al usuario para la interpretación de esto en términos simples.
+
+**Ver [[feedback-incident-response-cycle]]: mismo patrón que el incidente de zona horaria del SHORT MGCV6 — un error propio corregido con evidencia, documentado sin minimizar, en vez de dejarlo pasar.**
