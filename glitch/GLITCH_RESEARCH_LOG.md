@@ -3688,3 +3688,123 @@ de trading de ningún producto específico.
 
 **Ningún cambio de código fue necesario.** Incidente cerrado.
 
+
+---
+
+# NUEVO STATISTICAL DUE DILIGENCE v2 — Cerebro 1 (G2) y Cerebro 2 (MGC_XFA_150K), rama `dd/statistical-due-diligence-v2` (13-sep-2026)
+
+**Alcance:** análisis puro, offline, sin cambios a `main`/`cerebro2-dev`/producción. Rama creada desde `main`, con `cerebro2-dev` mergeado dentro (para tener ambos candidatos y toda su investigación en un solo lugar) — conflictos de merge en `GLITCH_RESEARCH_LOG.md` y `tests/test_contracts.py` resueltos por concatenación/contenido idéntico, sin pérdida de historial de ninguna rama.
+
+## Mapeo de las 7 pruebas de S4BTC (`https://erictvillarreal.github.io/S4BTC/02-statistical-due-diligence.html`) contra G2/MGC_XFA
+
+G2 y MGC_XFA son **geometría pura (gambler's ruin)** — alternan LONG/SHORT por índice de día calendario, sin features, sin modelo predictivo, sin probabilidad de salida calculada. De las 7 pruebas de S4BTC, **4 aplican directamente, 3 no aplican por naturaleza distinta del candidato**:
+
+| # | Prueba S4BTC | ¿Aplica a G2/MGC_XFA? | Por qué |
+|---|---|---|---|
+| 1 | Probability Calibration Audit | **NO** | No hay probabilidad predicha que calibrar — la entrada es una regla determinística de calendario, no un output de modelo con confianza asociada. |
+| 2 | Regime Segmentation | **NO** | El "edge" de G2/MGC no es alpha condicional a régimen de mercado — es convexidad estructural del payout (pérdida acotada + ventana acotada), que no presupone ni requiere que el edge direccional varíe por régimen. |
+| 3 | Reality Modeling (Friction Stress Test) | **SÍ** → Fase A, Test 1 | Aplica igual de directo — cualquier estrategia real paga fricción. |
+| 4 | Position Sizing Research (Kelly) | **SÍ** → Fase A, Test 2 | Aplica, con una salvedad importante documentada abajo (Kelly clásico no está diseñado para un payoff acotado tipo Combine). |
+| 5 | Randomized Label Sanity Check | **NO** | No hay labels/features/modelo que aleatorizar — no hay nada que "memorizar", la señal es una función pura de la fecha. |
+| 6 | Trade Dependency Analysis | **SÍ** → Fase A, Test 3 | Aplica igual de directo — autocorrelación/rachas son propiedades de la secuencia de trades, sin importar si vienen de un modelo o de una regla. |
+| 7 | White's Reality Check / SPA (data snooping) | **SÍ** → Fase A, Test 5 | Aplica, con matices distintos entre G2 (sí hubo grid formal de 8,100 configs) y MGC_XFA (el bracket fue diseño, no grid) — ver Test 5. |
+
+**Test adicional, NO parte de las 7 de S4BTC:** Out-of-sample por sub-período (Fase A, Test 4) — ya se había hecho parcialmente para MGC (3 sub-períodos, `validate_mgc_subperiods_and_direction.py`); se formaliza aquí para ambos candidatos con 4 sub-períodos sobre la secuencia real cronológica.
+
+## Infraestructura reusada (sin reimplementar nada)
+
+- `scripts/camino_b_grid.py::measure_wr_bracket`/`_label_fixed_ticks` — bracket walk ya auditado.
+- `strategies/combo2d.py::session_open_bar_positions` + `strategies/geometry_pure.py::decide_side`/`trading_day_index` — para construir la secuencia REAL de 1 trade/día cronológico (mismo patrón que `scripts/g2_calendar_check.py`, generalizado a MGC en `dd_v2/common.py`).
+- `simulation/monte_carlo.py::TopstepMonteCarloSimulator` — Combine pass_rate (G2 y etapa 1 de MGC_XFA).
+- `core/funded_account.py::simulate_xfa_lifetime_dynamic_nc` — etapa 2 de MGC_XFA (payout XFA).
+- `data_cache/camino_b_grid_results.csv` (8,100 configs, G2) y `data_cache/cerebro2_grid_exhaustive.csv` (292,051 filas, MGC) — para el test de data snooping.
+- Todo el código de esta fase vive en `dd_v2/` (nuevo, esta rama): `common.py`, `test1_friction.py`, `test2_kelly.py`, `test3_trade_dependency.py`, `test4_subperiods.py`, `test5_data_snooping.py`.
+
+## HALLAZGO PRINCIPAL, ANTES DE LOS 5 TESTS: discrepancia metodológica real en el WR de MGC_XFA
+
+Al construir la secuencia real de "1 trade/día" (la cadencia con la que el candidato **realmente** operaría en producción, vía `session_open_bar_positions` + `decide_side`), se descubrió que difiere de la metodología de calibración ya usada (`measure_wr_bracket`, que trata CADA barra de 5min como una señal posible, alternando par/impar) en formas materialmente distintas para cada candidato:
+
+| | G2 (MES) | MGC_XFA (MGC) |
+|---|---|---|
+| WR condicional, calibración densa (cada barra) | 70.96% (n=39,394) | **50.20%** (n=33,294) |
+| WR condicional, 1 trade/día real (cronológico) | 71.57% (n=510) | **45.29%** (n=340) |
+| Diferencia | +0.61pp | **−4.91pp** |
+| z-test (H0: WR real = WR denso) | z=+0.302, **p=0.763** | z=−1.809, **p=0.0704** |
+
+**Para G2 no hay discrepancia real** (p=0.76, totalmente consistente). **Para MGC_XFA hay una discrepancia de casi 5 puntos porcentuales que NO alcanza significancia al 5% pero está en el límite (p=0.07)** — ni confirmable ni descartable con la muestra real disponible (solo 340 trades resueltos en 2 años, dado el ~34% de time-exits de este bracket ancho). La dirección importa: a WR=45.29% con RR=1.0, el EV neto por trade es claramente negativo, no aproximadamente neutro como asume el 50% teórico/denso ya usado en TODOS los números de negocio existentes ($31,257 mediana de payout, 46.2% prob de payout, etc. — ver `CEREBRO2_G2_VS_MGC_SUMMARY.md` y `scripts/cerebro2_cashflow_monte_carlo.py`).
+
+**Por qué existe la brecha (hipótesis razonada, no confirmada):** el bracket de MGC_XFA es tan ancho (364 ticks) relativo a su ventana de holding (100 barras ≈ 1 sesión) que la mayoría de los trades tardan MÁS de un día en resolverse — el punto de entrada exacto (apertura de sesión real vs. cualquier barra aleatoria) puede interactuar de forma no trivial con la exposición a gaps overnight/multi-sesión de una forma que SÍ importa para un bracket ancho y NO importa para uno angosto como el de G2 (que resuelve casi todo intra-día, ~1.2% time-exit). Esto es consistente con — y se refuerza por — el segundo hallazgo del Test 4 (ver abajo): el time-exit share de MGC_XFA cambió dramáticamente a lo largo de los 2 años (67% en el primer cuartil → 6% en el último), indicando que la dinámica de resolución de este bracket específico **no es estacionaria** en el período estudiado.
+
+**Esto no se resuelve con los datos disponibles — se documenta como el hallazgo más importante de esta due diligence, no se esconde ni se minimiza.**
+
+## Fase A — resultados completos
+
+### Test 1 — Stress test de fricción real (0/0.25/0.5/1.0/2.0 ticks/lado)
+
+**G2:** completamente INSENSIBLE al rango pedido (0-2 ticks) — `pass_rate_15d` se mantiene en 0.8334 sin cambio. Extendido el rango hasta encontrar el punto de colapso real:
+
+| Fricción (ticks/lado) | pass_rate_15d | blow_rate |
+|---|---|---|
+| 0 – 5 | 0.8334 | 0.1666 |
+| 10 | 0.8055 | 0.1945 |
+| 20 | 0.7335 | 0.2665 |
+| 30 | 0.5400 | 0.4600 |
+| 40 | 0.0000 | 0.9543 |
+
+Causa: a nc=40, cada trade mueve ±$1,900-$5,150 — 1.5-2.5x más grande que los umbrales del Combine ($2,000/$3,000) — así que un par de ticks de slippage no cambia de qué lado del umbral cae cada camino. Colapso real solo a partir de ~10 ticks/lado, total a ~40 ticks/lado (equivalente a $50/contrato/lado — muy por encima de cualquier slippage realista en MES). **Veredicto: robusto, con margen amplio.**
+
+**MGC_XFA (etapa 1, Combine):** SÍ sensible dentro del rango pedido, en ambos supuestos de WR:
+| Fricción | pass_rate (WR=45.29% real) | pass_rate (WR=50.20% denso) |
+|---|---|---|
+| 0 | 0.3584 | 0.4714 |
+| 1.0 | 0.3340 | 0.4474 |
+| 2.0 | 0.3088 | 0.4164 |
+
+**MGC_XFA (etapa 2, payout XFA):**
+| Fricción | prob(≥1 payout), WR real | avg_payout, WR real | prob(≥1 payout), WR denso | avg_payout, WR denso |
+|---|---|---|---|---|
+| 0 | 0.3605 | $1,231.75 | 0.4683 | $2,207.88 |
+| 2.0 | 0.2581 | $1,002.37 | 0.3520 | $1,747.10 |
+
+**Veredicto: degradación real y gradual, no un colapso repentino — pero ya frágil incluso sin fricción adicional al usar el WR real de 1/día (pass_rate Combine cae de 47.1% a 35.8% solo por el gap de metodología, ANTES de sumar ninguna fricción).**
+
+### Test 2 — Kelly óptimo
+
+Kelly clásico (f* = p − (1−p)/b) da **negativo para ambos candidatos** en su WR empírico:
+- G2: f* = −1.99%. Riesgo real/trade = $5,000 = **250% de `mll_distance`** ($2,000) — una sola pérdida SIEMPRE truena la cuenta (consistente con el hallazgo del Test 1: ninguna pérdida es "parcial" a esta escala).
+- MGC_XFA: f* = −10.0% (WR real) / −0.13% (WR denso). Riesgo real/trade = $2,184 = **48.5% de `mll_distance`** ($4,500) — puede absorber ~2 pérdidas consecutivas antes de tronar.
+
+**Interpretación honesta:** Kelly negativo NO significa "reducir tamaño" en el sentido clásico — significa que el marco de Kelly (maximizar tasa de crecimiento compuesto de una apuesta repetida) **no está diseñado para este juego** (un contest acotado de pase/quiebre/expira, no un proceso de reinversión continua). El EV por trade ligeramente negativo es esperado y ya documentado por diseño — la convexidad del payout del Combine, no el EV del trade individual, es lo que hace viable a ambos candidatos. La métrica útil que SÍ sale de este test es el **riesgo real como fracción de `mll_distance`**, que confirma cuantitativamente la diferencia de diseño ya conocida: G2 = "todo o nada por trade" (optimizado para velocidad), MGC_XFA = mucho más conservador por trade (optimizado para sobrevivir muchos días).
+
+### Test 3 — Trade Dependency (autocorrelación, rachas)
+
+Ambos candidatos **PASAN limpio**, sobre la secuencia real de 1 trade/día:
+
+| | G2 (n=510 resueltos) | MGC_XFA (n=340 resueltos) |
+|---|---|---|
+| Autocorrelación lag-1 | −0.022 | +0.0005 |
+| Racha ganadora avg (obs. vs. i.i.d. esperado) | 3.41 vs 3.44 | 1.83 vs 2.01 |
+| Racha perdedora avg (obs. vs. i.i.d. esperado) | 1.37 vs 1.41 | 2.19 vs 1.99 |
+| Test de rachas Wald-Wolfowitz | p=0.628 | p=0.957 |
+
+Ninguno rechaza independencia al 5%. **Consistente con el diseño (dirección determinística por calendario, sin dependencia de resultados previos) — sin sorpresas, resultado esperado y ahora confirmado empíricamente en vez de solo asumido.**
+
+### Test 4 — Out-of-sample por sub-período (4 cuartiles cronológicos)
+
+**G2:** WR por cuartil 76.80% / 73.44% / 65.89% / 70.31% (rango 10.91pp). Chi-cuadrado de homogeneidad: p=0.257 — no rechaza homogeneidad. **Pasa**, con dispersión dentro de lo esperable por ruido binomial a este N (SE≈4pp por cuartil).
+
+**MGC_XFA:** WR por cuartil 42.86% / 36.36% / 46.85% / 49.59% (rango 13.22pp). Chi-cuadrado: p=0.357 — tampoco rechaza homogeneidad formalmente. **Pero hay un segundo patrón, más concreto que el WR, que sí preocupa:** el **time-exit share** cae de forma casi monótona **67% (Q1) → 49% (Q2) → 14% (Q3) → 6% (Q4)** — la velocidad de resolución del bracket cambió radicalmente a lo largo de la ventana de 2 años. Esto no es solo "el WR varía un poco" — es evidencia de que la **dinámica misma de resolución** (cuánto tarda un trade en tocar TP o SL) no es estable en el tiempo, lo cual afecta directamente `avg_lifetime_days` y por lo tanto la velocidad de acumulación de payouts asumida en el Monte Carlo de cashflow — un canal de sensibilidad que no estaba capturado en el chi-cuadrado (que solo mira TP vs SL, ignorando el denominador de time-exits).
+
+### Test 5 — Data Snooping / selección del mejor candidato
+
+**G2:** `camino_b_grid.py` sí corrió un grid formal (8,100 configs). El top-1 real (`G1`) es `SL=50/TP=20/hold=130/direction=always_short/nc=50` (combines/año=54.99) — **no** `alternate` ni `nc=40` como el candidato desplegado. Solo 34 de 8,100 configs (0.42%) caen dentro del 10% del top — un pico relativamente angosto, mild data-snooping concern para G1 en sí. **Pero el G2 realmente desplegado difiere de G1 en 3 decisiones deliberadas y documentadas** (dirección `always_short`→`alternate` por sospecha de sobreajuste direccional ya confirmada vía split-half; nc 50→40 por margen de seguridad explícito; SL/TP escalado 2x manteniendo RR) — es decir, el candidato en producción **no es** el pick ciego del grid, es una versión deliberadamente más conservadora, validada por separado. Esto mitiga sustancialmente (no elimina del todo) la preocupación de selección del mejor-de-muchos.
+
+**MGC_XFA:** el bracket SL=TP=364/RR=1.0 fue una **elección de diseño** (simetría "gambler's ruin", sin necesitar edge) — no hay evidencia en el repo de que se haya optimizado por performance simulada entre múltiples anchos de bracket para este candidato específico. El único parámetro sí barrido fue `nc` (1,2,3,4,6), y `nc=6` coincide con el techo legal de contratos del diseño de riesgo (k), no necesariamente con un pick de "mejor performance entre 5". El marco clásico de White's RC/SPA se aplica con mucha menos fuerza aquí que en G2 — se documenta la diferencia explícitamente en vez de forzar el mismo test.
+
+## Conclusión de Fase A — PAUSA antes de Fase B, tal como el usuario indicó explícitamente
+
+**G2 (Cerebro 1) sale robusto en los 5 tests, sin hallazgos que preocupen** — friction-insensitive con margen amplio, Kelly negativo pero esperado y explicado, dependencia de trades limpia, homogéneo entre sub-períodos, y el pick desplegado ya es una versión deliberadamente des-optimizada del grid por razones de robustez ya validadas.
+
+**MGC_XFA (Cerebro 2) revela una debilidad real que amerita pausar antes de invertir cómputo en la Fase B (proyección de negocio a 5 cuentas):** el WR de 45.29% medido con la cadencia REAL de 1 trade/día (vs. el 50.20% denso usado en TODOS los números de negocio existentes) no es estadísticamente concluyente (p=0.07, N insuficiente) pero apunta en la dirección de que el candidato podría tener EV negativo real, no neutro — y esto se combina con evidencia de que la velocidad de resolución del bracket ha cambiado sustancialmente a lo largo de los 2 años de historia disponibles. Proyectar 5 cuentas de payout (Fase B) sobre un WR que podría estar sobreestimado en ~5pp produciría una proyección de negocio que no reflejaría el riesgo real.
+
+**Recomendación (no una decisión unilateral de este agente, dado que el usuario pidió explícitamente pausar y reportar ante cualquier debilidad seria): antes de proceder a Fase B, decidir cómo tratar esta discrepancia** — opciones no mutuamente excluyentes: (a) proceder a Fase B usando AMBOS supuestos de WR (45.29% y 50.20%) como escenario pesimista/base, mostrando la sensibilidad del resultado de negocio a este supuesto en vez de ocultarla; (b) intentar reunir más datos reales de paper trading de MGC (actualmente solo 2 entradas) antes de confiar en cualquier proyección a 5 cuentas; (c) aceptar el 50.20% denso como la mejor estimación disponible pese al gap, documentando el riesgo residual explícitamente en cualquier resultado de Fase B.
