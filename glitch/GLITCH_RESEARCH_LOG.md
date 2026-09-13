@@ -80,7 +80,29 @@
 
 ## Cerebro 2 — Funded Account (NO iniciado)
 
-**Estado actual:** No hay ni una línea de código de investigación para la fase funded.
+> **HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2 (confirmado con evidencia
+> dura el 06-sep-2026, ver sección "Monte Carlo de flujo de caja real,
+> 2 etapas" más abajo):** el Combine y la XFA son DOS problemas de
+> optimización distintos, con geometrías óptimas DISTINTAS y
+> potencialmente EN CONFLICTO. G2 (SL=100/TP=40 ticks, MES/50K) fue
+> diseñado para maximizar pass rate del Combine (~81.4%) y es
+> excelente para eso. El mejor candidato de geometría pura de Cerebro 2
+> (MGC/150K, SL=TP=364 ticks, WR=0.5, nc=6) fue diseñado para
+> sobrevivir en la XFA una vez fondeado (46.2% prob de payout, $2,169
+> esperado de por vida) — pero al correrlo por primera vez a través de
+> la MISMA fase Combine que G2 domina, su pass rate es **solo 46.9%**,
+> casi la mitad. **Optimizar para XFA no optimiza para Combine, y
+> viceversa — no se puede diseñar una sola geometría asumiendo que
+> "pasar bien" y "sobrevivir bien fondeado" son el mismo objetivo.**
+> Esto no era intuición ni hipótesis — se verificó corriendo la
+> geometría real de cada candidato por el simulador de Combine ya
+> auditado. Cualquier candidato futuro de Cerebro 2 debe reportar SU
+> PROPIO pass rate de Combine, nunca asumir el de G2 ni el de ningún
+> otro candidato.
+
+**Estado actual (nota original, 13-ago-2026, ver arriba para el estado
+real tras la búsqueda de edge y el Monte Carlo de flujo de caja):** No
+hay ni una línea de código de investigación para la fase funded.
 
 **El problema del Cerebro 2 es diferente al del Combine:**
 - Combine: maximizar probabilidad de llegar a $3,000 antes de tocar el floor
@@ -701,6 +723,1480 @@ que el proceso no truene — no evidencia de que la señal de
 mean-reversión día-a-día con doble confirmación MES+MNQ tenga edge
 real. Nada de lo arreglado en esta ronda cambia esa conclusión.
 
+### Cerebro 2 — Pass 1 (MES + M6E) y corrección crítica del encuadre de WR (03-sep-2026)
+
+**Rama `cerebro2-dev`.** `scripts/cerebro2_grid_pass1.py` (commit
+`8f7a3a4`) corrió un barrido k × RR × WR × 2 políticas de MLL sobre
+MES + M6E (1,044 corridas de `simulate_xfa_lifetime`, pase barato:
+N_PATHS=1000, MAX_DAYS=500). El mensaje de ese commit incluyó la
+afirmación: *"At WR=0.50 (no edge) and RR>=1.5, expected payout is
+already meaningfully positive — a non-edge-dependent direction worth
+prioritizing"*.
+
+**Esa afirmación es INCORRECTA y queda retractada aquí explícitamente**
+(no se reescribe el commit ya pusheado — se documenta la corrección
+hacia adelante, mismo criterio que el resto de esta bitácora).
+
+**El error:** `cerebro2_grid_pass1.py` barre WR como parámetro LIBRE
+(`ExactDayDist.wr`, Bernoulli independiente en
+`scripts/camino_b_grid.py:72`) completamente desacoplado de RR
+(`avg_win_usd = rr * avg_loss_usd`, ambos derivados de `sl_ticks`/`nc`).
+En ningún punto del pipeline se calcula el WR que un proceso SIN sesgo
+produciría dado el RR de esa fila — la misma lógica de gambler's ruin
+ya usada para Camino B (`WR ≈ SL/(SL+TP)`) nunca se conectó a este
+grid. Confundir "cualquier WR que aparece en el barrido" con
+"geometría pura que no requiere señal" es el mismo tipo de error que
+casi se cometió al principio de la sesión con Camino B — evitado ahí,
+cometido aquí.
+
+**Corrección aplicada** (`scripts/cerebro2_wr_natural_relabel.py`,
+post-proceso puro sobre el CSV ya generado — **no se corrió ninguna
+simulación nueva**): `WR_natural = 1/(1+RR)` por fila de RR (mismo nc,
+mismo tick_value en ambos lados, confirmado en el script del grid):
+
+| RR  | WR_natural |
+|-----|-----------|
+| 0.5 | 66.7% |
+| 1.0 | 50.0% |
+| 1.5 | 40.0% |
+| 2.0 | 33.3% |
+| 3.0 | 25.0% |
+
+**Re-etiquetado del cuadrante marcado como "prometedor" (RR≥1.5,
+WR≥0.50):** de las 504 filas de simulación en ese rango, **0 son
+geometría pura — las 504 requieren edge real**, con edge requerido
+entre 10% y 50% de probabilidad por encima del WR natural (promedio
+30.2%; en R-múltiplos, EV requerido entre +0.25R y +2.0R por trade,
+promedio +1.01R). Ese nivel de edge no se ha encontrado en ningún
+candidato de esta sesión (mejor caso histórico p=0.149, nunca
+reproducido en fresco — ver sección de arriba; todo lo demás p>0.4).
+
+**Lo que SÍ sigue siendo geometría pura sin edge** (WR ≤ WR_natural
+para su fila de RR): RR=0.5 hasta WR=0.65, RR=1.0 hasta WR=0.50, RR=1.5
+hasta WR=0.40 — precisamente la región de payout más bajo/negativo de
+la tabla original (consistente con Camino B/G2: SL=100/TP=40 → RR=0.4,
+WR_natural=71.4%, casi idéntico al WR empírico ~70.6% de G2 — edge
+requerido ≈0, que es exactamente por qué Camino B funciona sin señal
+real y por qué NO transfiere directamente a XFA sin ese colchón de
+tiempo/pérdida acotada del Combine).
+
+**Conclusión operativa:** el "hallazgo" de que existía una zona de
+payout alto sin necesidad de edge era un artefacto del desacople
+WR/RR, no un resultado del diseño. Antes de extender el grid a más
+productos o correr el stress test (Paso 4.4), el espacio de búsqueda
+de Cerebro 2 necesita re-diseñarse para que WR sea reportado siempre
+junto a su WR_natural y su edge requerido — no como un eje libre
+independiente — o alternativamente, limitarse desde el diseño a la
+región WR ≤ WR_natural si el objetivo es un resultado sin dependencia
+de señal real (aunque esa región, por lo visto en el pase 1, tiene
+payouts marginales o negativos en el rango de RR probado).
+
+Ver `data_cache/cerebro2_grid_pass1_relabeled.csv` (gitignored) para
+el detalle fila por fila (`wr_natural`, `edge_required`,
+`ev_r_per_trade`, `needs_real_edge`).
+
+### Cerebro 2 — Grid exhaustivo k×RR×WR×producto×cuenta (04-sep-2026)
+
+**Motivación de esta expansión — documentada explícitamente para no
+perderla de vista:** un video/contenido de marketing de terceros citó
+un payout promedio de **$9,000** en cuenta fondeada, **sin metodología
+mostrada**. Se trata aquí como **hipótesis a explorar, NUNCA como cifra
+validada** — de ahí extender RR hasta 8.0 (más allá de lo que
+cualquier resultado propio de esta sesión sugería) y agregar las
+cuentas 100K/150K. El grid (`scripts/cerebro2_grid_exhaustive.py`) NO
+intenta reproducir ese número específico — es un mapa completo del
+espacio de búsqueda para poder juzgar después, sin re-correr nada, si
+alguna región de él es remotamente compatible con esa cifra o con
+cualquier otra.
+
+**Diseño** (preflight en `scripts/cerebro2_grid_exhaustive_preflight.py`,
+aprobado antes de correr): k (24 valores, 2–100), RR (16 valores,
+0.25–8.0), WR (11 valores, 0.30–0.80, barrido completo en TODO punto de
+k/RR), 7 productos, 3 tamaños de cuenta XFA (50K/100K/150K), 2
+políticas de MLL. 292,050 corridas de `simulate_xfa_lifetime`
+estimadas (~2h), CSV íntegro (no solo top-N) en
+`data_cache/cerebro2_grid_exhaustive.csv` (gitignored).
+
+**Límite pendiente de verificación — `nc_cap` para 100K/150K:**
+`SPECS[...].nc_cap` en `strategies/geometry_pure.py` está documentado
+como límite real de contratos confirmado **solo para la cuenta 50K**
+(help.topstep.com). No existe en este repo una cifra confirmada para
+100K/150K. **Decisión del usuario (04-sep-2026): usar el cap de 50K
+como aproximación conservadora para las 3 cuentas** — nunca sobreestima
+combos viables, pero puede recortar de más justo la región de interés
+para cuentas grandes. Columna `nc_cap_source` en el CSV marca cada fila
+como `50K_confirmed` (cuenta 50K) o
+`50K_cap_applied_as_proxy_unverified` (100K/150K) — cualquier filtrado
+futuro del CSV debe tratar las filas `..._unverified` como una cota
+inferior, no un resultado final. Búsqueda de la cifra real de Topstep
+para 100K/150K en curso en paralelo a esta corrida (no bloqueante); si
+se confirma, son esas filas (no todo el CSV) las que ameritarían
+re-correrse.
+
+#### Hallazgo crítico: `nc_cap` NO es el límite real de la XFA — es (probablemente) el del Combine (04-sep-2026)
+
+**La búsqueda de arriba encontró algo más grave que "falta el número de
+100K/150K".** Confirmado contra fuente primaria (help.topstep.com,
+artículo "What is the Scaling Plan?"): la Express Funded Account (XFA)
+**no tiene un cap fijo de contratos por tamaño de cuenta** — usa un
+**Scaling Plan dependiente del BALANCE ACTUAL**, no del tamaño con el
+que se fondeó. Cita textual: *"Your max contracts do not increase
+mid-session"*; ejemplo citado en el artículo: 50K arranca en 2 lotes.
+
+**Tabla completa, verificada por el usuario contra la imagen oficial
+del artículo primario (help.topstep.com, "What is the Scaling Plan?"):**
+
+| Balance de la cuenta | 50K | 100K | 150K |
+|---|---|---|---|
+| < $1,500 | 2 | 3 | 3 |
+| $1,500–$2,000 | 3 | 4 | 4 |
+| $2,000–$3,000 | 5 | 5 | 5 |
+| $3,000–$4,500 | 5 | 5 | 10 |
+| > $3,000 (100K) | — | 10 | — |
+| > $4,500 (150K) | — | — | 15 |
+
+Unidades en **lotes mini-equivalentes** (ratio 10:1 con micros, excepto
+Micro Silver 5:1 y Micro Bitcoin/Micro Ether cap a lot-equivalente de
+mini en vez de escala estándar — aplicar la excepción correspondiente
+por producto al implementar).
+
+**Patrón notable, ya observado por el usuario:** el techo de contratos
+de cada cuenta coincide EXACTAMENTE con su `mll_distance` en dólares
+(50K: techo de 5 lotes en balance=$2,000=mll_distance; 100K: techo de
+10 lotes en balance=$3,000=mll_distance; 150K: techo de 15 lotes en
+balance=$4,500=mll_distance). No parece coincidencia — es
+probablemente el diseño intencional de Topstep para que el riesgo
+máximo por posición esté acotado en términos similares una vez la
+cuenta tiene colchón suficiente.
+
+**Por qué esto invalida (parcialmente) todo el trabajo de Cerebro 2
+hecho hasta ahora:** `SPECS[...].nc_cap` (50 para MES, 30 para MGC, 5
+para ZN/ZC, etc., usado en el experimento base, el grid Pass-1, y el
+grid exhaustivo `cerebro2_grid_exhaustive.py`) es casi con certeza el
+límite del **Combine**, no el Scaling Plan de la XFA. `derive_nc()`
+nunca modeló que el número de contratos permitido depende del balance
+ACTUAL de la cuenta ni que arranca muy bajo (2-3 lotes) cerca de $0 —
+exactamente donde la cuenta pasa la mayor parte del tiempo bajo diseños
+de k bajo (pocas pérdidas consecutivas). `core/funded_account.py`
+tampoco tiene ningún concepto de "nc depende del balance en cada paso
+de la simulación" — asume nc fijo toda la vida de la cuenta.
+
+**Decisión explícita del usuario (04-sep-2026):**
+1. Dejar terminar el grid exhaustivo actual (`nc` FIJO, calculado por
+   `derive_nc()` sin scaling) — se guarda y se documenta como **LÍMITE
+   SUPERIOR OPTIMISTA**, nunca como resultado final. No representa lo
+   que la cuenta real permitiría operar.
+2. NO iniciar el rediseño en paralelo al grid actual, para no duplicar
+   cómputo.
+3. Una vez guardado el CSV del grid actual, revisarlo con el usuario
+   como referencia (aun sabiendo que es optimista) ANTES de empezar el
+   rediseño.
+4. Rediseñar `simulate_xfa_lifetime()` para que `nc` sea DINÁMICO según
+   el balance actual de la cuenta en cada paso, siguiendo la tabla de
+   arriba (por tamaño de cuenta, respetando excepciones SIL/MBT/MET
+   por producto).
+5. Re-correr el MISMO grid (mismos ejes k/RR/WR/producto/cuenta) con
+   `nc` dinámico y comparar contra la versión de `nc` fijo ya guardada
+   — se espera que empeore, dado que el nc dinámico empieza más
+   restringido cerca de $0 de balance, justo donde la cuenta es más
+   frágil.
+6. Documentar cuál de las 2 versiones (fija vs. dinámica) debe usarse
+   para cualquier decisión de negocio futura — **la dinámica, siempre**,
+   una vez disponible. La versión fija queda solo como referencia
+   histórica de "qué tan optimista era el mapa original".
+
+#### Incidente: el grid exhaustivo (nc fijo) se lanzó, ETA saltó de ~2h a ~70h, diagnóstico y fix (04-sep-2026)
+
+**El grid de nc fijo se lanzó en background tras el preflight aprobado.**
+A los 44 minutos, con solo 1.0% completado, el ETA reportado por el
+propio script había subido de forma sostenida hasta ~4,200min (~70h) —
+lejos de las ~2h estimadas. Se detuvo el proceso (`TaskStop`) antes de
+seguir quemando cómputo sin supervisión, siguiendo la regla ya
+establecida de "avisar si es inviable, no recortar en silencio".
+
+**Hipótesis inicial del usuario:** que el rediseño de `nc` dinámico
+había roto la vectorización. **Descartada con evidencia** — no existía
+ningún código de `nc` dinámico en ese momento (el rediseño se pausó
+explícitamente hasta después de este grid, ver arriba); el proceso
+detenido corría la version original, sin modificar, de
+`simulate_xfa_lifetime()`.
+
+**Causa real, confirmada con benchmark dirigido:** `simulate_xfa_lifetime()`
+NUNCA estuvo vectorizada — loop Python escalar `for path in
+range(n_paths): for day in range(max_days): ...` con `break` temprano
+al tronar. Su costo real depende de cuántos días corre cada path antes
+de tronar, y ese costo varía **~75x** entre regiones del grid:
+
+| Caso | tiempo/corrida | avg_lifetime_days |
+|---|---|---|
+| RR=1.0, WR=0.35 (blow rate alto) | 12ms | 4.1 |
+| RR=1.0, WR=0.50 (= WR_natural) | 16ms | 6.4 |
+| RR=2.0, WR=0.75 (blow rate bajo) | 744ms | 400.9 |
+| RR=8.0, WR=0.75 (esquina extrema) | 868ms | 467.6 |
+| 150K, RR=2.0, WR=0.75 | 903ms | 491.7 |
+
+El benchmark original del preflight muestreó un solo punto (WR=0.5,
+cerca de WR_natural, blow rate alto) — exactamente el extremo rápido de
+esta distribución. La mayoría del grid exhaustivo (RR hasta 8.0, WR
+hasta 0.80) cae del lado lento (alta supervivencia, corre casi el
+horizonte completo de 500 días para casi los 1000 paths).
+
+**Fix aplicado:** reescrita `simulate_xfa_lifetime()` en
+`core/funded_account.py` para vectorizar sobre el eje de paths — un
+solo loop Python de `max_days` iteraciones (no `n_paths × max_days`),
+con arrays de numpy de forma `(n_paths,)` para balance/floor/contador
+de días ganadores/etc., actualizados con `np.where`/masks en vez de
+objetos `XFAAccount` por path. **Validado bit-a-bit contra la versión
+escalar anterior en 32 casos** (distribuciones deterministas y
+estocásticas, las 3 cuentas, ambas políticas de MLL, WR/RR bajos y
+altos, mismo seed) — coincidencia exacta en todos los campos del dict
+de retorno. Suite completa: 134/134 tests siguen pasando sin
+modificar ningún test existente.
+
+**Resultado del fix** (mismos 5 casos del benchmark de arriba):
+
+| Caso | antes | después |
+|---|---|---|
+| RR=1.0, WR=0.35 | 12ms | 6.7ms |
+| RR=1.0, WR=0.50 | 16ms | 6.4ms |
+| RR=2.0, WR=0.75 | 744ms | 14.2ms |
+| RR=8.0, WR=0.75 | 868ms | 14.5ms |
+| 150K, RR=2.0, WR=0.75 | 903ms | 14.9ms |
+
+Rango de variación: de ~75x a ~2.3x. Benchmark agregado (60 muestras
+aleatorias representativas de todo el espacio k/RR/WR/cuenta real):
+**10.5ms/corrida promedio** → estimado revisado para las 292,050
+corridas del grid exhaustivo: **~51 minutos** (antes: ~70 horas).
+
+**Nota para el futuro rediseño de `nc` dinámico (Scaling Plan):** dado
+que el loop ahora ya está vectorizado sobre paths, agregar el lookup
+de `nc`/contratos por balance (tabla de umbrales de la sección de
+arriba) es agregar un `np.searchsorted`/`np.digitize` vectorizado sobre
+el array `balance` DENTRO del loop de `max_days` ya existente — no
+requiere volver a un loop escalar. La preocupación original del
+usuario (que un lookup condicional por día rompiera la vectorización)
+es válida como riesgo a evitar, no como algo ya ocurrido — hay que
+implementarlo vectorizado desde el inicio cuando llegue ese paso.
+
+### Cerebro 2 — Tarea 1: validación de los top-5 [P] con nc dinámico (04-sep-2026)
+
+**Implementado** `simulate_xfa_lifetime_dynamic_nc()` y `dynamic_nc_for_balance()`
+en `core/funded_account.py`, vectorizado con `np.searchsorted()` sobre
+el array de balance (no loop escalar), usando la tabla real del
+Scaling Plan confirmada en la sección anterior. Validado bit-a-bit
+contra `simulate_xfa_lifetime()` (nc fijo) en 3 casos con una tabla de
+lookup degenerada de un solo tier — 4 tests nuevos en
+`tests/test_funded_account.py` (20/20 en ese archivo, 138/138 en la
+suite completa).
+
+**Error cometido y corregido en el camino, documentado para no
+repetirlo:** la primera versión de `simulate_xfa_lifetime_dynamic_nc()`
+usaba incondicionalmente `nc_today = dynamic_nc_for_balance(...)` — el
+MÁXIMO legal permitido cada día. Para el candidato ganador
+(MGC/150K/nc=6), eso significa operar con nc=20-30 desde el día 1
+(balance=$0 ya permite 30 contratos para una cuenta 150K) — **5x más
+grande que el candidato diseñado**, una estrategia completamente
+distinta y mucho más riesgosa, no una validación del candidato
+original. Corregido agregando el parámetro `nc_designed`: `nc_today =
+min(nc_designed, nc_legal_del_dia)` — el Scaling Plan es un techo
+LEGAL adicional sobre el diseño de riesgo, no una instrucción de
+operar el máximo. Re-validado bit-a-bit tras el fix.
+
+**Hallazgo real (contrario a la expectativa inicial del punto 5 de la
+instrucción del usuario):** para los 5 mejores candidatos [P] del grid
+exhaustivo (todos 150K, k=2, nc diseñado entre 3 y 6), **el Scaling
+Plan NO es la restricción vinculante.** El piso legal de una cuenta
+150K incluso en balance=$0 es ya 30 contratos micro (3 lotes x 10) —
+muy por encima de los 3-6 contratos que el diseño de riesgo (`k=2`,
+SL en ticks muy ancho) eligió usar. Como el nc diseñado es SIEMPRE
+menor que el piso legal (que además solo sube con el balance, nunca
+baja), `min(nc_designed, nc_legal)` = `nc_designed` en todos los días
+de todos los paths — **los números de nc fijo ya reportados en el CSV
+son válidos sin corrección** para estos 5 candidatos específicamente.
+Confirmado con Monte Carlo a `n_paths=10,000, max_days=756`: fijo y
+dinámico dan resultados IDÉNTICOS (no solo similares) en los 5
+candidatos x 2 políticas de MLL.
+
+**Esto NO generaliza a todo el grid** — es una propiedad de que las
+combinaciones ganadoras en la zona [P] usan `k` muy agresivo (2) y SL
+muy ancho, lo que produce `nc` diseñado pequeño vía `derive_nc()`. Un
+candidato con `k` más conservador o SL más ajustado (nc diseñado más
+grande) sí podría chocar contra el Scaling Plan real, especialmente en
+cuentas 50K/100K o en balances bajos. No se probó esa región todavía.
+
+**Conclusión operativa para la decisión Camino A vs. B:** el mejor
+candidato [P] (MGC/150K, k=2, nc=6, RR=1.0, WR=0.50) sigue siendo
+$2,169 de payout esperado de por vida con 46.2% de probabilidad de
+alcanzar al menos 1 payout (`n_paths=10,000`, ligeramente distinto del
+$2,299/49% reportado con `n_paths=1,000` del grid original — ambos
+dentro del ruido de Monte Carlo esperado, no una discrepancia real).
+
+### Cerebro 2 — Tarea 2 (exploratoria): Camino C — 5 cuentas XFA simultáneas (04-sep-2026)
+
+**Unidad base:** el candidato de la Tarea 1 (MGC/150K, k=2, nc=6,
+RR=1.0, WR=0.50, política `every_payout`), ya validado con nc dinámico.
+
+**Simulación Monte Carlo real** (no solo fórmula cerrada) de 5 cuentas
+con seeds independientes (`n_paths=10,000` cada una, combinadas por
+path para formar 10,000 "meta-paths" de 5 cuentas simultáneas):
+
+| Métrica | 1 cuenta | 5 cuentas independientes |
+|---|---|---|
+| Prob(≥1 payout) | 46.2% | **95.7%** (fórmula cerrada: 95.5%, Monte Carlo confirma) |
+| Payout total esperado | $2,169 | **$11,191** (≈ 5 × $2,169, por linealidad de la esperanza) |
+| Prob(ninguna cuenta paga) | 53.8% | 4.3% |
+
+**Advertencia explícita, tal como se pidió — la asunción de
+independencia es CUESTIONABLE tal como está planteado:** las 5 cuentas
+de este análisis corren el MISMO candidato sobre el MISMO producto
+(MGC) simultáneamente. En la realidad, 5 cuentas operando MGC al mismo
+tiempo estarían expuestas al MISMO movimiento de mercado — altamente
+CORRELACIONADAS, no independientes. Contraste extremo para dimensionar
+el riesgo de esa asunción: si las 5 cuentas estuvieran perfectamente
+correlacionadas (mismo resultado en las 5 siempre), `Prob(≥1 payout)`
+sería igual al de 1 sola cuenta (46.2%, **CERO beneficio de
+diversificación**), aunque el payout total esperado ($10,845) no
+cambia — la suma de esperanzas es válida siempre, independiente de la
+correlación; lo que SÍ depende de la correlación es la probabilidad de
+"al menos una" y la forma de la cola de la distribución conjunta. El
+número real de este mundo está en algún punto entre 46.2% y 95.7%,
+más cerca de 46.2% si las 5 cuentas replican la misma señal/producto
+sin ningún desfase temporal o de instrumento real.
+
+**Lo que SÍ haría la independencia plausible (no probado aquí):**
+usar productos distintos entre las 5 cuentas (ej. los top candidatos
+de MGC, MES, M2K, ZN, MCL en vez de clonar MGC 5 veces) y/o
+desfasarlas en el tiempo — ninguna de las dos cosas se implementó en
+este análisis, que usa literalmente el mismo candidato 5 veces con
+solo el seed de RNG distinto.
+
+**Conclusión operativa, como se pidió explícitamente:** Camino C NO
+reduce el riesgo de ninguna cuenta individual ni mejora la geometría
+en sí — es diversificación de la PROBABILIDAD DE ÉXITO (llegar a
+cualquier payout), no una estrategia distinta ni una fuente de edge.
+Es un paliativo operacional sobre un candidato ya validado, no un
+sustituto de investigar edge real (Camino B en el sentido de la
+discusión previa de esta sesión).
+
+## Cerebro 2 — PIVOTE: búsqueda de edge real (04-sep-2026)
+
+**Corrección de rumbo del usuario, no pausa:** Cerebro 2 sigue activo,
+pero pivota de "geometría pura modesta" (Camino A) hacia investigar
+edge real, con un criterio de éxito DISTINTO al de Cerebro 1 — no
+necesita resolver rápido (Cerebro 1 necesitaba pass_rate alto en 15
+días), necesita ser **estadísticamente real** (p<0.05, reproducible,
+N>200) y generar payout suficiente aunque sea con 2-10 eventos/año por
+cuenta. Geometría pura y esta búsqueda de edge real corren en paralelo,
+no son mutuamente excluyentes.
+
+Se mantiene el estándar no negociable de rigor de toda la sesión:
+walk-forward causal, N>200, p<0.05, Y reproducción en fresco antes de
+confiar en cualquier número — recordatorio explícito de que los 2
+únicos candidatos históricos con p<0.20 de esta sesión (p=0.149/0.165
+MR-pura, p=0.081 combo_2d) NUNCA se reprodujeron al re-testear
+(p=0.44-0.45 ambos, ver sección de arriba) — cualquier candidato nuevo
+debe pasar esa misma prueba de fuego.
+
+### Dirección 1 — timeframes lentos en MES/MGC (primer resultado, 04-sep-2026)
+
+**Script:** `scripts/wf_slow_mr.py`. Reutiliza `simulation/triple_barrier.py`
+(mismo `label_triple_barrier`/`BarrierConfig`, fix de barras ambiguas ya
+aplicado) y la misma metodología de walk-forward por folds secuenciales
++ t-test OOS ya validada en `wf_mr_pure.py`/`wf_combo2d.py` (regla FIJA,
+sin fitting — cada fold es una muestra OOS independiente). Resample a
+barras DIARIAS vía agrupación por `session_date` (tz Chicago, mismo
+criterio que `strategies/combo2d.py::session_daily_returns`).
+
+**Hipótesis probadas** (fade Y momentum, ambas direcciones — nunca
+asumir de antemano cuál es la correcta): A) señal diaria
+(lag-1-día) con holding de 3 y 5 días; B) señal semanal (lag-5-días)
+con holding de 5 días. Entradas espaciadas (no solapadas) por
+`hold_days` para no romper la independencia entre trades adyacentes
+que asume el t-test entre folds. Barreras ATR(20) diario, pt=2.5x/sl=1.5x
+(misma convención ya usada intradía).
+
+**Hallazgo intermedio, capturado antes de reportar nada:** la primera
+corrida mostró win_rate de 5-24% en TODAS las combinaciones — muy por
+debajo del piso natural sin edge (~37.5% para RR=2.5/1.5) en AMBAS
+direcciones (fade y momentum), lo cual es matemáticamente sospechoso
+(bajo un proceso simétrico, direcciones espejo no pueden estar ambas
+por debajo del piso natural). Diagnosticado con evidencia antes de
+reportar: **no es un bug ni una señal invertida** — con
+`max_holding_bars` de solo 3-5 barras diarias, la MAYORÍA de los
+trades (43-55%) expiran en la barrera VERTICAL (ni TP ni SL tocado),
+y el "win_rate" clásico (TP limpio / total) diluye su denominador con
+esos time-exits, sin ser comparable al WR de un sistema intradía donde
+casi todo resuelve limpio. La métrica que SÍ es válida pase lo que pase
+es `ev_per_trade` (usa el pnl real de TODOS los trades). Corregido el
+reporte para mostrar `n_tp`/`n_sl`/`n_time_exit` explícitamente en vez
+de solo un win_rate engañoso.
+
+**Resultado (N por experimento, p one-sided, ambas direcciones, MES y MGC):**
+
+| Producto | Experimento | Dirección | N | p (one-sided) |
+|---|---|---|---|---|
+| MES | daily hold=3d | fade | 126 | 1.000 |
+| MES | daily hold=3d | momentum | 126 | 0.215 |
+| MES | daily hold=5d | fade | 84 | 0.370 |
+| MES | daily hold=5d | momentum | 84 | 1.000 |
+| MES | weekly hold=5d | fade | 83 | 0.168 |
+| MES | weekly hold=5d | momentum | 83 | 1.000 |
+| MGC | daily hold=3d | fade | 126 | 0.192 |
+| MGC | daily hold=3d | momentum | 126 | 0.461 |
+| MGC | daily hold=5d | fade | 84 | 0.257 |
+| MGC | daily hold=5d | momentum | 84 | 1.000 |
+| MGC | weekly hold=5d | fade | 84 | 0.411 |
+| MGC | weekly hold=5d | momentum | 84 | 0.413 |
+
+**Conclusión de este primer resultado: NINGUNA combinación pasa p<0.05
+(mejor caso: MES weekly fade, p=0.168, N=83) — sin edge estadísticamente
+real detectado en timeframes lentos (daily-multi-día / semanal) para
+fade NI momentum, en MES ni MGC, con esta especificación de señal.**
+
+**Limitación estructural, no solo "no se encontró todavía":** NINGÚN
+experimento alcanza N>200 (rango real: 83-126) — es consecuencia
+directa de que una señal lenta (1 entrada cada 3-5 días, no solapada)
+sobre solo 2 años de datos disponibles simplemente no puede generar
+más de ~85-130 trades independientes por producto. Alcanzar N>200 con
+este diseño de espaciado requeriría: (a) agrupar (pool) across
+múltiples productos, (b) permitir entradas solapadas (rompe la
+independencia asumida por el t-test — no recomendable sin ajustar la
+metodología), o (c) más historia de datos (limitada por el plan actual
+de Massive/Polygon, 2 años). Ninguna de las tres se aplicó aquí.
+
+**No se extiende a más productos ni a pares/spreads todavía** — se
+reporta este primer resultado (negativo, con rigor completo) antes de
+seguir, tal como se pidió explícitamente.
+
+### Límites reales del plan de Massive (04-sep-2026)
+
+Confirmado contra fuente primaria (massive.com/futures,
+massive.com/business-futures) — **NO asumido**: extender la historia
+NO es gratis bajo el plan actual.
+
+| Tier | Precio | Historia | Acceso |
+|---|---|---|---|
+| Futures Starter (el que ya se paga) | $29/mes | 2 años | Self-serve |
+| Futures Developer | $79/mes (+$50/mes) | 5 años | Self-serve |
+| Futures CME/COMEX/etc. (enterprise) | $999/mes **por exchange** | 7+ años | Solo contacto de ventas |
+
+El tier enterprise se descarta por desproporcionado (MES=CME +
+MGC=COMEX = $1,998/mes). Proyección lineal (2 años reales → 5 años, no
+garantizada, régimen de volatilidad no necesariamente estacionario):
+los 6 configs individuales pasarían de N=83-126 a N≈208-315, cruzando
+N>200 sin necesidad de pool. **Decisión del usuario: NO aprobar el
+upgrade todavía — Camino 3, probar pool de productos primero
+(costo cero), sólo re-preguntar sobre el upgrade si el pool no
+alcanza o si revela algo genuinamente prometedor que amerite más
+datos para confirmar.**
+
+### Pool MES+MGC, con verificación de consistencia de dirección PREVIA (04-sep-2026)
+
+**Verificación de consistencia (obligatoria antes de poolear nada) —
+signo de EV por producto, en las 6 combinaciones (config × dirección)
+ya probadas en la dirección 1:**
+
+| Config | Dirección | EV% MES | EV% MGC | Consistente |
+|---|---|---|---|---|
+| daily hold=3d | fade | -0.149 | +0.133 | **NO** |
+| daily hold=3d | momentum | +0.110 | +0.025 | SÍ |
+| daily hold=5d | fade | +0.065 | +0.167 | SÍ |
+| daily hold=5d | momentum | -0.046 | -0.155 | SÍ |
+| weekly hold=5d | fade | +0.312 | +0.140 | SÍ |
+| weekly hold=5d | momentum | -0.397 | +0.143 | **NO** |
+
+**2 de 6 son inconsistentes — reportado como hallazgo, NO se poolean**
+(tal como se pidió): `daily hold=3d/fade` y `weekly hold=5d/momentum`
+muestran signos opuestos entre MES y MGC. Esto en sí mismo es
+información real — el patrón no generaliza entre estos dos productos
+en esas dos configuraciones, no es solo "falta de N".
+
+**Pool de los 4 configs consistentes** (`scripts/wf_slow_mr_pool.py`):
+trades de MES y MGC concatenados por fecha real de entrada, agrupados
+en folds cronológicos por calendario (no por índice de barra, que
+difiere en 1 entre productos):
+
+| Config | N pooled | p (one-sided) | N>200 | Mitad 1 EV% | Mitad 2 EV% | Mismo signo ambas mitades |
+|---|---|---|---|---|---|---|
+| daily hold=3d / momentum | **257** | 0.398 | **SÍ** | -0.020 | +0.096 | No (cambia de signo) |
+| daily hold=5d / fade | 172 | 0.365 | No | +0.186 | -0.051 | No (cambia de signo) |
+| daily hold=5d / momentum | 172 | 1.000 | No | -0.162 | +0.043 | No (cambia de signo) |
+| **weekly hold=5d / fade** | 170 | **0.048** | No | **+0.356** | **+0.189** | **SÍ (ambas positivas)** |
+
+**Resultado 1 — `daily hold=3d/momentum` alcanza N>200 (257) con
+potencia real, y el resultado es NULO (p=0.398), consistente en ambas
+mitades solo en el sentido de que ninguna es significativa por sí
+sola pero cambia de signo entre mitades — esta hipótesis queda
+descartada con confianza real, no por falta de muestra.**
+
+**Resultado 2 — `weekly hold=5d/fade` es el caso más prometedor
+encontrado hasta ahora en esta búsqueda de edge real:** p=0.048 en
+muestra completa (por debajo de 0.05), y las DOS mitades temporales
+tienen el MISMO signo (ambas positivas, +0.356% y +0.189%) — a
+diferencia de los otros 3 configs pooled, que cambian de signo entre
+mitades. Pero **NO cumple el criterio combinado no negociable de esta
+sesión (N>200 Y p<0.05, no uno solo)** — N=170, por debajo de 200.
+Ninguna mitad por separado alcanza significancia individual (p=0.117 y
+p=0.220), lo cual es esperable con la mitad de los folds, no
+necesariamente una alarma — pero tampoco es la confirmación
+independiente fuerte que el estándar de esta sesión exige antes de
+confiar en un número (recordar: los 2 candidatos históricos con
+p<0.20 de esta sesión nunca se reprodujeron frescos — un p=0.048 con
+N por debajo del umbral amerita el mismo escepticismo, no menos).
+
+**Conclusión operativa — dispara la condición #4 del usuario
+explícitamente:** `weekly hold=5d/fade` (MES+MGC, fade del retorno de
+la última semana, holding 5 días) es un candidato genuinamente
+prometedor (dirección consistente entre productos Y entre mitades
+temporales) pero insuficientemente probado (N=170<200, p en el límite).
+Corresponde volver a preguntar sobre el upgrade de Massive
+específicamente para este candidato — más años de historia (o más
+productos) resolverían si es real o ruido, en vez de decidir con la
+potencia estadística actual, que es insuficiente por diseño propio de
+esta sesión.
+
+Los otros 3 configs pooled (incluido el que sí alcanzó N>200) no
+muestran nada que amerite gastar más en datos — son resultados
+negativos ya bien establecidos con la muestra actual.
+
+### Decisión del usuario (04-sep-2026): NO aprobar upgrade todavía — ampliar exploración primero
+
+`weekly hold=5d/fade` (MES+MGC) queda documentado explícitamente como
+**"prometedor, N insuficiente, pendiente de confirmación" — NI
+descartado NI confirmado. No construir nada de producción sobre él.**
+Siguiente ronda, en orden: (1) Dirección 3 — spreads/pares, (2)
+extender hold periods (2d/10d/15d) a más productos, (3) mantener una
+tabla centralizada de candidatos "N insuficiente, p prometedor" para
+evaluar el upgrade de Massive como una sola decisión que confirme/
+descarte varios candidatos juntos, no gasto repetido uno por uno.
+
+**Tabla centralizada de candidatos pendientes de confirmación (N
+insuficiente, no descartados) — actualizar aquí cada vez que aparezca
+uno nuevo:**
+
+| Candidato | Producto(s) | N | p | Estado |
+|---|---|---|---|---|
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | Prometedor, N<200, pendiente |
+
+### Dirección 3 — spreads/pares (primer intento, con un fallo metodológico corregido en el camino)
+
+**Bloqueo explícito, no omitido en silencio:** el par oro-vs-plata
+(GC/MGC vs SI/SIL) pedido por el usuario **no se pudo correr** — no
+hay datos de plata (SI/SIL) en `data_cache/`, y obtenerlos requiere
+`MASSIVE_API_KEY`, que vive en Railway y no está disponible en este
+shell local. Solo se corrió el par MES-M2K (equity index, mismo tipo
+de activo).
+
+**Error metodológico capturado y corregido ANTES de reportar
+resultados** (`scripts/wf_slow_spreads.py`): la primera construcción
+del OHLC sintético del spread usaba `high_spread = high_A/low_B` y
+`low_spread = low_A/high_B` — combinando el extremo de una pata con el
+extremo OPUESTO de la otra, que casi nunca ocurren en el mismo
+instante. Esto infla artificialmente el rango intradía aparente del
+spread, produciendo un ATR muchas veces mayor al movimiento real del
+spread. Síntoma detectado antes de confiar en el resultado: **0-1
+trades de 84-126 tocaban TP en TODAS las 6 combinaciones** — un patrón
+mecánico degenerado (barrera prácticamente inalcanzable), no un
+hallazgo económico de "sin edge". Corregido usando únicamente el
+cierre (`close_spread = close_A/close_B`, sin fabricar intradía) y
+`use_atr=False` (rolling std de retornos del cierre) — resultado
+re-corrido con conteos de TP/SL sensatos y comparables a los productos
+individuales.
+
+**Resultado (MES-M2K, N por config, p one-sided, ambas direcciones):**
+
+| Experimento | Dirección | N | p (one-sided) | Signo ambas mitades |
+|---|---|---|---|---|
+| daily hold=3d | fade | 126 | 0.174 | No (cambia) |
+| daily hold=3d | momentum | 126 | 0.120 | No (cambia) |
+| daily hold=5d | fade | 84 | 0.383 | No (cambia) |
+| daily hold=5d | momentum | 84 | 0.109 | Sí (ambas +) |
+| **weekly hold=5d** | **fade** | 84 | **0.062** | **Sí (ambas +, +0.213%/+0.121%)** |
+| weekly hold=5d | momentum | 84 | 1.000 | Sí (ambas -) |
+
+**Ninguna combinación pasa p<0.05.** El caso más cercano
+(`weekly hold=5d/fade`, p=0.062, N=84) muestra el MISMO patrón
+direccional (fade semanal positivo, consistente entre mitades) que el
+hallazgo prometedor de productos individuales pooled (MES+MGC,
+p=0.048) — no es evidencia independiente fuerte (su propio N es
+pequeño y su p no cruza el umbral), pero es una segunda señal
+apuntando en la misma dirección cualitativa (fade semanal), que vale
+la pena tener presente al decidir sobre el upgrade de Massive más
+adelante — NO se agrega todavía a la tabla de candidatos pendientes
+porque no cumple ni siquiera el umbral de p<0.05 por sí solo.
+
+**Pendiente para una ronda futura, no en este pase:** el par
+oro-vs-plata sigue bloqueado por falta de datos.
+
+### Extensión de hold periods y productos (04-sep-2026)
+
+`scripts/wf_slow_mr_grid.py` — misma metodología exacta, sin cambios,
+extendida a: holds 2/3/5/10/15 días (antes solo 3/5), señal diaria Y
+semanal, 6 productos (MES, MGC, M2K/RTY, MCL/CL, M6E/6E, ZN), fade y
+momentum. **96 experimentos totales.** CSV completo en
+`data_cache/cerebro2_slow_mr_grid.csv`.
+
+**Resultado agregado: 0 de 96 alcanza N>200. 2 de 96 pasan p<0.05
+nominal.**
+
+| Producto | Config | N | p (one-sided) | Mismo signo ambas mitades |
+|---|---|---|---|---|
+| MCL (Crude) | daily hold=2d / fade | 168 | 0.028 | Sí (+0.796%, +0.657%) |
+| M6E (6E/EuroFX) | daily hold=3d / fade | 126 | 0.032 | Sí (+0.093%, +0.076%) |
+
+**Advertencia estadística obligatoria, no opcional — comparaciones
+múltiples:** con 96 pruebas independientes a α=0.05, se esperan por
+puro azar **~4.8 falsos positivos** aunque NO exista ningún edge real
+en absoluto. Encontrar solo 2 hits está POR DEBAJO de esa expectativa
+de ruido — este resultado **no constituye evidencia de que haya algo
+real en ninguno de los dos**, es exactamente lo que produciría un
+proceso sin ningún edge verdadero. La consistencia de signo entre
+mitades temporales en ambos casos es un dato mitigante (un falso
+positivo puro por multiple-testing no garantiza esa consistencia,
+aunque tampoco la descarta bajo regímenes autocorrelacionados) — no
+suficiente por sí solo para tratarlos con más confianza que candidatos
+de ruido.
+
+**Tratamiento:** se agregan a la tabla de candidatos pendientes con la
+advertencia de comparaciones múltiples explícita adjunta — MISMO nivel
+de escepticismo que cualquier otro candidato con N insuficiente, ni
+más ni menos solo por venir de un grid más grande.
+
+**Tabla centralizada de candidatos pendientes de confirmación —
+actualizada:**
+
+| Candidato | Producto(s) | N | p | Caveat | Estado |
+|---|---|---|---|---|---|
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | Ninguno adicional — 1 sola prueba dirigida | Prometedor, N<200, pendiente |
+| daily hold=2d / fade | MCL | 168 | 0.028 | De un grid de 96 pruebas (~4.8 falsos esperados por azar) | Prometedor con reserva, N<200, pendiente |
+| daily hold=3d / fade | M6E | 126 | 0.032 | De un grid de 96 pruebas (~4.8 falsos esperados por azar) | Prometedor con reserva, N<200, pendiente |
+
+**Ningún candidato de esta tabla se usa para nada de producción.**
+Los 3 comparten el mismo problema estructural: N insuficiente con solo
+2 años de datos.
+
+## Cerebro 2 — decisión del usuario: PAUSAR upgrade de Massive, agotar tier actual primero (04-sep-2026)
+
+El usuario decidió NO evaluar el upgrade todavía — el tier actual (2
+años, ya pagado) no está agotado. Ronda de exploración a costo cero
+antes de volver a plantear el upgrade:
+
+### Bloqueos encontrados, reportados explícitamente (no omitidos)
+
+1. **`diagnostic_range_volume.py` (pedido por el usuario para el
+   filtro de volumen/rango) NO EXISTE en este repo** — búsqueda
+   exhaustiva (`grep`/`find` por nombre y por contenido) no encontró
+   ningún archivo así ni uno equivalente. Se construyó un filtro de
+   volumen/rango PROPIO para esta sesión (mediana móvil de 20 días de
+   volumen diario y de rango diario, umbral por encima/debajo) —
+   **no es una reutilización de código existente**, es una
+   interpretación razonable construida desde cero, declarada como tal.
+2. **Nuevos instrumentos (SI/SIL para oro-plata; otro energético
+   además de MCL; otra divisa además de M6E; ZT/ZF para curva de
+   bonos) requieren `MASSIVE_API_KEY`, que vive en Railway y NO está
+   disponible en este shell local de desarrollo.** Esto es un bloqueo
+   de ACCESO A CREDENCIALES, no de costo de plan — el tier actual
+   (2 años) sí cubre estos símbolos, pero esta sesión no puede
+   ejecutar el fetch sin la key. Pendiente: el usuario corre
+   `python scripts/fetch_mes_2y.py <SIMBOLO>` (ej. `SIL`, `NG`, `M6B`,
+   `ZT`) en un entorno donde la key esté disponible (Railway o su
+   propia máquina con la variable exportada), y comparte los parquet
+   resultantes.
+
+### 1. Día de la semana (calendario) — patrón real encontrado, tratado con la debida cautela
+
+Split por día de entrada en los 3 candidatos pendientes más el spread
+MES-M2K:
+
+| Candidato | Lun-Jue | Viernes |
+|---|---|---|
+| MES weekly/fade | +0.32% a +0.48% (positivo, 4/4 días) | **-0.05%** |
+| MGC weekly/fade | +0.05% a +0.45% (positivo, 3/4 días) | **-0.34%** |
+| MCL daily-2d/fade | mixto (-0.03% a +1.22%) | +1.22% (mejor día, no peor) |
+| M6E daily-3d/fade | mixto, todo cerca de 0 | sin patrón |
+
+**MES y MGC (weekly/fade) comparten el mismo patrón: viernes negativo,
+lunes-jueves positivo — independientemente uno del otro.** Excluir
+viernes del pool MES+MGC: p mejora de 0.048 a **0.033**, pero **N baja
+de 170 a 135** (se aleja de 200, no se acerca) y EV sube de 0.26% a
+0.39% (ambas mitades siguen positivas: +0.29%, +0.46%).
+
+**Advertencia obligatoria — esto es refinamiento IN-SAMPLE, no
+confirmación independiente:** el filtro "excluir viernes" se descubrió
+MIRANDO la misma muestra que ya generó el candidato original. Un
+p-value mejorado después de una búsqueda adicional sobre los mismos
+datos debe tratarse con MÁS escepticismo, no menos — es exactamente el
+tipo de refinamiento post-hoc que ya causó los 2 candidatos históricos
+de esta sesión que nunca se reprodujeron frescos. No se reporta como
+"mejora confirmada", se reporta como "patrón descriptivo interesante,
+pendiente de validación en datos genuinamente nuevos".
+
+### 2. Variación del punto de entrada intradía
+
+Para MES+MGC weekly/fade: en vez de entrar al cierre del mismo día que
+genera la señal (convención original), se probó retrasar 1 día y
+entrar en la apertura RTH, mediodía, o cierre del día siguiente:
+
+| Variante | p (one-sided) | mean EV% |
+|---|---|---|
+| Baseline (cierre mismo día) | 0.048 | 0.26% |
+| Apertura día siguiente | 0.172 | 0.16% |
+| Mediodía día siguiente | 0.181 | 0.14% |
+| Cierre día siguiente | 0.098 | 0.18% |
+
+**Las 3 variantes con retraso son sustancialmente más débiles que el
+baseline.** Esto es informativo aunque no sea lo que se esperaba
+encontrar: el efecto (ya marginal) parece concentrado en la reacción
+inmediata al cierre que genera la señal, y se erosiona con cualquier
+retraso de ejecución — una señal de fragilidad/sensibilidad a
+ejecución real, no solo una curiosidad metodológica. Refuerza tratar
+el p=0.048 original con cautela, no con más confianza.
+
+### 3. Filtro de volumen/rango (construcción propia, ver bloqueo #1)
+
+Aplicado a MES+MGC weekly/fade, partiendo en alto/bajo por mediana
+móvil de 20 días:
+
+| Filtro | N | p (one-sided) |
+|---|---|---|
+| Volumen alto | 85 | 0.172 |
+| Volumen bajo | 85 | 0.121 |
+| Rango alto | 87 | 0.078 |
+| Rango bajo | 83 | 0.396 |
+
+**Ningún filtro mejora sobre el baseline sin filtrar (p=0.048).** Los
+4 subconjuntos son más débiles, consistente con que partir la muestra
+a la mitad reduce potencia sin compensar con una separación real de
+señal/ruido. El filtro de rango/volumen propio no aporta nada aquí.
+
+### 4. Variantes de construcción del spread MES-M2K — HALLAZGO NUEVO, el más fuerte de toda la búsqueda
+
+Se probaron 2 construcciones del spread (ratio de cierres vs. índice
+sintético dollar/beta-neutral acumulando `retA - retB`) × lookback
+{1,5} × hold {2,3,5,10,15} × dirección = 40 combinaciones
+(`use_atr=False`, mismo criterio ya usado para spreads).
+
+**El resultado más fuerte de TODA la búsqueda de edge de esta
+sesión:** `daily (lookback=1d) hold=5d / momentum` en el spread
+MES-M2K da **p=0.0019** con la construcción ratio, y **p=0.0072** con
+la construcción retdiff-index — **confirmado por 2 métodos de
+construcción independientes** (mismo N=86, EV~0.13-0.15% en ambos),
+no un artefacto de una elección arbitraria de cómo construir el
+spread. Split de mitades: ambas positivas (+0.073%, +0.221%) —
+consistente. **También muestra el mismo patrón de viernes negativo**
+(-0.18%) que MES/MGC weekly-fade — tercera aparición independiente de
+ese patrón de calendario, ahora en una construcción totalmente
+distinta (spread intraproducto vs. señal de producto único).
+
+Segundo hallazgo del mismo barrido: `daily hold=10d/fade`, p=0.022
+(ratio) / p=0.024 (retdiff), N=47, también confirmado por ambas
+construcciones.
+
+**Con 40 pruebas, se esperan ~2 falsos positivos por azar a α=0.05 —
+se encontraron 4.** Ligeramente por encima del ruido esperado, pero la
+concordancia cruzada entre 2 construcciones distintas para los 2
+mejores resultados es una forma de validación que los candidatos
+individuales de grids anteriores no tenían — no elimina la necesidad
+de más N, pero es la evidencia más sólida encontrada hasta ahora.
+
+**NINGUNO alcanza N>200** (máximo N=86).
+
+### Tabla centralizada de candidatos pendientes — ACTUALIZADA
+
+| Candidato | Producto(s) | N | p | Caveat | Estado |
+|---|---|---|---|---|---|
+| **daily hold=5d / momentum** | **Spread MES-M2K** | **86** | **0.0019** | Confirmado por 2 construcciones independientes | **Más fuerte hasta ahora, N<200, pendiente** |
+| daily hold=10d / fade | Spread MES-M2K | 47 | 0.022 | Confirmado por 2 construcciones | Prometedor, N muy bajo, pendiente |
+| weekly hold=5d / fade | MES+MGC (pooled) | 170 | 0.048 | — | Prometedor, N<200, pendiente |
+| weekly hold=5d / fade, sin viernes | MES+MGC (pooled) | 135 | 0.033 | Refinamiento IN-SAMPLE — más escepticismo, no menos | Descriptivo, no confirmatorio |
+| daily hold=2d / fade | MCL | 168 | 0.028 | De un grid de 96 (~4.8 falsos esperados) | Prometedor con reserva, N<200, pendiente |
+| daily hold=3d / fade | M6E | 126 | 0.032 | De un grid de 96 (~4.8 falsos esperados) | Prometedor con reserva, N<200, pendiente |
+
+**Patrón cruzado a tener presente:** 3 candidatos independientes
+(MES weekly/fade, MGC weekly/fade, spread MES-M2K daily/momentum)
+muestran viernes sistemáticamente peor que el resto de la semana —
+podría ser una regularidad de calendario real (ej. cierre de posición
+antes del fin de semana) o un artefacto compartido de este período
+específico de 2 años (ej. unos pocos viernes de alta volatilidad
+dominando la muestra) — no se puede distinguir sin más historia.
+
+**Ningún candidato de esta tabla se usa para nada de producción.**
+5 candidatos acumulados ahora (incluido el más fuerte de la sesión,
+p=0.0019), todos comparten el mismo problema estructural: N
+insuficiente con 2 años de datos. Corresponde reportar esto al usuario
+y esperar su decisión sobre si esto ya justifica evaluar el upgrade de
+Massive, o si hay más por explorar a costo cero primero.
+
+## Cerebro 2 — Tarea 0: auditoría honesta de qué tan agotada está la búsqueda (06-sep-2026)
+
+El usuario preguntó directamente si la búsqueda de edge ya estaba
+genuinamente agotada. Verificado contra CSVs/scripts guardados (no
+reconstruido de memoria):
+
+- **Individual (`cerebro2_slow_mr_grid.csv`):** 6 de 7 productos con
+  datos en caché (falta ZC), 8 configs c/u (lookback∈{1,5}×hold, con
+  lookback=5 NUNCA probado con hold<5), 2 direcciones = 96 combos,
+  profundidad idéntica en los 6.
+- **Pares:** solo 1 de 15 pares posibles entre esos 6 productos
+  probado (MES-M2K), aunque a fondo (40 combos, 2 construcciones).
+- **Barrera:** `pt_multiplier=2.5`/`sl_multiplier=1.5` en el 100% de
+  las corridas de TODA la búsqueda — confirmado con `grep`, cero
+  variación en ningún momento.
+- **Refinamiento** (día de semana, timing de entrada, filtro
+  volumen/rango): aplicado únicamente al candidato flagship
+  (MES+MGC weekly/fade). MCL, M6E, y el 2º hallazgo del spread nunca
+  lo recibieron.
+
+**Conclusión: la búsqueda NO estaba agotada.** Gaps identificados y
+priorizados por el usuario para esta misma ronda: 14 pares sin probar,
+ZC sin tocar, refinamiento pendiente en 2 candidatos + 1 hallazgo, y
+geometría de barrera nunca cuestionada.
+
+## Cerebro 2 — Cierre de gaps (06-sep-2026)
+
+### 1. Los 14 pares restantes (`scripts/wf_slow_pairs_full.py`)
+
+Misma profundidad que MES-M2K: 2 construcciones × lookback{1,5} ×
+hold{2,3,5,10,15} × dirección = 40 combos × 14 pares = 560 nuevos (600
+en total con MES-M2K). CSV completo en `data_cache/cerebro2_pairs_full_grid.csv`.
+
+**560 nuevos + 40 existentes = 600 pruebas. 57 pasan p<0.05 nominal —
+por encima de los ~30 esperados por puro azar a α=0.05, pero con una
+advertencia estructural importante: estas NO son 600 pruebas
+independientes.** Muchos pares comparten una pata (MES aparece en 5 de
+los 15 pares, M6E en 5, etc.) — un patrón real o espurio en UN producto
+puede aparecer repetido en varios pares sin ser confirmación
+independiente. El top 20 por p-value muestra exactamente esto: MES
+aparece en 6 de las 15 filas más significativas.
+
+**Hallazgo más fuerte de este barrido:** `M2K-M6E, weekly (lookback=5d)
+hold=3d, fade` — **p=0.0003** (retdiff_index) / p=0.0006 (ratio_close),
+N=128, mismo signo ambas mitades. Es la señal semanal-con-hold-corto
+que la Dirección 1 original nunca probó (lookback=5 solo se había
+probado con hold≥5). Aun así, N=128 < 200.
+
+### 2. ZC — nunca tocado, ahora corrido (`scripts/wf_slow_mr_zc.py`)
+
+Mismo grid de 16 combos que los otros 6 productos. **1 de 16 pasa
+p<0.05** (daily hold=2d/fade, p=0.023, N=125). Patrón interesante:
+**los 7 configs de fade dan EV positivo, los 7 de momentum dan EV
+negativo** (consistencia direccional interna, aunque solo 1 cruza el
+umbral). N máximo=125, no alcanza 200.
+
+### 3. Refinamiento de MCL y M6E (`scripts/wf_slow_mr_gap_fill.py`)
+
+**MCL daily-2d/fade:** NO comparte el patrón de viernes negativo de
+MES/MGC — viernes es su MEJOR día (+1.22%), lunes el peor
+(-0.03%, único negativo). Split de mitades consistente (+0.80%,
++0.66%). Filtro de rango alto mejora marginalmente el p (0.012 vs
+0.027 baseline) pero con N menor (83 vs 172) — mismo patrón de "menos
+N, no necesariamente más señal" visto antes.
+
+**M6E daily-3d/fade:** sin patrón de día de semana. Split de mitades
+consistente (+0.093%, +0.076%). Ningún filtro mejora el baseline.
+
+### 4. Segundo hallazgo del spread — MES-M2K daily hold=10d/fade
+
+Split de mitades consistente (+0.58%, +0.27%), confirmado por ambas
+construcciones. **Viernes es su SEGUNDO MEJOR día (+0.58%)** — lo
+opuesto al patrón de la versión hold=5d/momentum del mismo spread.
+**El "efecto viernes" NO es una propiedad robusta ni siquiera dentro
+del mismo par** — aparece en una configuración del spread y no en la
+otra, reforzando tratarlo como observación frágil, no un patrón
+estructural del par.
+
+### 5. Geometría de barrera — nunca variada hasta ahora
+
+Barrido de 10 combinaciones (pt,sl) para los 2 candidatos más fuertes:
+
+- **MES-M2K daily-5d/momentum:** patrón claro y monotónico — a mayor
+  RR (pt/sl), mejor p. El baseline heredado (2.5/1.5, p=0.0019) YA
+  está cerca del óptimo de este rango; `pt=3.0/sl=1.5` da p=0.0016,
+  una mejora marginal, no dramática.
+- **MES+MGC weekly/fade:** mismo patrón cualitativo, menos limpio —
+  baseline (p=0.048) y `pt=3.0/sl=1.5` (p=0.046) prácticamente
+  empatados.
+
+**Conclusión: la geometría heredada de Cerebro 1 (2.5/1.5) NO estaba
+handicapeando los resultados por accidente — ya se encuentra en una
+zona razonablemente buena del espacio.** Hay una mejora marginal
+posible con RR más alto, pero explorar 10 geometrías sobre la MISMA
+muestra que ya generó estos candidatos es, otra vez, búsqueda
+in-sample — no se adopta ninguna geometría "mejor" como upgrade
+confirmado, se reporta como confirmación de que el baseline no era
+arbitrariamente malo.
+
+### Tarea 2 — patrón de calendario aplicado a lo YA VALIDADO
+
+**G2 (Cerebro 1, `scripts/g2_calendar_check.py`):** reconstruido el
+backtest real de G2 (1 entrada/día, alternando dirección vía
+`decide_side()`/`trading_day_index()`, SL=100/TP=40 ticks, fix de
+barras ambiguas ya auditado aplicado) sobre los 2 años reales de MES.
+**WR limpio por día de semana: Lunes 69.6%, Martes 70.5%, Miércoles
+77.5%, Jueves 71.0%, Viernes 69.3% — esencialmente plano.** Excluir
+viernes cambia el WR de 71.57% a 72.13% — **0.56 puntos porcentuales,
+nivel de ruido, no un efecto de calendario real.** El patrón de
+Cerebro 2 NO transfiere a G2.
+
+**Candidato de geometría pura de Cerebro 2 (MGC/150K):** **NO
+APLICABLE tal como se planteó** — es un supuesto sintético de Monte
+Carlo (Bernoulli WR=0.5 por día), nunca derivado de precios reales de
+MGC. No existe un "viernes" real en el modelo que excluir; hacerlo
+requeriría inventar una relación entre el índice de día sintético y el
+calendario real que no está fundamentada en nada. Se documenta la
+limitación en vez de fabricar un número.
+
+### Tabla consolidada final — TODOS los candidatos pendientes
+
+| Candidato | N | p | Notas |
+|---|---|---|---|
+| **M2K-M6E weekly hold=3d/fade** | 128 | **0.0003** | Nuevo, confirmado por 2 construcciones, split-half OK — pero comparte pata M6E con otros hits, ver caveat de correlación |
+| Spread MES-M2K daily hold=5d/momentum | 86 | 0.0019 | Confirmado por 2 construcciones; geometría de barrera no mejora sustancialmente |
+| Spread MES-M2K daily hold=10d/fade | 47 | 0.022 | Confirmado por 2 construcciones, split-half OK, sin patrón de viernes (al contrario del hallazgo hermano) |
+| MES+MGC weekly hold=5d/fade (pooled) | 170 | 0.048 | Geometría alternativa no mejora sustancialmente |
+| MES+MGC weekly/fade, sin viernes | 135 | 0.033 | In-sample, más escepticismo no menos |
+| MCL daily hold=2d/fade | 168 | 0.028 | Sin patrón de viernes (viernes es su mejor día) |
+| M6E daily hold=3d/fade | 126 | 0.032 | Sin patrón de calendario |
+| ZC daily hold=2d/fade | 125 | 0.023 | Nuevo; fade positivo/momentum negativo consistente en los 7 pares de configs |
+
+**NINGUNO alcanza N>200. Ninguno se usa para nada de producción.**
+Con 600+96+16 = 712 pruebas acumuladas en total en esta búsqueda de
+edge, el panorama estadístico agregado sigue siendo: más hits de los
+esperados por puro azar en algunos barridos, pero con estructura de
+correlación entre pares que impide tratarlos como confirmaciones
+independientes, y ningún candidato individual con potencia suficiente
+para una decisión de negocio.
+
+## Cerebro 2 — Monte Carlo de flujo de caja real, 2 etapas (06-sep-2026)
+
+**Gap encontrado y resuelto ANTES de construir nada:** los números ya
+citados del candidato de geometría pura (MGC/150K, k=2, nc=6,
+SL=TP=364 ticks, WR=0.5) — $2,169 esperado, 46.2% prob de payout — son
+**exclusivamente de la fase XFA**, asumiendo que la cuenta YA está
+fondeada desde $0. Esta geometría específica NUNCA se había corrido a
+través de la fase Combine (la evaluación que hay que pasar, pagando
+la fee, antes de llegar a la XFA). Decisión del usuario: construir el
+modelo de 2 etapas completo, reusando el simulador de Combine ya
+existente y auditado (`simulation/monte_carlo.py::TopstepMonteCarloSimulator`,
+el mismo motor usado para validar G2), en vez de asumir que pagar la
+fee garantiza pasar.
+
+### Hallazgo central — el candidato es débil para pasar el Combine
+
+`scripts/cerebro2_cashflow_monte_carlo.py`. Distribución diaria para
+Combine TOPSTEP_150K: WR=50%, avg_win=$2,172, avg_loss=$2,196 (después
+de comisión), EV/día=-$11.5. **Pass rate: 46.9%** (200,000 paths) —
+**dramáticamente menor que el ~81.4% de G2.** Confirma exactamente la
+sospecha explícita del usuario: este candidato fue diseñado para
+sobrevivir en XFA (nc bajo, tolera pocas pérdidas consecutivas), NO
+para pasar el Combine rápido — son objetivos de diseño distintos, y
+optimizar uno no optimiza el otro. Avg días a pasar: 7.6; avg días a
+tronar: 5.6.
+
+### Encadenamiento y supuesto explícito
+
+Pool de 200,000 resultados de Combine (pass/blow + días) + pool de
+50,000 episodios de XFA (payout total, días de vida, número de pagos,
+vía `simulate_xfa_lifetime_dynamic_nc` ya validado) — muestreados CON
+REEMPLAZO en una simulación secuencial de 365 días de calendario por
+trayectoria (20,000 trayectorias independientes), pagando fee de
+Combine ($149) en cada intento nuevo, fee de activación adicional
+($149) solo si pasa, y jugando la economía de XFA solo entonces.
+
+**Supuesto declarado explícitamente:** el payout total de un ciclo de
+vida de XFA se acredita al FINAL de ese ciclo (no distribuido en el
+momento exacto de cada pago dentro del ciclo, información no
+disponible a este nivel de agregación) — esto es CONSERVADOR para el
+cálculo de colchón de capital, nunca optimista.
+
+### Resultado — distribución completa, no un promedio (política `every_payout`)
+
+| Métrica | p10 | p25 | p50 (mediana) | p75 | p90 | media |
+|---|---|---|---|---|---|---|
+| Payout total acumulado a 1 año | $15,809 | $22,298 | **$31,257** | $42,076 | $53,861 | $33,357 |
+| N intentos de Combine en el año | 27 | 30 | 33 | 36 | 38 | 32.7 |
+| N veces que llegó a XFA | 13 | 14 | 15 | 17 | 18 | 15.3 |
+| N payouts XFA exitosos | 7 | 9 | 11 | 14 | 16 | 11.4 |
+| **Capital colchón máximo necesario** | $298 | $447 | **$894** | $1,639 | **$2,679** | $1,251 |
+
+(Política `first_payout_only`: prácticamente idéntico — payout mediano
+$28,823, colchón mediano $894, colchón p90 $2,679 — la ambigüedad de
+reset de MLL no cambia materialmente esta conclusión.)
+
+### Respuestas directas a las 4 preguntas del usuario
+
+1. **Duración promedio de un ciclo completo (Combine + XFA si
+   aplica): 11.4 días.** Para acumular una muestra de:
+   - **30 intentos completos: ~343 días (~0.94 años)** — casi el año
+     entero.
+   - **50 intentos completos: ~572 días (~1.57 años)** — más de un
+     año calendario.
+   **El promedio observado NO se acerca al $2,169 teórico dentro de
+   un solo año de operación real — la varianza de pocas observaciones
+   domina durante todo el primer año**, consistente con el rango
+   p10-p90 de $15,809-$53,861 (un factor de ~3.4x entre el peor y
+   mejor decil, todo dentro de "resultado normal").
+2. **Riesgo de cola izquierda, cuantificado, no solo descrito:**
+   P(un intento cualquiera termina en al menos 1 payout) = pass_rate ×
+   prob(≥1 payout | pasó) = 46.9% × 46.4% = **21.8%.**
+   - **P(se necesitan ≥5 intentos consecutivos sin ningún payout) =
+     37.5%**
+   - **P(se necesitan ≥10 intentos consecutivos sin ningún payout) =
+     11.0%**
+   Esto NO es un evento de cola remoto — más de 1 de cada 3
+   trayectorias atraviesa una racha de 5+ intentos fallidos en algún
+   momento. El capital colchón de $2,679 (p90) refleja exactamente
+   este riesgo: ~18 fees de Combine pagadas antes de que llegue
+   suficiente payout para compensar.
+
+**Conclusión operativa:** el candidato SÍ genera flujo de caja
+positivo real en un horizonte de 1 año (mediana +$31,257, muy por
+encima de cualquier colchón necesario) — pero requiere (a) paciencia
+real (no resultados fiables en menos de ~1 año), (b) un colchón de
+capital de al menos ~$900-2,700 para sobrevivir las rachas normales de
+mala suerte del Combine, y (c) la advertencia estructural ya
+establecida en esta sesión: el pass rate de 46.9% en el Combine es un
+COSTO REAL no capturado en los $2,169/46.2% citados anteriormente —
+cualquier reporte futuro de este candidato debe citar AMBAS fases,
+nunca solo la XFA aislada.
+
+## Cerebro 2 — Validación empírica del WR de MGC contra datos reales (07-sep-2026)
+
+**Corrido** `scripts/validate_mgc_wr_empirical.py` (preparado el
+06-sep, ejecutado con autorización del usuario el 07-sep). Primera
+lectura de `measure_wr_bracket()` dio un resultado alarmante: WR
+empírico 34.85%, **-15.14 puntos porcentuales** por debajo del 50%
+teórico — pero **antes de reportarlo, se verificó la distribución de
+labels y se encontró el MISMO problema de métrica ya diagnosticado y
+corregido para el win_rate de `wf_slow_mr.py` en la Dirección 1**:
+`wr_all` divide por el TOTAL de trades, incluyendo los que expiran por
+tiempo (ni TP ni SL tocado). Para esta geometría (SL=TP=364 ticks,
+`max_holding_bars=100`), **30.2% de los 40,208 trades de calibración
+expiran por tiempo** — un share enorme, muy distinto al ~1.2% de G2
+(barreras mucho más angostas relativas al mismo holding window, casi
+nunca expiran por tiempo).
+
+**Resultado correcto — WR condicional (TP/(TP+SL), excluyendo
+time-exits, la métrica comparable contra el WR teórico):**
+
+| | TP | SL | time-exit | WR condicional |
+|---|---|---|---|---|
+| Todo | 34.9% | 34.9% | 30.2% | **49.97%** |
+| Long | 36.8% | 32.9% | 30.2% | 52.78% |
+| Short | 32.9% | 36.9% | 30.3% | 47.16% |
+
+**El WR=0.5 teórico asumido en todo el Monte Carlo de Cerebro 2 está
+validado empíricamente casi a la perfección: diferencia de -0.03
+puntos porcentuales (49.97% vs 50.00%).** A diferencia del hallazgo
+del Combine (que reveló un problema real), este es un resultado
+tranquilizador — la geometría de gambler's ruin para RR=1.0 simétrico
+se sostiene contra 2 años de datos reales de MGC. La pequeña asimetría
+long/short (52.78% vs 47.16%, ~5.6pp de separación) se trata con la
+MISMA cautela ya aplicada a sesgos direccionales similares en G2:
+"ruido con signo consistente por azar", no edge real sin más
+evidencia — no cambia la recomendación de dirección alternada sin
+señal.
+
+**Corrección aplicada a `measure_wr_bracket()`** (`scripts/camino_b_grid.py`):
+agregado un caveat explícito en el docstring — la función es correcta
+para G2 (time-exit share despreciable) pero SUBESTIMA el WR real para
+geometrías de barreras anchas relativas al holding window (como este
+candidato MGC). No se modificó la lógica de la función ni ningún
+número ya auditado de G2 (que no se ve afectado, diferencia <1pp) —
+solo se documentó la limitación para que una reutilización futura de
+la función no repita el mismo error de lectura que casi se comete
+aquí. 138/138 tests sin cambios.
+
+**Conclusión operativa:** el candidato de geometría pura MGC/150K
+queda validado en sus DOS supuestos ahora — WR≈50% empírico (esta
+sección) y pass rate de Combine 46.9% (sección anterior). El
+resumen ejecutivo (`CEREBRO2_G2_VS_MGC_SUMMARY.md`) se actualiza para
+reflejar que el ítem pendiente ("WR nunca validado contra datos
+reales") queda resuelto y a favor del candidato.
+
+## Cerebro 2 — Verificación adicional antes de producción: sub-períodos + sensibilidad direccional del Combine (07-sep-2026)
+
+Pedido explícito del usuario antes de proponer paso a paper trading
+real: (1) reproducción out-of-sample del WR por sub-período temporal,
+no solo el agregado; (2) confirmar si la asimetría long/short se
+traduce en algo relevante al nivel de pass rate del Combine, no solo
+en el WR base. `scripts/validate_mgc_subperiods_and_direction.py`.
+
+### 1. WR condicional por sub-período — CONFIRMADO, estable
+
+3 sub-períodos calendario de igual duración (2024-08-27→2025-04-27,
+→2025-12-27, →2026-08-26):
+
+| Sub-período | N | WR condicional | Diferencia vs 50% |
+|---|---|---|---|
+| 1 | 13,268 | 49.90% | -0.10pp |
+| 2 | 13,488 | 49.92% | -0.08pp |
+| 3 | 13,250 | 49.89% | -0.11pp |
+
+**El WR≈50% se sostiene de forma remarcablemente estable en los 3
+sub-períodos independientes** (diferencias todas <0.15pp, todas en la
+misma dirección marginal) — no es un artefacto de promediar
+variación entre sub-períodos, cada uno por separado ya está ahí.
+
+**Hallazgo lateral interesante (no cambia la conclusión de WR):** el
+time-exit share varía enormemente entre sub-períodos — 54.4% → 30.8%
+→ 5.9% — reflejando un régimen de volatilidad de MGC creciente con el
+tiempo (barras más anchas en el período 3 tocan las barreras de 364
+ticks mucho más seguido dentro de la ventana de holding). No afecta el
+WR condicional (que corrige exactamente por esto), pero es un dato
+útil sobre cómo cambió la dinámica de MGC en estos 2 años.
+
+### 2. Asimetría long/short — NO es persistente, se invierte de signo
+
+| Sub-período | WR long | WR short | Lado favorecido |
+|---|---|---|---|
+| 1 | 54.89% | 44.91% | Long (+9.98pp) |
+| 2 | 57.54% | 42.31% | Long (+15.23pp) |
+| 3 | 48.07% | 51.71% | **Short (-3.64pp)** |
+
+La asimetría agregada (52.78%/47.16%) que se reportó antes como
+"ruido con signo consistente por azar" **resulta NO ser ni siquiera
+consistente en signo** — favorece long en los períodos 1-2 y se
+invierte a favor de short en el período 3. Esto es evidencia
+adicional, más fuerte que la disponible antes, de que NO hay un sesgo
+direccional real y persistente en esta geometría — es exactamente el
+tipo de inestabilidad que se espera de ruido puro, no de una señal.
+
+### 3. Sensibilidad del pass rate del Combine — real pero contenida por el diseño "alternado"
+
+El pass rate del Combine SÍ es sensible a cambios pequeños de WR cerca
+de este punto (RR=1.0): variar el WR en ±5-8pp mueve el pass rate en
+~13-20pp:
+
+| Escenario | WR | Pass rate |
+|---|---|---|
+| Alternado (diseño real, agregado) | 49.97% | 47.0% |
+| Solo LONG (agregado 2 años) | 52.78% | 53.5% |
+| Solo SHORT (agregado 2 años) | 47.16% | 40.7% |
+| Solo LONG, peor caso (sub-período 2) | 57.54% | 63.7% |
+| Solo SHORT, peor caso (sub-período 2) | 42.31% | 30.2% |
+
+**Sí — la asimetría SÍ se traduciría en algo relevante a nivel de pass
+rate SI fuera persistente y alguien operara un solo lado** (rango de
+pass rate observado: 30.2%-63.7%, una diferencia enorme). **Pero como
+la Parte 2 arriba confirma que la asimetría NO es persistente (se
+invierte de signo entre sub-períodos), el diseño "alternado" —ya
+elegido, no una decisión nueva— es precisamente lo que protege contra
+este riesgo:** al alternar, la cuenta queda expuesta al WR agregado
+(~50%) en vez de apostar a que un lado seguirá siendo mejor que el
+otro, que la evidencia dice que no es cierto.
+
+**Conclusión operativa:** ambas verificaciones adicionales confirman
+el candidato sin nuevas alertas — el WR es temporalmente estable y la
+elección de diseño (alternar) es la correcta dado que la asimetría
+direccional es ruido, no señal. Dicho esto, la sensibilidad del pass
+rate a pequeños cambios de WR (punto 3) es una fragilidad estructural
+real de operar tan cerca del punto de equilibrio RR=1.0/WR=50% — vale
+la pena que el usuario lo tenga presente como riesgo de modelo
+(no de ejecución) al decidir sobre producción.
+
+## Cerebro 2 — Construcción del 3er scheduler (MGC/150K): Fase 1, código + hallazgo de ventana RTH (07-sep-2026)
+
+Instrucción del usuario: construir el scheduler de paper trading para
+el candidato MGC/150K en Railway, aplicando explícitamente cada
+lección de infraestructura ya aprendida con GEOMETRY/combo2d. Reporte
+por fases — esta es la Fase 1 (código + fuente de datos), antes de
+tocar Railway.
+
+### 1. ProductSpec de MGC — re-verificado, confirmado correcto
+
+Contra CME (vía búsqueda web): MGC = 10 oz troy, tick=$0.10/oz, tick
+value=$1.00/tick. Coincide exactamente con `SPECS["MGC"]` en
+`strategies/geometry_pure.py` (`tick_size=0.10, tick_value_usd=1.00`).
+**Sin bug esta vez** — a diferencia de ZC (bug de unidades cents/dollars
+encontrado el 25-ago) y del hallazgo de nc_cap/Scaling Plan del 04-sep,
+MGC ya estaba bien desde el principio.
+
+### 2. Nueva entrada en CANDIDATES — sin sobrescribir la existente
+
+`CANDIDATES["MGC"]` YA EXISTÍA (candidato de Camino B para pasar el
+Combine: sl_ticks=136, tp_ticks=45, nc=30 — geometría y objetivo
+distintos). Agregar el candidato XFA bajo la misma clave habría
+sobrescrito ese candidato. Agregado como
+**`CANDIDATES["MGC_XFA_150K"]`** (sl_ticks=364, tp_ticks=364, nc=6,
+direction="alternate") — clave nueva y explícitamente distinta,
+comentario cruzado en el código explicando la diferencia de objetivo.
+138/138 tests sin cambios.
+
+### 3. HALLAZGO — la ventana horaria de MGC usada hasta ahora está mal calibrada
+
+Punto 7 del checklist del usuario ("NO asumir que 9:30 RTH aplica
+igual [a MGC]") resultó ser más grave de lo esperado: **no es solo la
+ventana de apertura del scheduler en vivo la que está mal calibrada —
+es TODO el dataset `mgc_5min_2y.parquet` ya usado para validar el WR
+de este candidato.**
+
+`fetch_mes_2y.py` (usado para descargar MGC también) filtra a
+"8:30-15:00 CT, estándar para índices" — un filtro escrito para
+equity index, nunca revisado para gold. Verificado contra 2 fuentes
+independientes:
+- CME/COMEX: sesión heredada del pit = 8:20am-1:30pm ET (7:20am-12:30pm CT).
+- Fuentes de mercado (overlap Londres-NY): 8:00am-12:00pm EST
+  (7:00am-11:00am CT) como ventana de mayor liquidez real de gold.
+
+**Ambas apuntan a que la ventana real empieza ~1-1.5h ANTES de las
+8:30 CT que se usó.** Confirmado con evidencia interna (no solo las
+fuentes externas): en el parquet YA existente, el volumen de la
+PRIMERA barra capturada (8:30 CT) ya es el pico del día (2,257
+contratos/barra promedio, 29.1% del volumen total capturado en solo
+la primera hora) y decae MONÓTONAMENTE el resto del día hasta 588 a
+las 15:00 — la pendiente, extrapolada hacia atrás, sugiere que la
+ventana 7:00-8:30 CT (totalmente ausente del dataset) es probablemente
+MÁS activa que cualquier hora ya capturada, no menos.
+
+**Implicación:** el WR=49.97% ya validado (y su estabilidad en 3
+sub-períodos) se calculó sobre un dataset que probablemente excluye la
+ventana más líquida real de MGC. No se sabe todavía si el WR cambiaría
+con la ventana correcta — pero por la propia regla de decisión del
+usuario ("si el volumen perdido es sustancial, justifica re-fetch"),
+la evidencia (interna + 2 fuentes externas independientes, todas
+apuntando en la misma dirección) es suficiente para justificarlo.
+
+### 4. Preparado (NO ejecutado) — re-fetch con ventana corregida
+
+`scripts/fetch_mgc_correct_window.py`: misma lógica de descubrimiento
+de contratos y roll que `fetch_mes_2y.py` (sin reimplementar), único
+cambio: ventana 7:00-15:00 CT en vez de 8:30-15:00 CT. Guarda en
+`data_cache/mgc_5min_2y_corrected_window.parquet` (NO sobreescribe el
+archivo actual — comparación explícita antes de decidir cuál usar).
+**No modificado `fetch_mes_2y.py` directamente** — su filtro sí es
+correcto para los productos de equity index (MES, M2K) ya descargados
+con él, cambiarlo ahí rompería datos ya validados de otros productos.
+
+**Bloqueo:** requiere `MASSIVE_API_KEY`, no disponible en este shell
+local — mismo bloqueo que la medición de delay pedida en paralelo.
+Por decisión explícita del usuario, correr DESDE RAILWAY (donde la key
+ya vive), no pasar la key a esta sesión.
+
+`scripts/validate_mgc_wr_empirical.py` y
+`scripts/validate_mgc_subperiods_and_direction.py` actualizados para
+aceptar una ruta de parquet alternativa como argumento — re-correr
+contra el dataset corregido es un solo comando una vez descargado:
+```
+python scripts/validate_mgc_wr_empirical.py data_cache/mgc_5min_2y_corrected_window.parquet
+python scripts/validate_mgc_subperiods_and_direction.py data_cache/mgc_5min_2y_corrected_window.parquet
+```
+
+### Próximos pasos (bloqueados en Railway/API key, no en esta sesión)
+
+1. Correr `fetch_mgc_correct_window.py` en Railway.
+2. Re-correr ambos scripts de validación contra el dataset corregido,
+   comparar WR viejo vs nuevo explícitamente.
+3. Medir el delay real de Massive para MGC (pedido en paralelo,
+   pendiente por el mismo bloqueo de acceso).
+4. Solo después de 1-3: diseñar la ventana de apertura del scheduler
+   en vivo y escribir `scheduler/geometry_mgc_scheduler.py`.
+
+No se tocó producción ni Railway. Todo en `cerebro2-dev`.
+
+## Cerebro 2 — Fase 1 (continuación): dataset con ventana corregida, comparación completa (07-sep-2026)
+
+El usuario corrió `fetch_mgc_correct_window.py` en su propio entorno
+(fuera de esta sesión) y proveyó el resultado:
+`data_cache/mgc_5min_2y_corrected_window.parquet` (49,496 barras,
+ventana 7:00-15:00 CT, 2024-09-06 a 2026-09-04).
+
+**Bug capturado antes de confiar en la comparación:** `part2_combine_direction_sensitivity()`
+en `scripts/validate_mgc_subperiods_and_direction.py` tenía los 3
+escenarios "agregado" (Alternado/Solo LONG/Solo SHORT) HARDCODEADOS a
+los valores del dataset viejo (0.4997/0.5278/0.4716), sin importar qué
+parquet se pasara al script — correcto para el dataset original,
+silenciosamente obsoleto e inconsistente con los propios números de
+Parte 1 al correr contra cualquier otro dataset. Corregido para que
+Parte 1 calcule y devuelva el WR agregado del dataset completo, y
+Parte 2 lo reciba como parámetro. Verificado que el fix reproduce
+exactamente los números originales contra el dataset viejo antes de
+confiar en el resultado nuevo.
+
+### Comparación completa — ventana equity (vieja) vs ventana corregida
+
+| | Ventana vieja (8:30-15:00 CT) | **Ventana corregida (7:00-15:00 CT)** |
+|---|---|---|
+| N (calibración densa) | 40,208 | **49,395** (+22.9%) |
+| WR condicional (todo) | 49.97% | **50.20%** |
+| WR long / short | 52.78% / 47.16% (gap 5.62pp) | **50.47% / 49.93%** (gap 0.54pp) |
+| Pass rate Combine (alternado) | 47.0% | **47.5%** |
+| WR por sub-período (3) | 49.90% / 49.92% / 49.89% (±0.11pp) | 50.25% / 49.72% / 50.13% (±0.28pp) |
+
+**Conclusión: el hallazgo de la ventana horaria era real y valía la
+pena corregir, y el resultado corregido es CONSISTENTE con — y
+ligeramente MEJOR que — lo ya validado, no lo contradice.** La ventana
+correcta capturó ~22.9% más datos de calibración, empuja el WR
+condicional aún más cerca del 50% teórico, y — el cambio más
+importante — **casi elimina la asimetría long/short** (de 5.62pp a
+0.54pp de separación), consistente con la hipótesis de que parte de
+esa asimetría era un artefacto de excluir la ventana de mayor liquidez
+real (donde el flujo de order comprador/vendedor está más balanceado)
+en vez de un sesgo genuino del mercado. El pass rate del Combine
+prácticamente no se mueve (47.0%→47.5%) — la conclusión central de que
+este candidato es débil para el Combine (vs ~81.4% de G2) se mantiene
+sin cambios.
+
+**Decisión: `mgc_5min_2y_corrected_window.parquet` pasa a ser el
+dataset de referencia para este candidato** — más completo, resultado
+más limpio, misma conclusión de negocio. `mgc_5min_2y.parquet`
+(ventana vieja) se conserva sin tocar — sigue siendo válido para
+cualquier trabajo de Camino B/Combine con `CANDIDATES["MGC"]` (la
+geometría original de 136/45 ticks), que no se ve afectado por este
+hallazgo dado su holding window mucho más corto y su barrera más
+angosta relativa al rango de barra (mismo razonamiento que ya explica
+por qué G2/MES tampoco se ve afectado por el problema de time-exit).
+
+**Nota para más adelante, no una acción de esta sesión:** si esto se
+confirma como una mejora genuina y no solo ruido, sería candidato a
+re-evaluar la ventana horaria usada para CUALQUIER trabajo futuro de
+Camino B en productos no-equity (metales, energía, agrícolas, bonos) —
+cada uno con su propia sesión de mayor liquidez, probablemente
+distinta de la de equity index. No se toca retroactivamente el trabajo
+ya hecho para otros productos sin que el usuario lo pida.
+
+## Cerebro 2 — Lección de API reusable: cómo pedir "el dato más reciente" a Massive (07-sep-2026)
+
+**Incidente:** el primer intento de medir el delay real de Massive
+para MGC (`scripts/probe_massive_mgc_delay.py`) devolvió un resultado
+imposible: ~319,174 minutos (7+ meses) de "delay". Diagnosticado con
+evidencia antes de repetir la medición a ciegas —
+`scripts/diagnose_massive_aggs_query.py` probó 3 variantes de query
+lado a lado contra el endpoint `/futures/v1/aggs/{ticker}`:
+
+- **A) `window_start_gte`/`window_start_lte` como fecha sola +
+  `sort=window_start.asc` + `limit` alto, tomando el último
+  resultado** (mismo patrón usado con éxito en `fetch_mes_2y.py` para
+  descargas históricas completas).
+- **B) Mismo patrón pero con datetime completo + offset de zona
+  horaria** en vez de fecha sola.
+- **C) SIN ningún rango de fechas — `sort=window_start.desc` +
+  `limit=1`**, pidiendo directamente "la barra más reciente que
+  tengas".
+
+**Resultado con evidencia:** A y B **ninguna de las dos** devuelve la
+barra más reciente — hay un problema de paginación/ordenamiento del
+lado de la API específico a pedir un RANGO con `sort=asc` y tomar el
+último elemento (no es un problema de formato de fecha, ambos formatos
+fallan igual). **Solo C funciona.** Mismo tipo de comportamiento ya
+visto antes en esta sesión con el endpoint `/futures/v1/contracts`
+(`date=<point-in-time>` funciona de forma confiable; un rango amplio
+con `sort=asc` no) — patrón recurrente de esta API específica, no un
+incidente aislado.
+
+**Regla para cualquier script futuro que necesite "el dato más
+reciente" de Massive (aggs o contracts): usar `sort=desc` + `limit`
+pequeño (1, o pocos), NUNCA un rango de fechas + `sort=asc` +
+tomar-el-último.** `scripts/probe_massive_mgc_delay.py` corregido para
+usar el patrón C. Agregado también un aviso defensivo en el propio
+script (`_weekday_warning()`) tras un segundo hallazgo relacionado:
+**la primera corrida con el patrón C ya corregido midió ~1.8 días de
+"delay", pero se corrió en sábado** — eso es tiempo desde el cierre
+del mercado el viernes (gold cierra Vie 16:00 CT, reabre Dom 17:00
+CT), no delay real de la API. El script ahora advierte explícitamente
+si se corre fuera de horario de mercado activo entre semana.
+
+**Pendiente:** medir el delay real, corriendo `probe_massive_mgc_delay.py`
+lunes-viernes en horario de mercado activo (evitando también el corte
+diario 4-5pm CT) — el número de fin de semana no es válido para
+diseñar el punto de entrada del scheduler.
+
+## Cerebro 2 — `scheduler/geometry_mgc_scheduler.py` construido, listo salvo 1 parámetro (07-sep-2026)
+
+Objetivo del usuario: tener el scheduler listo para decisión de
+deploy el lunes, adelantando en fin de semana todo lo que no depende
+del mercado abierto. Checklist explícito, verificado uno por uno.
+
+### 1. Archivo nuevo, no extensión de geometry_pure.py
+
+`strategies/geometry_pure.py` (capa de GEOMETRÍA/estrategia) ya era
+agnóstico de producto — no necesitó tocarse más allá de la entrada
+`CANDIDATES["MGC_XFA_150K"]` ya agregada el 07-sep. Pero
+`scheduler/geometry_scheduler.py` (capa de EJECUCIÓN/infra) está
+hardcodeado a Yahoo (`yf.Ticker`) y falla explícitamente si
+`ProductSpec.yf_ticker is None` — que es el caso de MGC a propósito
+(nunca verificado, ver `strategies/geometry_pure.py`). Como este
+scheduler usa Massive en vez de Yahoo (decisión ya tomada), reusar
+`geometry_scheduler.py` vía `GLITCH_PRODUCT` no era viable — se creó
+`scheduler/geometry_mgc_scheduler.py` como archivo nuevo, reutilizando
+TODO lo demás (env_check, gist_store, contracts, geometry_pure) sin
+duplicar esa lógica.
+
+### 2. Lecciones de infraestructura aplicadas, cada una verificada
+
+- **Chequeo unificado desde la primera línea:** `require_env(...)`
+  corre antes de `telegram_bot`/`execution.contracts`/`execution.gist_store`
+  — mismo orden que los otros 2 schedulers. Verificado con smoke test
+  (`env -i` + 4 de 5 variables): falla con el mensaje consolidado
+  esperado, reportando LA variable faltante (`GIST_ID`), no un crash
+  genérico.
+- **Persistencia via Gist, namespace nuevo:** `LOG_FILE =
+  "geometry_mgc_log.json"` — distinto de `geometry_mes_log.json` y
+  `combo2d_log.json`, sin riesgo de colisión.
+- **Smoke test de import limpio** (`env -i` con las 5 variables
+  requeridas, valores falsos pero presentes): import exitoso de
+  principio a fin, `CFG` resuelto correctamente
+  (`CANDIDATES["MGC_XFA_150K"]`), sin excepciones.
+- **Bug real atrapado en el smoke test, no en producción:**
+  `fetch_latest_price(...) -> float | None` usaba sintaxis de union
+  types de Python 3.10+ (`X | Y`) — el MISMO tipo de incompatibilidad
+  con Python 3.9 ya encontrado y corregido en `execution/env_check.py`
+  semanas atrás. Corregido a `Optional[float]` (`typing`) antes de
+  que este bug llegara a Railway.
+
+### 3. `ENTRY_WAIT_MINUTES` — pendiente explícito, falla ruidoso si se despliega sin confirmar
+
+`ENTRY_WAIT_MINUTES = None  # PENDIENTE`. Agregado
+`_fail_if_entry_wait_not_confirmed()`, llamado al inicio de `run()`
+(antes incluso del chequeo de día hábil) — si sigue en `None`, loguea
+el error, manda alerta a Telegram, y sale con `sys.exit(1)`. Verificado
+en aislamiento (con `send()` mockeado, sin red real): dispara
+`SystemExit(1)` y el mensaje de Telegram correctamente. **No se puede
+desplegar este scheduler sin completar este valor primero.**
+
+### 4. Otras piezas de lógica verificadas en aislamiento (sin acceso a la API real)
+
+- `fetch_latest_price()`: mockeado `requests.get` — confirma que usa
+  el patrón YA CORREGIDO (`sort=window_start.desc`, `limit=1`, **sin**
+  `window_start_gte/lte`) y que el fallback 1min→5min funciona cuando
+  la resolución fina no devuelve resultados.
+- `_paper_progress()`: con un log de ejemplo (2 TP, 1 SL, 1 FLATTEN),
+  confirma que el WR condicional excluye FLATTEN del denominador
+  (2/(2+1)=66.7%, no 2/4=50%) — mismo criterio ya aplicado en
+  `validate_mgc_wr_empirical.py`, no una fórmula nueva sin probar.
+
+### 5. Cron Schedule propuesto (no bloqueante, ajustar el lunes)
+
+Basado en la ventana de liquidez ya confirmada (7:00-14:30 CT):
+`0 12 * * 1-5` (12:00 UTC = 7:00 CT en horario de verano CDT —
+**verificar DST vigente** al configurar el cron real en Railway, CT
+puede ser UTC-5 o UTC-6 según la época del año).
+
+### 6. Sin push a main, sin tocar Railway
+
+Todo comiteado en `cerebro2-dev`. Pendiente antes de decidir
+merge/deploy:
+1. Correr `probe_massive_mgc_delay.py` lunes-viernes en horario activo
+   → completar `ENTRY_WAIT_MINUTES`.
+2. **Verificar manualmente en el dashboard de Railway** (no asumible
+   desde este entorno): qué Builder usa el nuevo servicio (Railpack vs
+   Nixpacks — el Procfile actual del repo solo tiene una línea generica
+   `worker: python scheduler/glitch_scheduler.py`, no una entrada por
+   servicio; los otros 2 schedulers parecen configurarse con Start
+   Command directo en el dashboard de cada servicio, no vía este
+   Procfile — mismo tipo de suposición que causó el incidente de
+   Railpack/Nixpacks de semanas atrás, no repetir esa suposición aquí).
+   Start Command a usar: `python scheduler/geometry_mgc_scheduler.py`.
+3. Configurar las 5 variables de entorno en el nuevo servicio de
+   Railway (mismos nombres, `GIST_ID`/`GITHUB_GIST_TOKEN` **compartidos**
+   con los otros 2 servicios — el namespace nuevo vive en el nombre del
+   archivo dentro del gist, no en variables separadas).
+4. Cron Schedule en Railway con el horario propuesto (ajustar si hace
+   falta).
+5. Una vez todo lo anterior: correr una vez manualmente ("Run now")
+   con logs revisados en vivo antes de confiar en el cron automático —
+   mismo estándar ya aplicado a los otros 2 servicios.
+
 ## Fix: logger UTC-mislabeled-como-CT en los 3 schedulers (07-sep-2026)
 
 **Contexto de por qué se encontró esto:** mientras se construía el
@@ -759,6 +2255,11 @@ nota aclaratoria de que MES (no MNQ) fue el producto correcto usado.
 El logger UTC-como-CT se documenta aquí como lo que realmente es: un
 hallazgo y fix de HOY (07-sep-2026), no un bug histórico de la
 búsqueda de edge — timelines separados, no mezclados.
+
+
+---
+
+# A partir de aqui: continuacion desde `main` (Cerebro 1)
 
 ## CERRADO: roll dinámico de MES/MNQ verificado ante el vencimiento de MESU6/MNQU6 (08-sep-2026)
 
@@ -1663,4 +3164,527 @@ partir.
 el esperado por diseño, con la causa exacta documentada para no
 tener que re-derivarla si se vuelve a auditar en el futuro.
 **Checkpoint del día 12/20 cerrado.**
+
+
+---
+
+# A partir de aqui: continuacion desde `cerebro2-dev` (Cerebro 2)
+
+**Nota (rama `cerebro2-dev`):** este fix de logging aplica también a
+`scheduler/geometry_mgc_scheduler.py` (construido en esta rama, no
+existe en `main`) — ver commit siguiente en esta misma rama para el
+mismo cambio aplicado ahí.
+
+## Incidente: GEOMETRY-MGC crash-loop en Railway, rama incorrecta conectada (07-sep-2026)
+
+**Síntoma reportado por el usuario:** el servicio GEOMETRY-MGC en
+Railway llevaba 11+ horas en estado "Running" tras un deploy a las
+06:01 CT, mientras GEOMETRY y COMBO2D (mismo día, mismo feriado)
+terminaron en segundos con "No es dia de trading — saliendo".
+
+**Diagnóstico inicial (por descarte, antes del log real):** se
+revisaron y descartaron, con evidencia directa contra el código de
+`scheduler/geometry_mgc_scheduler.py`:
+1. Calendario de feriados — idéntico byte-a-byte entre los 3
+   schedulers (`geometry_scheduler.py`, `combo2d_scheduler.py`,
+   `geometry_mgc_scheduler.py`), y 07-sep-2026 SÍ está correctamente
+   listado como feriado en los 3.
+2. `_fail_if_entry_wait_not_confirmed()` — no puede colgarse: llama a
+   `send()`, que tiene `timeout=10` y captura sus propias excepciones
+   internamente: nunca propaga un hang hacia afuera.
+3. Ninguna llamada de red alcanzable desde `run()` carece de timeout
+   explícito (`fetch_latest_price`: 20s por intento; `telegram_bot.send()`:
+   10s; el envío de Telegram duplicado deliberadamente en
+   `execution/env_check.py`: 10s también).
+
+Conclusión de ese primer análisis: el código, tal como está
+committeado (`ENTRY_WAIT_MINUTES = None` desde el commit original,
+confirmado con `git log --all` que nunca se le asignó un valor real),
+debería fallar en segundos vía `_fail_if_entry_wait_not_confirmed()` —
+un "Running" de 11+ horas era inconsistente con este código
+ejecutándose normalmente.
+
+**Causa raíz real, confirmada con el log real de Railway que el
+usuario trajo después:**
+
+```
+python: can't open file '/app/scheduler/geometry_mgc_scheduler.py':
+[Errno 2] No such file or directory
+```
+
+Las "11 horas corriendo" eran un ciclo de crash-restart continuo, no
+un proceso colgado — consistente con `restartPolicyType: ON_FAILURE`
+visto en `glitch/railway.json`.
+
+**Dos problemas distintos, encontrados en cascada:**
+
+1. **Prefijo de ruta.** La ruta real del archivo (confirmada con
+   `git ls-tree -r cerebro2-dev --name-only`) es
+   `glitch/scheduler/geometry_mgc_scheduler.py`. El Start Command
+   configurado en Railway usaba `scheduler/geometry_mgc_scheduler.py`
+   (sin el prefijo `glitch/`) — inconsistente con el patrón ya usado
+   por los 2 servicios que sí funcionan (`worker`/`worker-geometry`
+   en el `Procfile` raíz, ambos con el prefijo `glitch/`), y
+   probablemente copiado del patrón de `glitch/railway.json`
+   (`python scheduler/glitch_scheduler.py`, sin prefijo), que solo es
+   correcto si el Root Directory de ESE servicio está fijado a
+   `glitch/` — una convención distinta a la de GEOMETRY/COMBO2D.
+
+2. **Causa más fundamental, encontrada después: el servicio
+   GEOMETRY-MGC estaba conectado a la rama `main` en Railway, no a
+   `cerebro2-dev`.** `scheduler/geometry_mgc_scheduler.py` y
+   `CANDIDATES["MGC_XFA_150K"]` NUNCA existieron en `main` — todo el
+   código de Cerebro 2 vive exclusivamente en `cerebro2-dev`. El
+   archivo nunca existió en la rama que Railway estaba mirando,
+   independientemente de cualquier problema de ruta. Esto explica el
+   síntoma de forma más completa que el problema de prefijo por sí
+   solo.
+
+**Decisión de gobernanza, documentada explícitamente (autorización
+puntual del usuario, no una regla general nueva):** el usuario
+autorizó conectar el servicio GEOMETRY-MGC en Railway directamente a
+la rama `cerebro2-dev` — una excepción puntual a la práctica de "nada
+llega a producción sin pasar por `main`", limitada explícitamente a
+ESTE servicio específico. No es un merge de `cerebro2-dev` a `main` —
+GEOMETRY y COMBO2D siguen conectados a `main` sin cambios. La
+justificación: todo el código real de Cerebro 2 (incluyendo el
+scheduler mismo) vive solo en `cerebro2-dev`, y forzar un merge
+completo a `main` solo para desbloquear este deploy mezclaría de forma
+prematura ~5,659 líneas de trabajo de investigación (scripts de grid,
+Monte Carlo, validaciones) que no tienen relación con hacer funcionar
+este servicio.
+
+**Verificación de riesgo, hecha ANTES de que el usuario confirmara el
+cambio de rama (no después):** diff completo `main`...`cerebro2-dev`
+revisado archivo por archivo. Todo lo que cambia respecto a `main` es:
+- Archivos nuevos, autocontenidos, nunca importados por ningún
+  scheduler (`scripts/cerebro2_*.py`, `scripts/wf_slow_*.py`,
+  `scripts/validate_mgc_*.py`, `scripts/probe_massive_mgc_delay.py`,
+  `scripts/diagnose_massive_aggs_query.py`, `scripts/fetch_mgc_correct_window.py`,
+  `scripts/g2_calendar_check.py`, `tests/test_funded_account.py`) —
+  se ejecutan solo manualmente, Railway nunca los toca.
+- `core/funded_account.py` (+333 líneas) — NO importado por ningún
+  scheduler (ni GEOMETRY, ni COMBO2D, ni GEOMETRY-MGC); solo lo usan
+  los scripts de Monte Carlo offline.
+- `strategies/geometry_pure.py` (+11 líneas) — puramente aditivo,
+  agrega `CANDIDATES["MGC_XFA_150K"]` bajo una clave nueva y distinta,
+  sin tocar `CANDIDATES["MGC"]` ni ninguna otra entrada existente.
+- `scripts/camino_b_grid.py` (+14 líneas) — solo un docstring/caveat
+  agregado a `measure_wr_bracket()`, cero cambio de lógica.
+- `GLITCH_RESEARCH_LOG.md`, `CEREBRO2_G2_VS_MGC_SUMMARY.md` —
+  documentación, sin impacto en runtime.
+- `scheduler/geometry_mgc_scheduler.py` — el archivo que se está
+  desplegando, ya revisado en el diagnóstico de arriba.
+- **`execution/contracts.py`, `execution/gist_store.py`,
+  `execution/env_check.py`, `execution/ct_logging.py`,
+  `scheduler/telegram_bot.py`, `scheduler/combo2d_scheduler.py`,
+  `scheduler/geometry_scheduler.py` — CERO diferencias respecto a
+  `main`** (confirmado, no están en el diff). Los módulos compartidos
+  que GEOMETRY y COMBO2D dependen quedan exactamente iguales; conectar
+  GEOMETRY-MGC a esta rama no puede afectarlos de ninguna forma,
+  incluso en el hipotético caso de que alguno de los dos estuviera
+  también conectado a `cerebro2-dev` (no lo está — ambos siguen en
+  `main`).
+
+**Conclusión del análisis de riesgo: conectar GEOMETRY-MGC a
+`cerebro2-dev` es seguro.** El único elemento "pendiente" dentro de lo
+que realmente se ejecuta es `ENTRY_WAIT_MINUTES = None` en el propio
+`geometry_mgc_scheduler.py` — y eso falla de forma controlada (alerta
+a Telegram + `sys.exit(1)`), no de forma insegura. **Advertencia
+explícita para el usuario:** una vez resuelto el problema de
+rama/ruta, la PRÓXIMA corrida de este servicio va a volver a terminar
+casi inmediatamente — esta vez con el error esperado y ya documentado
+de "ENTRY_WAIT_MINUTES sin confirmar", no con el crash de archivo no
+encontrado. Eso no es un bug nuevo; es el guard de "fallar explícito,
+no adivinar" ya construido deliberadamente, haciendo exactamente lo
+que se diseñó para hacer. El siguiente paso real para que este
+candidato empiece a paper-tradear de verdad es correr
+`scripts/probe_massive_mgc_delay.py` lunes-viernes en horario de
+mercado activo y fijar `ENTRY_WAIT_MINUTES` con el valor medido.
+
+**Riesgo aceptado hacia adelante, no solo hoy:** conectar este
+servicio a `cerebro2-dev` significa que CUALQUIER push futuro a esta
+rama dispara un redeploy automático de GEOMETRY-MGC. Mientras el
+trabajo futuro en esta rama siga el mismo patrón de hoy (scripts de
+investigación aislados, sin tocar `execution/*`, `scheduler/telegram_bot.py`,
+ni `strategies/geometry_pure.py::CANDIDATES["MGC_XFA_150K"]`), el
+riesgo se mantiene bajo. Cualquier cambio futuro a esos archivos
+específicos debe tratarse, de aquí en adelante, con el mismo cuidado
+que un cambio a `main` — no como investigación aislada de bajo riesgo.
+
+**Fix aplicado (config, no código de producción):** agregada una
+entrada `worker-geometry-mgc` al `Procfile` de la raíz del repo en
+esta rama, con la ruta correcta:
+```
+worker-geometry-mgc: python glitch/scheduler/geometry_mgc_scheduler.py
+```
+Esto NO reemplaza por sí solo el Start Command ya configurado
+manualmente en el dashboard de Railway para este servicio (que es lo
+que causó el problema de prefijo) — el usuario debe, en el dashboard:
+(a) confirmar el Root Directory del servicio (todo indica que es la
+raíz del repo, igual que GEOMETRY/COMBO2D, dado el path del crash
+`/app/scheduler/...`), y (b) fijar el Start Command explícitamente a
+`python glitch/scheduler/geometry_mgc_scheduler.py`, o limpiar el
+Start Command y apuntar el servicio al process type
+`worker-geometry-mgc` de este Procfile.
+
+## `ENTRY_WAIT_MINUTES` fijado como PROVISIONAL, no definitivo (08-sep-2026)
+
+El usuario corrió `scripts/probe_massive_mgc_delay.py` una vez:
+promedio 9.43 min, rango 9.07-9.78 min, N=6 mediciones dentro de esa
+única corrida. Mismo estándar ya aplicado a Yahoo ("medir, no
+asumir"): **un solo punto de muestra (un solo momento del día) no
+confirma que el delay sea estable en apertura/mediodía/cierre** —
+instrucción explícita del usuario de NO tratar este número como
+definitivo todavía.
+
+**Decisión aplicada:** `ENTRY_WAIT_MINUTES` se fijó en **13** (margen
+sobre el máximo observado de 9.78 min) para que el scheduler pueda
+empezar a operar esta semana — pero marcado explícitamente como
+PROVISIONAL en el código (`scheduler/geometry_mgc_scheduler.py`,
+comentario extenso arriba de la constante), no como el valor
+calibrado final. Pendiente: repetir el probe en otros momentos del día
+esta semana; si las corridas adicionales caen dentro de este margen,
+promover a definitivo; si alguna lo excede, subir el valor y volver a
+marcarlo provisional.
+
+## URGENTE: verificación del roll automático de MES/MNQ ante vencimiento de MESU6/MNQU6 (08-sep-2026)
+
+**Motivo:** MESU6/MNQU6 vencen en 8 días hábiles (18-sep-2026).
+GEOMETRY y COMBO2D dependen de `execution/contracts.py::resolve_front_month()`
+para rolear automáticamente a MESZ6/MNQZ6 sin intervención manual —
+Cerebro 1 está en su ventana crítica de observación de 20 días, así
+que esto se verificó AHORA, no cerca de la fecha.
+
+**Revisión de código (evidencia directa, no suposición):**
+
+1. **Selección del contrato correcto:** `resolve_front_month()` usa
+   `date=<hoy>` point-in-time + `active=true`, excluye combos/spreads
+   (`type != "single"`), valida el formato del ticker, y ordena por
+   `last_trade_date` ascendente — el mismo método ya validado en
+   `scripts/fetch_mes_2y.py` para el histórico de 2 años. Selecciona
+   correctamente el contrato con vencimiento más próximo entre los
+   activos — por construcción, correcto.
+2. **Sin intervención manual:** `_front_month_cache` es un dict
+   puramente en memoria (module-level), NUNCA persistido vía
+   `execution/gist_store.py` (el único mecanismo de persistencia del
+   repo, usado solo para el log de paper trading). Dado el filesystem
+   efímero ya documentado (ver "Persistencia de estado — hallazgo
+   crítico", 27-ago-2026), cada invocación del cron arranca con
+   `_front_month_cache = {}` vacío — `resolve_front_month()` se
+   re-ejecuta contra la API en vivo TODOS los días, sin ningún dato
+   cacheado de un día anterior que pudiera quedar obsoleto. Confirmado
+   contra `geometry_scheduler.py` y `combo2d_scheduler.py` — ningún
+   valor hardcodeado, ningún paso manual requerido.
+3. **Timing del roll (antes del vencimiento, no el mismo día):** esto
+   es lo único que el código NO puede confirmar por sí solo — depende
+   de CUÁNDO Massive apaga el flag `active=true` de un contrato
+   relativo a su `last_trade_date`, un comportamiento externo de la
+   API nunca antes verificado empíricamente en este repo para este
+   endpoint específico. **No se asumió que funciona — se preparó un
+   script para medirlo contra un roll que YA OCURRIÓ**
+   (`scripts/verify_front_month_roll_history.py`, MESM6→MESU6,
+   jun-2026), reutilizando la función de producción real, no una
+   reimplementación aparte. Pendiente de ejecución por el usuario
+   (requiere `MASSIVE_API_KEY`, no pasada a esta sesión).
+
+**Hallazgo lateral, útil como confirmación independiente:** con 8 días
+hábiles restantes hoy, `FRONT_MONTH_EXPIRY_ALERT_DAYS = 10` en
+`execution/contracts.py` significa que la alerta
+"CONTRATO PROXIMO A VENCER" YA debería estar disparándose en cada
+corrida de GEOMETRY y COMBO2D desde hace ~1-2 días. Si el usuario
+confirma haber recibido esa alerta por Telegram, es evidencia
+independiente de que `resolve_front_month()` sigue ejecutándose
+exitosamente día tras día sin error — no resuelve el punto 3 (timing
+exacto del roll), pero descarta que la resolución del contrato esté
+fallando silenciosamente.
+
+**No se pudo cerrar el punto 3 sin acceso a `MASSIVE_API_KEY`** —
+siguiendo la regla del proyecto de nunca pasar API keys a esta sesión.
+El usuario debe correr:
+```
+python scripts/verify_front_month_roll_history.py MES
+python scripts/verify_front_month_roll_history.py MNQ
+```
+y compartir el resultado antes de considerar este punto cerrado.
+
+## CERRADO: `ENTRY_WAIT_MINUTES` confirmado con 2 corridas en horarios distintos (09-sep-2026)
+
+**Resuelto.** Mismo estándar ya aplicado a Yahoo ("medir, no asumir",
+un solo punto de muestra no confirma estabilidad) — ahora cerrado para
+el delay de Massive/MGC con una segunda medición independiente:
+
+| Corrida | Fecha/horario | Promedio | Rango |
+|---|---|---|---|
+| 1 | 08-sep-2026, mañana | 9.43 min | 9.07–9.78 min |
+| 2 | 09-sep-2026, tarde/noche (deliberadamente distinto de la 1) | 9.50 min | 9.06–9.94 min |
+
+Diferencia entre promedios: **0.07 min**. Rangos solapados casi por
+completo. **Delay de Massive confirmado ESTABLE entre momentos del
+día** — a diferencia del de Yahoo, que fue errático y costó 2.5
+semanas de incidentes con MES=F (ver "Yahoo Finance MES=F opening-
+window delay" en el histórico de este repo).
+
+`ENTRY_WAIT_MINUTES = 13` en `scheduler/geometry_mgc_scheduler.py`
+queda **CONFIRMADO** (ya no PROVISIONAL) — máximo observado entre
+ambas corridas: 9.94 min, con margen de seguridad de ~3 min sobre ese
+máximo. Comentario y docstring del módulo actualizados para reflejar
+el estado confirmado, no el provisional del 08-sep.
+
+**Con esto, GEOMETRY-MGC queda sin ninguna pieza pendiente:**
+front-month/branch/path (resuelto 07-sep), `ENTRY_WAIT_MINUTES`
+(resuelto hoy), WR empírico y pass rate de Combine (validados 07-sep,
+ver secciones anteriores). Pendiente real, no de código: confirmar que
+el próximo cron real (día hábil siguiente) corre de principio a fin
+sin error — eso solo lo confirma una corrida real en Railway, no algo
+verificable desde este repo.
+
+## Nota retroactiva: 2 fixes ya aplicados a esta rama, documentados en `main` pero no aquí (09-sep-2026)
+
+Los siguientes cambios fueron implementados y pusheados a
+`cerebro2-dev` (`execution/contracts.py`, copia separada de la de
+`main`) pero su documentación completa quedó solo en el `GLITCH_RESEARCH_LOG.md`
+de `main`, no en este archivo — corregido aquí con un resumen, remitiendo
+al detalle completo en `main`:
+
+1. **`check_expiry_alerts()` actualizado al prefijo nuevo** (commit
+   `67a3ea6`) — `geometry_mgc_scheduler.py` ahora pasa `PREFIX`
+   ("S10GLITCH - XFA - MGC") en vez de `DISPLAY_LABEL`, mismo fix que
+   `main`.
+2. **Alertas de vencimiento reducidas a checkpoints (10/5/2/1 días)**
+   (commit `544d3d1`) — misma lógica de `_previous_trading_day()` sin
+   estado persistido, mismos 9 tests en `tests/test_contracts.py`.
+
+Ver `GLITCH_RESEARCH_LOG.md` en `main` (secciones "Fix
+check_expiry_alerts()..." y "Opción (b) implementada...") para el
+detalle completo de ambos — no repetido aquí para no duplicar contenido
+entre ramas.
+
+## Lógica de reinicio de intento de Combine — geometry_mgc_scheduler.py (09-sep-2026)
+
+**Misma lógica que `geometry_scheduler.py` (ver `main`, sección
+equivalente), aplicada a este scheduler — cambio de LÓGICA real, no de
+formato.** Cierra el mismo gap ya documentado ("Equity"/"Dias vs.
+Estimado" acumulados sin límite de intento).
+
+**Umbrales confirmados contra `core/prop_firm.py` para la cuenta REAL
+de este candidato — 150K, NO 50K:** `TOPSTEP_150K.profit_target =
+$9,000`, `TOPSTEP_150K.mll_distance = $4,500` (umbral de quiebre =
+-$4,500). Explícitamente DISTINTOS de los $3,000/$2,000 de G2 — el
+candidato `MGC_XFA_150K` usa la cuenta 150K desde su propio nombre
+(`PRODUCT_KEY = "MGC_XFA_150K"`), confirmado antes de hardcodear nada,
+no asumido de memoria.
+
+**Mismo diseño sin estado separado** (`_current_intento`,
+`_attempt_pnl`, `_attempt_days_elapsed`, `_check_attempt_reset` —
+duplicados deliberadamente desde `geometry_scheduler.py`, no
+importados: este scheduler no debe acoplarse a código de Cerebro 1,
+mismo principio ya establecido en el docstring de ese archivo). Único
+ajuste real frente a G2: el mensaje de reinicio usa **"WR acumulado
+historico"**, no "Pass Rate acumulado historico" — consistente con la
+distinción WR-vs-pass-rate ya establecida para este candidato
+específico (ver "HALLAZGO ESTRUCTURAL CENTRAL DE CEREBRO 2" — el WR de
+este candidato y su propio pass rate de Combine son números distintos,
+46.9%/47.5%, y el resto de sus mensajes ya usa "WR:" por la misma
+razón).
+
+```
+S10GLITCH - XFA - MGC [INTENTO #N COMPLETADO: PASE/QUIEBRE]
+PnL final del intento: $X
+Dias que tomo este intento: X
+WR acumulado historico: X% vs 50.0% teorico
+Iniciando intento #N+1 desde $0
+```
+
+`_attempt_peak()` NO se agregó aquí — el template XFA nunca incluyó un
+campo "Peak" (a diferencia del template COMBINE de G2), así que no hay
+call site para esa función en este scheduler; agregarla sería código
+muerto.
+
+**Verificado con 20 tests nuevos** en
+`tests/test_geometry_mgc_scheduler.py` (archivo nuevo — este scheduler
+no tenía ningún test dedicado hasta ahora), mismo patrón que los 23 de
+G2: los 3 casos pedidos explícitamente (pase, quiebre, normal — con
+variantes de umbral exacto y overshoot), los helpers en aislamiento, un
+test de integración del ciclo completo, un test explícito de que
+WR/Ciclos no se reinician, y — específico de este archivo — un test
+que confirma que los umbrales NO son por accidente los $3,000/$2,000 de
+G2. Suite completa de la rama: 169 tests, verde.
+
+## Incidente: posición SHORT MGCV6 sin CLOSE, fix de reconciliación (09-sep-2026)
+
+**Síntoma:** una posición GEOMETRY-MGC (SHORT, MGCV6, entry 4,415.80,
+TP=4,379.40, SL=4,452.20, abierta 2026-09-09 12:13 UTC) nunca recibió
+su mensaje de CLOSE. Ver el análisis completo en `main` (mismo
+hallazgo, mismo día) — resumen aquí, no repetido en detalle.
+
+**Causa, confirmada por código:** el ciclo OPEN→monitoreo→CLOSE vive
+en una sola invocación de `run()`, con `paper_log.append()` solo al
+cerrar — nunca al abrir. Si el proceso muere a mitad del loop de
+monitoreo (`while True`, poll cada 60s), la posición desaparece sin
+rastro y la siguiente corrida abre una nueva sin saberlo.
+
+**Causa más probable (correlación temporal, no confirmada por
+Railway):** de los 3 pushes a `cerebro2-dev` ese día
+(14:39:48 UTC, 14:48:48 UTC, 23:19:43 UTC), las primeras DOS caen
+dentro de la ventana de vida esperada de la posición
+(12:13–19:30 UTC). GEOMETRY-MGC está conectado a `cerebro2-dev` y se
+redeploya en cada push — un redeploy en ese momento habría matado el
+proceso a mitad del monitoreo.
+
+**Decisión del usuario:** no pausar el cron manualmente, se acepta
+perder el rastro de este trade específico mientras se construye la
+solución estructural. Confirmado: el problema es arquitectónico y
+compartido por los 3 schedulers, no exclusivo de MGC.
+
+**Mitigación inmediata (opción b), aplicada ya:** `cerebro2-dev` se
+trata con la misma disciplina de freeze window que `main`, pero SOLO
+durante la ventana de MGC (07:00–14:30 CT) — no un freeze general de
+la rama, que frenaría investigación de Cerebro 2 sin relación con este
+scheduler.
+
+**Fix estructural (opción a), implementado aquí:** mismo mecanismo que
+`main` (`geometry_mes_pending.json`/`combo2d_pending.json`) — ver el
+research log de `main` para el diseño completo. En esta rama:
+`execution/gist_store.py` (copia separada) recibe las mismas
+`load_state()`/`save_state()`; `geometry_mgc_scheduler.py` recibe
+`geometry_mgc_pending.json`, `save_pending()` antes del mensaje de
+OPEN, reconciliación al inicio de `run()` usando el propio ticker de
+la posición pendiente (relevante aquí porque el contrato pudo haber
+rolleado entre la interrupción y la reconciliación — MGC no usa un
+símbolo continuo como MES=F, cada posición queda atada a un contrato
+específico de Massive, ej. MGCV6).
+
+**Mismo fix de `_current_intento()` aplicado aquí** (encontrado
+diseñando los tests en `main`, no una corrección independiente): ahora
+considera cualquier entrada con el campo `"intento"`, no solo las
+resueltas, para que una reconciliación no deje al scheduler pensando
+que sigue en el intento anterior.
+
+**Verificado con 14 tests nuevos** en
+`tests/test_geometry_mgc_scheduler.py` (34 en total en ese archivo) —
+mismos casos que `main` (LONG/SHORT × TP/SL/inconcluso, siempre
+`result="RECONCILED"`, el fix de `_current_intento`, ciclo completo de
+integración) pero usando los números reales del incidente reportado
+(SHORT MGCV6, entry 4,415.80) como uno de los escenarios de prueba, no
+solo valores genéricos. `tests/test_gist_store.py`: mismos 10 tests
+nuevos que `main` (20 en total). Suite completa de la rama: 193 tests,
+verde.
+
+## CERRADO: causa raíz confirmada con el log real de Railway (09-sep-2026)
+
+**Confirmado con el Cron Run real de GEOMETRY-MGC:** inicio
+12:03:24 UTC, `"Stopping Container"` a las 14:41:06 UTC (~2h38min, sin
+timeout redondo). El último log de monitoreo (14:40:15 UTC) queda 51
+segundos antes del `"Stopping Container"` — coincide con el push
+`67a3ea6` a las 14:39:48 UTC. **La hipótesis original (push → redeploy
+→ contenedor matado a mitad del monitoreo) queda confirmada con
+evidencia directa.** Ver el detalle completo, incluyendo la corrección
+explícita de un error de conversión de zona horaria en la verificación
+previa de esta sesión (no del usuario), en el research log de `main`
+— no repetido aquí para no duplicar contenido entre ramas.
+
+**Conclusión:** el mecanismo de reconciliación y el freeze window de
+`cerebro2-dev` durante la ventana de MGC (ambos ya implementados en
+esta rama) son el fix correcto para la causa real. Incidente cerrado.
+
+## URGENTE, resuelto en esta rama: `ModuleNotFoundError: No module named 'yaml'` (10-sep-2026)
+
+**GEOMETRY-MGC caído con el mismo error que GEOMETRY en `main`, misma
+causa exacta:** `core/prop_firm.py` (copia separada en esta rama)
+tenía `import yaml, os` sin uso real en todo el archivo (confirmado
+por `grep`, cero referencias a `yaml.`/`os.`, ningún otro módulo lo
+re-importa desde aquí). Fix: eliminada la línea, sin tocar ningún
+`requirements.txt` — ver el research log de `main` para el análisis
+completo (verificación de qué archivo de requirements lee cada
+servicio, por qué no importaba en este caso, y el smoke test con
+`yaml` bloqueado a nivel de `builtins.__import__`), no repetido aquí.
+
+Verificado en esta rama específicamente:
+`scheduler/geometry_mgc_scheduler.py` importa limpio con `yaml`
+bloqueado, `PROFIT_TARGET=9000`/`MLL_THRESHOLD=-4500` intactos. Suite
+completa: 193 tests, verde. Push inmediato, sin freeze window —
+servicio caído.
+
+## Resuelto en esta rama: `_current_intento()` nunca avanzaba tras PASE/QUIEBRE, portado desde `main` (10-sep-2026)
+
+**Mismo bug reportado por el usuario en GEOMETRY (MES, `main`) —
+"Progreso a Target" nunca vuelve a $0 tras un PASE/QUIEBRE —
+confirmado también en `geometry_mgc_scheduler.py`, esta rama, misma
+causa raíz exacta:** `_current_intento()` aquí es deliberadamente una
+copia (no un import) de la de `geometry_scheduler.py` — ver su propio
+docstring, "este scheduler NO debe acoplarse a código de Cerebro 1" —
+así que comparte el mismo diseño y, por lo tanto, el mismo defecto: el
+`intento_actual += 1` en `run()` (paso 5b, `scheduler/geometry_mgc_scheduler.py`)
+era una variable local de Python, nunca persistida al Gist. La
+siguiente corrida diaria recalculaba `_current_intento(paper_log)`
+desde `max(tags)` sin verificar si ese intento ya había cruzado
+`PROFIT_TARGET`/`MLL_THRESHOLD` (9000/-4500 para MGC/150K), así que
+devolvía el mismo intento ya completado indefinidamente. Ver el
+research log de `main` para el análisis completo de la causa raíz y
+la aclaración de diseño (`result='PASE'`/`'QUIEBRE'` nunca son
+valores almacenados, solo texto del mensaje de Telegram) — no
+repetido aquí.
+
+**Fix aplicado, idéntico en espíritu al de `main`:**
+`_current_intento()` ahora calcula el `_attempt_pnl()` del intento más
+reciente y lo pasa por `_check_attempt_reset()` con los umbrales
+propios de esta rama; si ya cruzó cualquiera de los dos, retorna
+`latest + 1`. `run()` paso 5b simplificado: el `intento_actual += 1`
+manual se reemplazó por `intento_actual = _current_intento(paper_log)`.
+
+**Tests:** se actualizaron los 2 tests preexistentes en
+`TestAttemptResetIntegration` (`tests/test_geometry_mgc_scheduler.py`)
+que afirmaban el contrato viejo, y se agregó la clase
+`TestCurrentIntentoAdvancesPastCompletedAttempt` con los mismos 6
+casos que en `main` (adaptados a `PROFIT_TARGET=9000`/
+`MLL_THRESHOLD=-4500`). Suite completa: 203 tests, verde.
+
+**Freeze window respetado:** a diferencia del incidente `yaml`
+(servicio caído), esto no es una caída de producción — el scheduler
+sigue funcionando, solo con una cifra de progreso incorrecta en el
+mensaje informativo. Commit local hecho dentro de la ventana MGC de
+`cerebro2-dev` (07:00–14:30 CT); push retenido hasta salir de esa
+ventana.
+
+**Verificación final contra el Gist real, antes del push (10-sep-2026):**
+el mismo `scripts/verify_fix_intento_today.py` (repo compartido, ver
+research log de `main` para el detalle) se corrió contra el Gist real
+de MES antes de pushear en cualquiera de las dos ramas -- resultado: la
+entrada de hoy ya tenía el `intento` correctamente tageado, sin
+necesitar corrección manual. No se corrió una verificación equivalente
+contra `geometry_mgc_log.json` porque no hubo ningún reporte de
+síntoma equivalente en MGC -- no había ninguna entrada sospechosa que
+verificar en esta rama.
+
+## Falsa alarma, cerrada con evidencia: "Running" 5h+ tras completar el ciclo — GEOMETRY-MGC (10-sep-2026)
+
+**Mismo síntoma que en `main` (ver ese research log para el diagnóstico
+completo, no repetido aquí):** GEOMETRY-MGC, lanzado a las 09:10 CT vía
+"Run now" manual, seguía mostrando "Running" en la tarjeta de servicio
+del dashboard de Railway 5h31min después, pese a que ya había cerrado
+por SL (PnL −$2,184) con su Telegram correspondiente ya recibido.
+
+**Diagnóstico de código, mismo estándar que en `main`:** revisión
+completa de `run()` en `geometry_mgc_scheduler.py` -- llega a
+`log.info("Done — saliendo")` inmediatamente después del SUMMARY y
+retorna sin ningún paso adicional. `fetch_latest_price()` (precio via
+Massive, no yfinance) usa `requests.get` de una sola vez con timeout
+fijo, sin sesión persistente, sin threads. El `while True` de
+monitoreo tiene condición de salida clara y disparó correctamente (SL).
+El contenedor colgado arrancó antes de que el fix de
+`_current_intento()` de esta misma sesión existiera desplegado en esta
+rama -- descartado como causa por cronología.
+
+**Verificación real, confirmada por el usuario:** el log de Railway
+muestra `EXIT SL -$2,184 -> Done — saliendo` como última línea, y el
+dashboard marca el DEPLOYMENT individual como "Completed" -- solo la
+tarjeta lateral del servicio seguía mostrando "Running".
+**Desincronización de plataforma, no un bug de código** -- mismo
+hallazgo que en `main`, confirmado independientemente en esta rama con
+un scheduler que usa una fuente de precio distinta (Massive, no
+yfinance), reforzando que la causa es de plataforma y no de la lógica
+de trading de ningún producto específico.
+
+**Ningún cambio de código fue necesario.** Incidente cerrado.
 

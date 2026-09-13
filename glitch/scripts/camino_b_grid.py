@@ -128,6 +128,20 @@ def measure_wr_bracket(mes: pd.DataFrame, sl_ticks: int, tp_ticks: int, max_hold
     pretendido (WR colapsando a ~0 para los productos con tick_size << 0.25).
     Ver reporte -- todos los resultados de productos != MES/MNQ generados
     antes de este fix son invalidos y fueron re-corridos despues.
+
+    CAVEAT DE METRICA (06-sep-2026, ver scripts/validate_mgc_wr_empirical.py
+    y GLITCH_RESEARCH_LOG.md): wr_all_*/wr_long_*/wr_short_* dividen por el
+    TOTAL de trades, incluyendo los que expiran por tiempo (ni TP ni SL
+    tocado dentro de max_holding_bars, label=0) -- esto SUBESTIMA el WR real
+    cuando el time-exit share es grande. Para G2 (SL=100/TP=40, barreras
+    angostas relativas a max_holding_bars=100) el time-exit share es ~1.2%
+    y wr_all practicamente coincide con TP/(TP+SL) -- no importa ahi. Para
+    geometrias con barreras mucho mas anchas relativas al holding window
+    (ej. MGC candidato XFA, SL=TP=364 ticks, time-exit share ~30%) SI
+    importa mucho -- wr_all da 34.9% cuando el WR condicional real
+    (TP/(TP+SL), la metrica comparable contra un WR teorico de gambler's
+    ruin) es 49.97%. Al reusar esta funcion para geometrias de barreras
+    anchas, calcular TP/(TP+SL) por separado, no confiar en wr_all_cons.
     """
     n = len(mes)
     sl_pts = sl_ticks * tick_size
