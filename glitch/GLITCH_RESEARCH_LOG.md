@@ -3834,3 +3834,62 @@ El usuario pidió, antes de decidir cómo proceder, la diferencia metodológica 
 **Conclusión revisada: la pausa recomendada previamente ya NO aplica por el motivo original (el gap de WR).** Con el bug corregido, MGC_XFA no muestra una discrepancia real entre su WR de calibración y su WR de cadencia real de producción — ambas metodologías convergen, igual que en G2. El único ítem que sigue abierto (y que vale la pena entender antes de Fase B, aunque ya no bloquea nada por sí solo) es la no-estacionariedad del time-exit share — ver respuesta directa al usuario para la interpretación de esto en términos simples.
 
 **Ver [[feedback-incident-response-cycle]]: mismo patrón que el incidente de zona horaria del SHORT MGCV6 — un error propio corregido con evidencia, documentado sin minimizar, en vez de dejarlo pasar.**
+
+---
+
+# Fase B + investigación en paralelo de volatilidad — reportadas juntas (13-sep-2026)
+
+## Investigación en paralelo: ¿la caída del time-exit share se explica por mayor volatilidad realizada de MGC?
+
+**Confirmado con evidencia, no solo intuición.** `dd_v2/test4b_volatility_vs_timeexit.py` — ATR14 y rango diario promedio, calculados sobre barras diarias agregadas del mismo parquet, por los mismos 4 cuartiles cronológicos de Test 4:
+
+| | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| Rango diario promedio | $33.65 | $42.40 | $82.81 | $78.63 |
+| ATR14 promedio | $38.34 | $52.82 | $96.14 | $100.23 |
+| Time-exit share | 71.9% | 47.3% | 9.3% | 14.0% |
+| ATR14 / ancho del bracket (364 ticks = $36.40) | 1.05x | 1.45x | 2.64x | 2.75x |
+
+**Correlación entre volatilidad y time-exit share, entre los 4 cuartiles: r=−0.98 (ATR14), r=−0.98 (rango diario)** — n=4, orientativo (no una prueba formal con ese N), pero la dirección y la magnitud son inequívocas. ATR14 subió +161% de Q1 a Q4. La explicación mecánica es directa: cuando el rango diario típico apenas cubre el ancho del bracket (Q1: ATR≈1.05x el bracket), la mayoría de los días NO alcanzan a tocar TP ni SL dentro de la ventana de holding — expiran por tiempo. Cuando el rango diario típico cubre ~2.7x el bracket (Q3/Q4), casi cualquier día resuelve, uno u otro lado.
+
+**Nota de contexto importante, sin bloquear nada:** en producción real, un trade que no toca TP/SL NO queda como "evento nulo" — `geometry_mgc_scheduler.py` fuerza un FLATTEN real a las 14:30 CT con el PnL que corresponda en ese momento (`FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30`). El "time-exit" del backtest (label=0, tratado como no-evento en el cálculo de WR condicional) es una simplificación de la métrica de calibración, no una representación exacta de lo que pasa en vivo — todos los días producen un resultado real en producción. Esto no invalida el WR condicional como métrica de "tendencia direccional del bracket", pero es una distinción a tener presente.
+
+**Sobre si la tendencia continúa:** no se puede confirmar ni descartar con los datos disponibles si la mayor volatilidad de oro observada en 2025-2026 es un régimen que persiste o un evento pasajero — eso sería una predicción de mercado, fuera del alcance de esta due diligence. Lo que SÍ está confirmado: el patrón histórico observado (mayor volatilidad → resolución más rápida) tiene una explicación mecánica clara y evidencia estadística fuerte, no es ruido. Direccionalmente, tal como anticipó el usuario: si el régimen de mayor volatilidad se mantiene, los intentos futuros resolverían más rápido que el promedio histórico completo (favorable — más ciclos por año), pero esto es una posibilidad razonada, no una proyección confirmada.
+
+## Fase B — Monte Carlo de 5 cuentas XFA simultáneas (MGC_XFA_150K)
+
+**Etiquetado explícito: esto es PROYECCIÓN de negocio, no resultado de robustez estadística.** Motor reusado sin modificar (`scripts/cerebro2_cashflow_monte_carlo.py::build_combine_pool`/`build_xfa_pool`), extendido a 5 cuentas en `dd_v2/phase_b_5_accounts.py`. WR=0.50 (el ya validado — el gap encontrado ayer resultó ser el bug de metodología ya corregido, ver sección anterior).
+
+**Hallazgo arquitectónico que determina el diseño, confirmado por código:** `strategies/geometry_pure.py::decide_side()` es una función PURA de `trading_day_index(fecha)` — sin ninguna fuente de aleatoriedad por cuenta. 5 cuentas reales operando la misma geometría sobre el mismo producto (MGC) el mismo día abren el MISMO lado contra el MISMO precio — están replicando el mismo trade 5 veces, no diversificando. Por eso se reportan DOS escenarios etiquetados sin ambigüedad, no uno solo:
+
+### (a) CORRELACIONADO — el escenario realista dado el código real
+
+| Percentil | Payout total, 5 cuentas | Capital colchón conjunto |
+|---|---|---|
+| p10 | $79,046 | $1,490 |
+| p25 | $111,488 | $2,235 |
+| **p50** | **$156,285** | **$4,470** |
+| p75 | $210,379 | $8,195 |
+| p90 | $269,305 | $13,394 |
+
+Mediana implícita por cuenta: $31,257 — coincide EXACTO con el número ya publicado para 1 cuenta (confirma que la implementación es correcta). El colchón conjunto es exactamente 5.0x el de una sola cuenta en cada percentil (p50: $894×5=$4,470; p90: $2,679×5=$13,395 — coincide con los números de `CEREBRO2_G2_VS_MGC_SUMMARY.md`) — **cero beneficio de diversificación, tal como predice la determinismo de `decide_side()`.**
+
+### (b) INDEPENDIENTE — NO realista para este diseño, reportado solo como cota superior de referencia
+
+| Percentil | Payout total, 5 cuentas | Capital colchón conjunto |
+|---|---|---|
+| p10 | $124,326 | $1,937 |
+| p25 | $142,157 | $2,235 |
+| **p50** | **$164,698** | **$2,682** |
+| p75 | $188,618 | $3,479 |
+| p90 | $211,502 | $4,522 |
+
+**Comparación directa — el costo real de NO diversificar:**
+- Mediana de payout: prácticamente igual entre ambos escenarios ($156,285 vs $164,698, ~5% de diferencia) — esperado, la correlación no cambia el valor esperado, solo la dispersión.
+- **p10 (mal caso): $79,046 correlacionado vs $124,326 independiente — 37% menos en el escenario realista.**
+- **p90 (buen caso): $269,305 correlacionado vs $211,502 independiente — 27% MÁS en el escenario realista** (la correlación agranda ambas colas, no solo la mala).
+- **Colchón p90: $13,394 correlacionado vs $4,522 independiente — 3x más capital de reserva necesario en el escenario realista** que lo que una intuición ingenua de "5 cuentas diversifican" sugeriría.
+
+**Conclusión de Fase B:** el candidato MGC_XFA es viable a 5 cuentas con las MISMAS métricas centrales de riesgo/retorno que a 1 cuenta multiplicadas por 5 (sin sorpresas ni en una ni otra dirección) — pero el supuesto de independencia habría subestimado el capital de colchón necesario en el peor 10% de los casos por un factor de ~3x, y subestimado la dispersión de resultados en ambas direcciones. **Operar 5 cuentas de este candidato no es "5 apuestas separadas" — es la misma apuesta, 5 veces más grande, con el colchón de capital correspondiente.**
+
+**Limitación documentada:** el escenario (b) independiente calcula su colchón conjunto fusionando cronológicamente los eventos de las 5 trazas independientes (no solo el cash final) — corregido durante la implementación tras notar que un primer borrador subestimaba el colchón real al ignorar caídas intermedias recuperadas antes del día 365.
