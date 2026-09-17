@@ -2888,3 +2888,7 @@ Cruce de consistencia: `prob_never_reached_first_payout` en la política actual 
 **Recomendación (para que el usuario decida, no una implementación de este agente): la política ya desplegada (retirar el máximo legal del 50% sin colchón) es la óptima por valor esperado dentro de este grid — no hay evidencia para cambiarla si el objetivo es maximizar el payout total esperado.** Si el usuario prioriza el percentil 90 (mejor caso) sobre el valor esperado puro, (40%, $0 colchón) es una alternativa casi-óptima razonable. Ningún punto con colchón >$0 superó a su equivalente sin colchón en ningún %retiro ni horizonte — el colchón, tal como está diseñado en este grid (diferir el retiro), no tiene ningún escenario ganador dentro del rango probado.
 
 Código en `dd_v3/` (`withdrawal_policy_grid.py`, `run_grid.py`, `withdrawal_policy_grid_results.csv` con las 60 filas completas — 30 combinaciones × 2 horizontes). Sin cambios a `main`/`cerebro2-dev`.
+
+## CIERRE — Resumen ejecutivo (17-sep-2026)
+
+**La política de retiro ya desplegada (50% del balance, sin colchón) es la óptima según Monte Carlo — no hay mejora disponible.** La intuición original (5%/colchón $2,000) nunca se desplegó — era de una arquitectura anterior ("Brain 2") no usada por ningún scheduler activo — y de haberse usado habría sido subóptima. **Sin cambios de código: el sistema ya opera correctamente.** Rama cerrada como documentación de análisis — no se mergea a `cerebro2-dev`/`main`.
