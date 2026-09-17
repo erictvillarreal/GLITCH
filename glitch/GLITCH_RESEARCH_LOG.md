@@ -2815,3 +2815,14 @@ python scripts/audit_mgc_trailing_mll_2026_09_16.py --all    # audita TODOS los 
 - **Auditoría retrospectiva de G2/MES:** no se hizo todavía (se priorizó MGC por ser el caso reportado) — mismo script, adaptado a `geometry_mes_log.json`/`TOPSTEP_50K`, puede prepararse si el usuario lo pide, aunque el razonamiento de magnitud arriba sugiere que el impacto práctico en G2 sería menor.
 
 **Estado: hallazgo crítico documentado con evidencia de código completa en ambos schedulers, script de auditoría retrospectiva listo y probado. Sin fix implementado — bloqueado a propósito hasta confirmar con datos reales si esto ya cambió alguna lectura histórica de "cuenta activa". No afecta la corrida del cron de esta noche (que sigue la lógica fija ya desplegada).**
+
+### Resultado de la auditoría retrospectiva contra el Gist real (16-sep-2026)
+
+El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el intento actual real de MGC_XFA:
+
+- **Floor trailing real:** −$3,594 (implica pico real = $906, consistente con el ~$900 reportado de memoria — `floor = peak + MLL_THRESHOLD = 906 + (−4500) = −3594`, confirma la fórmula).
+- **Floor fijo desplegado:** −$4,500.
+- **Ambas reglas coinciden: el intento sigue "activa".** La caída no fue lo bastante profunda como para que la regla más estricta (trailing) marcara QUIEBRE mientras la desplegada no.
+- **Margen real restante: $1,398** (no los $2,304 que reporta el sistema desplegado con el umbral fijo — una diferencia de $906, exactamente el tamaño del pico no capturado).
+
+**Conclusión de la auditoría: NO hay ninguna lectura histórica incorrecta que corregir.** En ningún punto del intento actual (ni de ningún intento anterior, dado que este es el único activo hoy) el estado "activa" reportado por el sistema fue falso bajo la regla real. **El hallazgo queda confirmado como un riesgo hacia ADELANTE, no un error retroactivo en los datos ya observados:** la próxima vez que un intento alcance un pico más alto seguido de una caída más profunda, la divergencia entre la regla fija (más permisiva) y la regla real (más estricta) sí podría cambiar el resultado — por eso se procede con el fix ahora, antes de que eso ocurra, no como corrección de un dato ya mal etiquetado.
