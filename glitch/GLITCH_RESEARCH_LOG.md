@@ -2826,3 +2826,65 @@ El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el inte
 - **Margen real restante: $1,398** (no los $2,304 que reporta el sistema desplegado con el umbral fijo — una diferencia de $906, exactamente el tamaño del pico no capturado).
 
 **Conclusión de la auditoría: NO hay ninguna lectura histórica incorrecta que corregir.** En ningún punto del intento actual (ni de ningún intento anterior, dado que este es el único activo hoy) el estado "activa" reportado por el sistema fue falso bajo la regla real. **El hallazgo queda confirmado como un riesgo hacia ADELANTE, no un error retroactivo en los datos ya observados:** la próxima vez que un intento alcance un pico más alto seguido de una caída más profunda, la divergencia entre la regla fija (más permisiva) y la regla real (más estricta) sí podría cambiar el resultado — por eso se procede con el fix ahora, antes de que eso ocurra, no como corrección de un dato ya mal etiquetado.
+
+## Fix aplicado (16-sep-2026): floor trailing real portado a `_check_attempt_reset()` en ambos schedulers
+
+Nota retroactiva -- el detalle completo de este fix quedó documentado en los mensajes de commit (`5d6b047` en esta rama / `cerebro2-dev`, `1d50dc5` en `main`), no se había vuelto a narrar aquí. Resumen para que el research log quede completo sin tener que ir a `git log`:
+
+Se agregó `_attempt_trailing_floor(paper_log, intento)` en ambos schedulers, reusando `_attempt_peak()` (portado también a `geometry_mgc_scheduler.py`, que no lo tenía -- gap de paridad, punto 5 ya cerrado): `floor = min(peak + MLL_THRESHOLD, 0.0)` -- equivalente algebraico exacto al ratchet completo de `TopstepMonteCarloSimulator`, confirmado contra el Gist real (peak $906 → floor −$3,594, coincide exacto con la auditoría). `_check_attempt_reset()` no cambió -- ambos llamadores (`_current_intento()`, `run()` paso 5b) ahora pasan el floor trailing calculado en vez de la constante fija. Campo "Peak" agregado al SUMMARY de MGC, igual que MES. Tests: reproducen el escenario "pico + caída" con números diseñados para forzar la divergencia (falla bajo la lógica vieja, pasa bajo la nueva) más un guard de regresión. `main`: 202 tests verdes. `cerebro2-dev`: 207 tests verdes. Cero regresiones en ninguna suite.
+
+---
+
+# NUEVA RAMA: `dd/withdrawal-policy-optimization` (16-sep-2026) — optimización de política de retiro para MGC_XFA_150K
+
+**Alcance:** análisis puro sobre el motor ya validado (`core/funded_account.py`), sin tocar `main`/`cerebro2-dev` productivo. Rama creada desde `cerebro2-dev` (post-fix de MLL trailing).
+
+## HALLAZGO PREVIO A CUALQUIER SIMULACIÓN: la "intuición de partida" (5%/$2,000) no es el default real del motor validado
+
+Confirmado con evidencia de código, antes de correr nada:
+
+- `XFASpec.payout_pct_of_balance = 0.50` (**50%, el MÁXIMO permitido por Topstep**, no 5%) — `core/funded_account.py` línea 57.
+- **No existe ningún chequeo de colchón sobre el floor** en `simulate_xfa_lifetime()`/`simulate_xfa_lifetime_dynamic_nc()` — el payout se ejecuta siempre que hay elegibilidad (≥5 días ganadores), sin ninguna condición adicional sobre qué tan cerca del floor queda el balance después.
+- El "5%/$2,000" que el usuario recordaba **sí existe en el código**, pero en `scheduler/telegram_bot.py::notify_brain2_open/close/notify_payout_eligible` — funciones de FORMATO DE MENSAJE de la arquitectura "Brain 1/Brain 2" anterior al pivote a geometría pura. Confirmado (`grep`) que **ninguna de esas 3 funciones se llama desde ningún scheduler activo hoy** — nunca alimentaron ninguna simulación real, son parámetros de display muertos.
+
+**Conclusión: la política actual EFECTIVA (la que ya sostiene los $31,257 de mediana ya publicados) es "retirar el máximo legal (50%) cada vez que hay elegibilidad, sin ningún colchón de seguridad" — la MÁS AGRESIVA posible dentro de la regla de Topstep, no una conservadora del 5%.** El grid de este estudio explora si retirar MENOS que el máximo (y/o exigir un colchón) puede superar a esa política ya-agresiva-por-defecto — no si conviene ser más agresivo que un 5% que nunca existió en ninguna simulación real.
+
+## Metodología
+
+Extensión de `simulate_xfa_lifetime_dynamic_nc()` (misma mecánica exacta: nc dinámico vía Scaling Plan, floor trailing EOD-only, elegibilidad a 5 días ganadores de ≥$150) con 2 parámetros nuevos, sin modificar el módulo compartido — vive en `dd_v3/withdrawal_policy_grid.py`, esta rama:
+
+1. `payout_pct` configurable (10/20/30/40/50%).
+2. `min_cushion`: si el payout dejaría `(balance−gross)−mll_floor < min_cushion`, el retiro se **difiere** (no se toca balance/floor/winning_days_count) y se reintenta automáticamente al día siguiente. **`min_cushion=0` se implementó como "sin chequeo en absoluto"** (no como `>=0`) — validado que un chequeo `>=0` literal SÍ cambia el resultado respecto al motor original (el motor original permite que un retiro deje el balance por debajo del floor, capturado recién en el blow-check del día siguiente; un gate de "$0 de colchón" bloquearía ese caso real). Confirmado bit-a-bit: con `min_cushion=0` y `payout_pct=0.50`, la extensión reproduce EXACTO (misma seed) los resultados de `simulate_xfa_lifetime_dynamic_nc()` sin modificar — validación obligatoria antes de confiar en el grid, mismo estándar de siempre.
+
+Grid corrido: 5 × 6 = **30 combinaciones** (el usuario mencionó "25" pero listó 6 valores de colchón, no 5 — se corrieron las 30 combinaciones literales de los rangos dados, sin recortar ninguna arbitrariamente). 100,000 paths por combinación, snapshot a 1 año (día 252) y 3 años (día 756) de la MISMA corrida (no dos corridas separadas, para consistencia interna).
+
+## HALLAZGO METODOLÓGICO: la mediana es $0 en las 30 combinaciones — no sirve para rankear políticas
+
+`prob_never_reached_first_payout` va de 53% a 67% según la combinación — **más de la mitad de las cuentas simuladas nunca llegan a su primer payout antes de tronar**, así que la mediana de payout total es literalmente $0 en TODAS las 30 combinaciones, en ambos horizontes. Esto no es un error — es una característica real y honesta del candidato (vida promedio muy corta, ~10-17 días, ver abajo) que hace que la mediana sea la métrica equivocada para esta comparación. Se usa el **PROMEDIO (valor esperado)** como métrica principal de ranking — consistente con el propio pedido del usuario ("maximiza el payout total **esperado**"), reportando percentiles como contexto de dispersión, no como criterio de decisión.
+
+Cruce de consistencia: `prob_never_reached_first_payout` en la política actual (50%, $0 colchón) da 53.5% (`prob≥1 payout`=46.5%) — coincide con el 46.2% ya establecido como baseline (diferencia atribuible a n_paths/seed distintos entre corridas, no una discrepancia real).
+
+## Resultado del grid (avg_payout_usd, filas=colchón, columnas=%retiro) — IDÉNTICO a 1 año y 3 años
+
+| colchón \ %retiro | 10% | 20% | 30% | 40% | 50% |
+|---|---|---|---|---|---|
+| $0 | 1,537 | 1,779 | 1,963 | **2,135** | **2,171** |
+| $500 | 1,537 | 1,779 | 1,946 | 2,100 | 2,044 |
+| $1,000 | 1,537 | 1,771 | 1,929 | 2,056 | 1,988 |
+| $1,500 | 1,537 | 1,757 | 1,918 | 1,968 | 1,674 |
+| $2,000 | 1,518 | 1,762 | 1,888 | 1,779 | 1,660 |
+| $3,000 | 1,519 | 1,683 | 1,741 | 1,590 | 1,599 |
+
+**El óptimo global (por valor esperado) es (%retiro=50%, colchón=$0) — exactamente la política YA DESPLEGADA por defecto.** Segundo lugar: (40%, $0), a solo 1.7% del óptimo pero con **p90 más alto** ($6,531 vs $6,424) — una alternativa "casi-óptima con mejor cola derecha" si el trader tiene alguna aversión al riesgo más allá de la maximización pura de valor esperado.
+
+**Patrón claro: agregar CUALQUIER colchón reduce el valor esperado, y el efecto se agrava mientras más agresivo es el %retiro.** El mecanismo es directo: una cuenta tronada es una cuenta PERMANENTEMENTE muerta (no hay "reintento" dentro de esta vida única de la cuenta) — diferir un retiro para preservar colchón no compra nada si la cuenta nunca llega a usarlo antes de tronar, y sí cuesta la oportunidad de haber cobrado ese dinero ANTES. Con `min_cushion` alto + `%retiro` alto simultáneamente, el número de retiros diferidos escala fuerte (hasta 302,778 de 100,000×756 oportunidades en el peor caso) — la fricción de esperar domina.
+
+## Pregunta explícita del usuario: ¿el óptimo depende del horizonte (1 año vs 3 años)?
+
+**NO — el óptimo es IDÉNTICO a 1 año y a 3 años, en las 30 combinaciones, sin una sola excepción.** La razón es estructural, no coincidencia: `avg_days_alive` está entre 10 y 17 días en TODO el grid — la cuenta se resuelve (truena o sigue con una vida ya determinada) casi siempre dentro del primer mes. Al no existir un mecanismo de "reintento" dentro de esta vida única de cuenta (a diferencia del Combine, que sí se repite), extender la ventana de observación de 1 a 3 años prácticamente no agrega trayectorias nuevas que antes no se hubieran resuelto ya — el resultado a 3 años es, en la práctica, el mismo resultado a 1 año con ruido de precisión estadística. **Esto en sí es un hallazgo importante, no solo la ausencia de uno:** la vida útil esperada de una sola cuenta XFA de este candidato es muy corta, y ninguna política de retiro cambia eso de forma sustancial dentro del grid probado.
+
+## Conclusión
+
+**Recomendación (para que el usuario decida, no una implementación de este agente): la política ya desplegada (retirar el máximo legal del 50% sin colchón) es la óptima por valor esperado dentro de este grid — no hay evidencia para cambiarla si el objetivo es maximizar el payout total esperado.** Si el usuario prioriza el percentil 90 (mejor caso) sobre el valor esperado puro, (40%, $0 colchón) es una alternativa casi-óptima razonable. Ningún punto con colchón >$0 superó a su equivalente sin colchón en ningún %retiro ni horizonte — el colchón, tal como está diseñado en este grid (diferir el retiro), no tiene ningún escenario ganador dentro del rango probado.
+
+Código en `dd_v3/` (`withdrawal_policy_grid.py`, `run_grid.py`, `withdrawal_policy_grid_results.csv` con las 60 filas completas — 30 combinaciones × 2 horizontes). Sin cambios a `main`/`cerebro2-dev`.
