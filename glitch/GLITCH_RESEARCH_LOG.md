@@ -2774,3 +2774,44 @@ de trading de ningún producto específico.
 
 **Ningún cambio de código fue necesario.** Incidente cerrado.
 
+
+## HALLAZGO CRÍTICO (no bloqueante para producción esta noche, sí para ir a capital real): MLL fijo vs. trailing real en `_check_attempt_reset()` — ambos schedulers (16-sep-2026)
+
+**Origen:** consulta urgente del usuario sobre el estado del intento actual de MGC_XFA (equity −$2,196, pico intermedio ~$900 reportado de memoria). Confirmado con evidencia de código exacta:
+
+`scheduler/geometry_mgc_scheduler.py`:
+```python
+MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500, FIJO
+...
+def _check_attempt_reset(attempt_pnl_after, profit_target, mll_threshold):
+    if attempt_pnl_after >= profit_target: return "PASE"
+    if attempt_pnl_after <= mll_threshold: return "QUIEBRE"   # compara SIEMPRE contra -$4,500 desde $0
+    return None
+```
+`_attempt_peak()` **no existe en este archivo** (sí en `geometry_scheduler.py`, MES) — el pico ni siquiera se calcula aquí, mucho menos se usa para mover el umbral.
+
+**Confirmado que `geometry_scheduler.py` (MES/G2, rama `main`) tiene el CÓDIGO IDÉNTICO** (`_check_attempt_reset` con `MLL_THRESHOLD` fijo en −$2,000): `_attempt_peak()` sí existe ahí (usado únicamente para el campo "Peak" del mensaje SUMMARY) pero **tampoco se pasa nunca a `_check_attempt_reset()`** — mismo bug, mismo patrón, en ambos schedulers.
+
+**Contraste con el motor ya validado:** `simulation/monte_carlo.py::TopstepMonteCarloSimulator.run()` SÍ implementa el floor trailing real de Topstep — el floor sube con cada nuevo balance EOD más alto (`new_floor = balance - mll_distance`, ratchet solo si `new_floor > mll_floor`, nunca baja, tope en `floor_lock_level`). Es decir: **las cifras de negocio ya validadas (pass_rate, payout esperado, etc.) usan la regla real — el tracking en vivo que decide cuándo reiniciar un intento usa una regla más permisiva.** Esto es un riesgo de sobreestimar supervivencia/pass_rate empírico observado hasta hoy en el paper trading — no de datos falsos, sino de un criterio de "sigue viva" más laxo que el real.
+
+**Magnitud probable del impacto — razonado, no asumido igual para ambos candidatos:** para G2 (MES), una sola pérdida (~$5,000 a nc=40) ya excede por completo el `mll_distance` fijo (~$2,000) 2.5x — el margen entre "fijo" y "trailing" probablemente importa poco en la práctica para G2, porque casi cualquier pérdida individual rompe cualquiera de los dos umbrales igual. Para MGC_XFA, pérdida (~$2,184) y `mll_distance` ($4,500) están en la misma escala — ahí la distinción SÍ puede cambiar el resultado real, como el caso reportado por el usuario ilustra.
+
+### Auditoría retrospectiva — script listo, pendiente de correr contra el Gist real
+
+`scripts/audit_mgc_trailing_mll_2026_09_16.py` (solo lectura, mismas credenciales mínimas que los audits anteriores) reconstruye, entrada por entrada y en orden cronológico, el floor trailing REAL (misma secuencia exacta de ratchet/breach que `TopstepMonteCarloSimulator.run()`, aplicada a los datos reales del intento en vez de a trayectorias simuladas) y lo compara contra lo que la regla fija desplegada decidió en cada punto — reporta la fecha exacta (si existe) donde la regla real habría marcado QUIEBRE mientras el código desplegado seguía reportando "activa".
+
+Probado contra un escenario sintético diseñado para forzar una discrepancia real (pico, luego 2 SL) antes de entregarlo — confirmado que detecta correctamente la fecha exacta de quiebre real y la contrasta con el resultado del umbral fijo.
+
+**Esta sesión no tiene credenciales `GITHUB_GIST_TOKEN`/`GIST_ID` para correr esto contra el Gist real** — pendiente de que el usuario lo corra:
+```bash
+python scripts/audit_mgc_trailing_mll_2026_09_16.py          # audita el intento actual
+python scripts/audit_mgc_trailing_mll_2026_09_16.py --all    # audita TODOS los intentos del historial
+```
+
+### Pendiente, gateado explícitamente por el usuario a los resultados de la auditoría de arriba
+
+- **Fix propuesto (no implementado):** portar la misma lógica de ratchet de `TopstepMonteCarloSimulator.run()` a `_check_attempt_reset()`/`_current_intento()` en ambos schedulers — el floor trailing tendría que persistirse por intento (no recalcularse desde cero de forma barata, ya que SÍ depende de la secuencia completa de balances EOD del intento, no solo del acumulado final) o recalcularse recorriendo `_attempt_entries()` en orden cronológico cada vez (mismo patrón ya usado en el script de auditoría). Tests a diseñar: reproducir exactamente el escenario "pico intermedio + caída" (igual al smoke test del script de auditoría) como regresión explícita, más el caso ya cubierto de "sin pico, quiebre directo" para no romper el comportamiento actual donde coincide.
+- **Portar `_attempt_peak()` de `geometry_scheduler.py` a `geometry_mgc_scheduler.py`** — gap de paridad de bajo riesgo, para que el campo "Peak" exista en los mensajes de MGC igual que en MES. Bajo riesgo pero puede reusarse directamente como parte del fix de arriba (el trailing floor necesita esencialmente el mismo cálculo de máximo rodante).
+- **Auditoría retrospectiva de G2/MES:** no se hizo todavía (se priorizó MGC por ser el caso reportado) — mismo script, adaptado a `geometry_mes_log.json`/`TOPSTEP_50K`, puede prepararse si el usuario lo pide, aunque el razonamiento de magnitud arriba sugiere que el impacto práctico en G2 sería menor.
+
+**Estado: hallazgo crítico documentado con evidencia de código completa en ambos schedulers, script de auditoría retrospectiva listo y probado. Sin fix implementado — bloqueado a propósito hasta confirmar con datos reales si esto ya cambió alguna lectura histórica de "cuenta activa". No afecta la corrida del cron de esta noche (que sigue la lógica fija ya desplegada).**
