@@ -334,6 +334,51 @@ class TestAttemptPeak:
         assert scheduler._attempt_peak(log, 2) == 100
 
 
+class TestAttemptTrailingFloor:
+    """
+    CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): floor trailing
+    REAL de Topstep -- antes de este fix, _check_attempt_reset() siempre
+    comparaba contra MLL_THRESHOLD fijo, ignorando cualquier pico
+    intermedio. Verificado contra el Gist real de MGC_XFA (auditoria
+    retrospectiva, scripts/audit_mgc_trailing_mll_2026_09_16.py) que la
+    formula de abajo reproduce el mismo floor que el ratchet completo
+    de TopstepMonteCarloSimulator.
+    """
+
+    def test_no_peak_equals_flat_mll_threshold(self):
+        """Sin pico (peak=0), el floor trailing debe coincidir EXACTO
+        con el MLL_THRESHOLD fijo de antes -- sin cambio de
+        comportamiento en el caso sin pico."""
+        log = [
+            {"date": "2026-09-01", "result": "SL", "pnl": -500, "intento": 1},
+        ]
+        assert scheduler._attempt_trailing_floor(log, 1) == scheduler.MLL_THRESHOLD == -2000
+
+    def test_floor_ratchets_up_with_a_real_peak(self):
+        """Caso real reportado por el usuario, mismos numeros
+        (adaptados a MES/TOPSTEP_50K): pico de $900 -> floor debe subir
+        a 900 + MLL_THRESHOLD = 900 - 2000 = -1100, no quedarse en -2000."""
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 900, "intento": 1},
+        ]
+        assert scheduler._attempt_trailing_floor(log, 1) == 900 + scheduler.MLL_THRESHOLD == -1100
+
+    def test_floor_never_exceeds_zero(self):
+        """Un pico mayor al mll_distance no debe empujar el floor por
+        encima de 0 (floor_lock_level, en terminos de attempt_pnl-desde-cero)."""
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 2500, "intento": 1},
+        ]
+        assert scheduler._attempt_trailing_floor(log, 1) == 0.0
+
+    def test_floor_does_not_leak_across_attempts(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 2500, "intento": 1},
+            {"date": "2026-09-02", "result": "SL", "pnl": -100, "intento": 2},
+        ]
+        assert scheduler._attempt_trailing_floor(log, 2) == scheduler.MLL_THRESHOLD
+
+
 class TestCheckAttemptReset:
     """Los 3 casos pedidos explicitamente: pase, quiebre, y normal (ningun
     umbral cruzado, sigue igual)."""
@@ -405,6 +450,45 @@ class TestAttemptResetIntegration:
         event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
         assert event == "QUIEBRE"
         assert scheduler._current_intento(log) == 2  # mismo fix del 10-sep-2026, caso QUIEBRE
+
+    def test_quiebre_detected_via_trailing_floor_even_when_flat_threshold_would_miss_it(self):
+        """
+        CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): reproduce
+        el escenario real reportado por el usuario en MGC_XFA (pico
+        intermedio seguido de una caida que rompe el floor TRAILING
+        real sin romper el MLL_THRESHOLD fijo) -- adaptado a
+        MES/TOPSTEP_50K. Con el fix, _current_intento() debe avanzar de
+        intento AQUI; antes del fix, se habria quedado en el intento 1
+        (el mismo bug que el hallazgo del 16-sep confirmo con evidencia
+        de codigo en ambos schedulers).
+        """
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},   # pico=1200, floor trailing sube a 1200-2000=-800
+            {"date": "2026-09-02", "result": "SL", "pnl": -2100, "intento": 1},  # acumulado -900 -- rompe el floor trailing (-800) pero NO el fijo (-2000)
+        ]
+        attempt_pnl = scheduler._attempt_pnl(log, 1)
+        assert attempt_pnl == -900
+
+        # El floor FIJO (el bug, pre-16-sep) NUNCA habria detectado esto.
+        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) is None
+
+        # El floor TRAILING real (el fix) SI lo detecta.
+        trailing_floor = scheduler._attempt_trailing_floor(log, 1)
+        assert trailing_floor == -800
+        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, trailing_floor) == "QUIEBRE"
+
+        # _current_intento() usa el floor trailing internamente -- debe
+        # avanzar a intento 2, no quedarse en 1 como antes del fix.
+        assert scheduler._current_intento(log) == 2
+
+    def test_does_not_advance_when_drawdown_stays_within_trailing_floor(self):
+        """Guardia de regresion -- un pico seguido de una caida que NO
+        rompe ni el floor trailing ni el fijo no debe avanzar de intento."""
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 1200, "intento": 1},   # floor trailing = -800
+            {"date": "2026-09-02", "result": "SL", "pnl": -500, "intento": 1},   # acumulado 700 -- ni cerca de ningun floor
+        ]
+        assert scheduler._current_intento(log) == 1
 
     def test_historic_pass_rate_and_cycles_never_reset_across_attempts(self):
         """Punto 3 explicito del usuario: Pass Rate y Ciclos son

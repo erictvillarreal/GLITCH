@@ -205,7 +205,8 @@ def _current_intento(paper_log: list) -> int:
         return 1
     latest = max(tags)
     latest_pnl = _attempt_pnl(paper_log, latest)
-    if _check_attempt_reset(latest_pnl, PROFIT_TARGET, MLL_THRESHOLD) is not None:
+    latest_floor = _attempt_trailing_floor(paper_log, latest)
+    if _check_attempt_reset(latest_pnl, PROFIT_TARGET, latest_floor) is not None:
         return latest + 1
     return latest
 
@@ -250,12 +251,42 @@ def _attempt_peak(paper_log: list, intento: int) -> float:
     return peak
 
 
+def _attempt_trailing_floor(paper_log: list, intento: int) -> float:
+    """
+    CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): floor trailing
+    REAL de Topstep para el intento -- sube con cada nuevo pico de
+    balance alcanzado dentro del intento, nunca baja, tope en 0
+    (equivalente a floor_lock_level en terminos de attempt_pnl-desde-
+    cero). Antes de este fix, `_check_attempt_reset()` comparaba
+    siempre contra MLL_THRESHOLD fijo, ignorando cualquier pico
+    intermedio -- mas permisivo que la regla real de Topstep, que SI
+    usa este floor trailing (ver simulation/monte_carlo.py::
+    TopstepMonteCarloSimulator, el motor ya validado detras de todas
+    las cifras de negocio publicadas). Auditoria retrospectiva contra
+    el Gist real (16-sep-2026, MGC_XFA) confirmo que la formula de
+    abajo reproduce exactamente el mismo floor que el ratchet completo
+    de TopstepMonteCarloSimulator recorrido entrada por entrada
+    (scripts/audit_mgc_trailing_mll_2026_09_16.py): floor = min(peak +
+    MLL_THRESHOLD, 0) -- MLL_THRESHOLD ya viene negativo, peak >= 0
+    siempre por construccion de _attempt_peak(), asi que esto reproduce
+    floor=MLL_THRESHOLD cuando no hay pico (sin cambio de
+    comportamiento en ese caso) y ratchet hacia arriba (tope en 0) a
+    medida que el pico crece.
+    """
+    peak = _attempt_peak(paper_log, intento)
+    return min(peak + MLL_THRESHOLD, 0.0)
+
+
 def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_threshold: float) -> Optional[str]:
     """
     Retorna "PASE", "QUIEBRE", o None -- funcion PURA, sin efectos
     secundarios (no manda mensajes, no toca paper_log), para poder
     testearla en aislamiento del resto de run() (que si tiene llamadas
-    de red). mll_threshold ya viene NEGATIVO (ver MLL_THRESHOLD arriba).
+    de red). mll_threshold ya viene NEGATIVO -- desde el fix del
+    16-sep-2026, el llamador pasa el floor TRAILING real
+    (_attempt_trailing_floor()), no la constante MLL_THRESHOLD directa
+    -- esta funcion en si no sabe ni le importa cual de los dos es,
+    sigue siendo una comparacion pura.
     """
     if attempt_pnl_after >= profit_target:
         return "PASE"
@@ -700,8 +731,13 @@ def run():
     # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) --
     #         09-sep-2026, ver GLITCH_RESEARCH_LOG.md. El evento se
     #         registra el mismo dia que ocurre -- mensaje separado del
-    #         resumen diario normal. ──
-    event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, MLL_THRESHOLD)
+    #         resumen diario normal. CORREGIDO (16-sep-2026): floor
+    #         TRAILING real, no MLL_THRESHOLD fijo -- ver
+    #         _attempt_trailing_floor() arriba. paper_log ya incluye la
+    #         entrada de HOY (append de arriba), asi que el pico de hoy
+    #         ya cuenta para el floor de este mismo chequeo. ──
+    attempt_floor = _attempt_trailing_floor(paper_log, intento_actual)
+    event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, attempt_floor)
     if event is not None:
         attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
         historic_progress = _paper_progress(paper_log, today_str)  # ya incluye el ciclo de hoy
