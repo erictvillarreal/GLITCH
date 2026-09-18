@@ -2826,3 +2826,23 @@ El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el inte
 - **Margen real restante: $1,398** (no los $2,304 que reporta el sistema desplegado con el umbral fijo — una diferencia de $906, exactamente el tamaño del pico no capturado).
 
 **Conclusión de la auditoría: NO hay ninguna lectura histórica incorrecta que corregir.** En ningún punto del intento actual (ni de ningún intento anterior, dado que este es el único activo hoy) el estado "activa" reportado por el sistema fue falso bajo la regla real. **El hallazgo queda confirmado como un riesgo hacia ADELANTE, no un error retroactivo en los datos ya observados:** la próxima vez que un intento alcance un pico más alto seguido de una caída más profunda, la divergencia entre la regla fija (más permisiva) y la regla real (más estricta) sí podría cambiar el resultado — por eso se procede con el fix ahora, antes de que eso ocurra, no como corrección de un dato ya mal etiquetado.
+
+---
+
+# NUEVO EXPERIMENTO — Protección de ganancia no realizada para MGC_XFA, rama `research/mgc-partial-profit-protection` (18-sep-2026)
+
+**Alcance: simulación/backtest offline sobre datos históricos + Monte Carlo. `geometry_mgc_scheduler.py` NO se toca bajo ninguna circunstancia.** Rama creada desde `cerebro2-dev`.
+
+## Caso motivador (versión CORRECTA — reemplaza una lectura parcial anterior del mismo log real)
+
+Posición real observada en producción el 18-sep-2026: la ganancia no realizada alcanzó un **pico de +$1,164 a las 12:52 CT**, se sostuvo en la zona +$900/+$1,100 durante casi una hora, y luego se erosionó **gradualmente** hasta cerrar en **+$330 al flatten forzado de las 14:30 CT** — una erosión de ~$834 en ~90 minutos, no un movimiento brusco de un solo tick. (Una lectura anterior, parcial, de este mismo log había registrado incorrectamente un pico de solo +$282 a las 07:14 CT con un rebote de +/-$330 durante ~10 minutos — esa lectura queda reemplazada por esta, que sí usa el log completo.)
+
+**Pregunta de investigación:** ¿habría convenido asegurar parte o toda esa ganancia no realizada antes de que se erosionara, dado un umbral de disparo fijo? El rango de umbrales elegido ($800/$1,000/$1,200/$1,500/$1,700) cae naturalmente a ambos lados del pico real observado ($1,164, entre $1,000 y $1,200) — diseño ya adecuado, sin cambios.
+
+## Diseño del experimento
+
+Dos variantes, cada una en 5 umbrales de ganancia no realizada (10 combinaciones):
+- **Variante A (cierre parcial 50%):** al tocar el umbral, cerrar la mitad de los contratos (asegura esa porción), la otra mitad sigue con el MISMO TP/SL original hasta resolución normal (TP, SL, o flatten forzado de sesión a las 14:30 CT).
+- **Variante B (cierre total 100%):** al tocar el umbral, cerrar toda la posición de inmediato.
+
+Sobre los 2 años de datos reales ya validados (ventana horaria corregida, entrada real a las 7:13 CT — misma que sostiene el WR=50.20%/49.40% ya confirmado equivalente). Simulación bar-a-bar (no solo el label final TP/SL/time-exit) para poder detectar el cruce del umbral de ganancia no realizada en cualquier punto del camino, no solo en la resolución.
