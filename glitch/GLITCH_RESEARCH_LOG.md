@@ -2846,3 +2846,48 @@ Dos variantes, cada una en 5 umbrales de ganancia no realizada (10 combinaciones
 - **Variante B (cierre total 100%):** al tocar el umbral, cerrar toda la posición de inmediato.
 
 Sobre los 2 años de datos reales ya validados (ventana horaria corregida, entrada real a las 7:13 CT — misma que sostiene el WR=50.20%/49.40% ya confirmado equivalente). Simulación bar-a-bar (no solo el label final TP/SL/time-exit) para poder detectar el cruce del umbral de ganancia no realizada en cualquier punto del camino, no solo en la resolución.
+
+## Resultados — simulación bar-a-bar (`dd_ppp/bar_walk.py`, `dd_ppp/run_experiment.py`)
+
+**Validación del simulador antes de confiar en nada:** baseline sin protección reproduce el patrón esperado (WR≈49%, cerca del 49.40% ya establecido) y los 15 casos `FLATTEN_EOD` (donde se acaban las barras sin llegar a 14:30 CT) corresponden exactamente a días de cierre temprano reales (Thanksgiving, Christmas Eve, Memorial Day, Juneteenth, etc.) — comportamiento correcto, no un bug.
+
+**NOTA METODOLÓGICA IMPORTANTE, no escondida:** el baseline de ESTE experimento (mean_pnl=−$54.02/trade, WR=49.3%, Combine pass_rate=38.1%) difiere del baseline ya publicado (pass_rate≈46.9-47.1%, ver Fase A) porque este simulador fuerza el flatten REAL a las 14:30 CT dentro de la MISMA sesión — más fiel a producción que la convención de calibración `max_holding_bars=100` (que no está acotada a una sola sesión y por lo tanto permite ventanas de resolución ligeramente más largas). Ambas metodologías son válidas para su propio propósito; la comparación relevante aquí es entre las 10 variantes y ESTE MISMO baseline (misma metodología en las 11), no contra el número externo ya publicado. Esto es, en sí, un hallazgo tangencial que vale la pena que el usuario tenga presente: el pass_rate real, medido con el flatten exacto de producción, podría ser más bajo de lo que la convención de calibración sugiere — no es el foco de este experimento, se documenta para no ocultarlo.
+
+### Matriz completa (5 umbrales × 2 variantes + baseline)
+
+| Variante | Umbral | Disparado | PnL prom/trade | WR (pnl>0) | Combine pass_rate | XFA avg payout 1y |
+|---|---|---|---|---|---|---|
+| baseline | — | — | −$54.02 | 49.3% | 38.14% | $1,561 |
+| A (50%) | $800 | 330/515 | +$1.76 | 55.9% | 29.96% | $1,763 |
+| A (50%) | $1,000 | 289/515 | +$4.14 | 55.0% | 35.67% | $1,845 |
+| A (50%) | $1,200 | 258/515 | +$5.16 | 53.8% | 39.20% | $1,899 |
+| A (50%) | $1,500 | 201/515 | −$23.32 | 51.8% | 39.25% | $1,710 |
+| A (50%) | $1,700 | 169/515 | −$39.79 | 50.9% | 38.10% | $1,610 |
+| B (100%) | $800 | 330/515 | +$57.53 | 68.9% | 20.65% | $2,158 |
+| B (100%) | $1,000 | 289/515 | +$62.31 | 64.3% | 40.06% | $2,360 |
+| **B (100%)** | **$1,200** | **258/515** | **+$64.35** | **60.4%** | **48.01%** | **$2,460** |
+| B (100%) | $1,500 | 201/515 | +$7.39 | 55.1% | 43.62% | $1,964 |
+| B (100%) | $1,700 | 169/515 | −$25.55 | 52.8% | 40.35% | $1,703 |
+
+**Variante B (cierre total) domina a Variante A (cierre parcial) en todos los umbrales** — capturar el 100% de la ganancia antes de que se erosione supera a capturar solo el 50%, consistente con que la erosión observada en el caso motivador afectó a la posición completa. El mejor punto individual es **B, $1,200: pass_rate 48.0% (por encima del ~47% ya publicado) y payout XFA promedio +58% vs. este mismo baseline.**
+
+### Chequeo de robustez ANTES de reportar esto como una mejora — resultado AMBIGUO, no una confirmación
+
+Dado que B@$1,200 usa exactamente los mismos 515 días que el baseline (solo cambia la regla de cierre), se hizo un análisis pareado por día, más potente que comparar las dos muestras como independientes:
+
+- **Diferencia promedio pareada: +$118.37/día** (IC 95% bootstrap: [$29, $211], excluye cero).
+- **Prueba t pareada: p=0.0121** (significativa al 5%).
+- **Prueba de Wilcoxon (rangos con signo, no asume normalidad): p=0.7942 — NO significativa.**
+- **De los 515 días: la protección AYUDÓ en 116, PERJUDICÓ en 141** — más días perjudicados que ayudados, pese a que el promedio en dólares es positivo.
+
+**Esto es una discrepancia real, no ruido de reporte — significa que la mejora en valor promedio está siendo impulsada por un número relativamente pequeño de días con mejoras grandes (evitar erosiones grandes, exactamente el patrón del caso motivador), mientras que la MAYORÍA de los días pierden un poco de upside que sí se habría capturado sin la protección.** Es un patrón de payoff asimétrico (ganancias ocasionales grandes, pérdidas pequeñas frecuentes) — no necesariamente malo, pero NO es la misma cosa que "un edge robusto y consistente", y el test no-paramétrico (el más apropiado para una distribución con esta forma) no lo confirma.
+
+**Consistencia por sub-período (mismo split de Test 4, Fase A):** la diferencia promedio es POSITIVA en los 4 cuartiles cronológicos ($113/$110/$161/$90) — un punto a favor de que el efecto no está concentrado en un solo período. Pero el patrón de "más días perjudicados que ayudados" se invierte por cuartil: Q1/Q2 (menor volatilidad) tienen más días ayudados que perjudicados; Q3/Q4 (mayor volatilidad, ver hallazgo de volatilidad de la Fase A) tienen más días perjudicados — consistente con que la protección dispara más seguido cuando hay más volatilidad, ayudando en los pocos días de erosión grande pero costando upside en más días de los que ayuda en esos mismos períodos.
+
+**Riesgo de sobreajuste al caso motivador, explícito:** el umbral ganador ($1,200) cae inmediatamente por encima del pico real que motivó todo el experimento ($1,164) — no se puede descartar que este "punto óptimo" sea, en parte, un artefacto de que el rango de umbrales elegido está centrado alrededor de un solo caso anecdótico observado, no de una búsqueda ciega. Esto no invalida el resultado, pero sí reduce la confianza que debería depositarse en él sin evidencia adicional (otro período histórico, u otro método de selección de umbral no anclado al caso que lo inspiró).
+
+## Conclusión — NO se recomienda avanzar a due diligence completo todavía
+
+**Siguiendo el mismo estándar de honestidad ya establecido: esto NO es un hallazgo confirmado de mejora.** La Variante B a $1,200 SÍ mejora las métricas de Monte Carlo de forma nominal (pass_rate, payout esperado), y el efecto promedio es direccionalmente consistente en el tiempo — pero **no sobrevive la prueba estadística más apropiada para esta distribución (Wilcoxon, p=0.79) y perjudica a más días de los que ayuda**, un patrón que exige mucha cautela antes de interpretarlo como una mejora real y no como sensibilidad a un puñado de eventos grandes en una muestra de 515 días. Sumado al riesgo de anclaje al caso motivador específico ($1,200 ≈ $1,164), **la recomendación es NO invertir el esfuerzo de la Fase A completa de due diligence sobre este candidato modificado todavía** — se necesitaría evidencia más sólida (ej. el mismo patrón sobre un período histórico independiente, o una selección de umbral que no dependa de haber visto primero el caso del 18-sep) antes de que esto amerite ese nivel de inversión, tal como el propio estándar del usuario exige para cualquier candidato antes de considerarlo superior al diseño actual.
+
+Código en `dd_ppp/` (`bar_walk.py`, `run_experiment.py`, `ppp_results.csv`). Sin cambios a `geometry_mgc_scheduler.py` ni a ninguna rama productiva.
