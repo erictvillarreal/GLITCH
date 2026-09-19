@@ -2926,3 +2926,30 @@ Agregar `balance > 0` a la condición de elegibilidad en ambas funciones (`simul
 eligible = still_active_today & (winning_days_count >= winning_days_required) & (balance > 0)
 ```
 Sin cambios de código aplicados — pendiente de decisión del usuario sobre cuándo aplicarlo (es un fix a un módulo compartido usado por toda la línea de investigación de Cerebro 2, no específico de este experimento de protección de ganancia).
+
+## Tarea 1 — tabla de percentiles con la CADENA COMPLETA (comparable a $31,257)
+
+Reconstruida usando `scripts/cerebro2_cashflow_monte_carlo.py::run_cashflow_simulation` importada sin modificar (misma función que produjo el $31,257 publicado), con `build_combine_pool`/`build_xfa_pool` adaptados a distribución empírica (bootstrap de los PnL ya generados por el bar-walk, no la distribución binaria sintética original).
+
+**Validación antes de confiar en la tabla:** se corrió la cadena con la MISMA distribución binaria sintética (WR=50%, ±$2,184) del script original — reproduce **$31,455** de mediana vs. el **$31,257** publicado (0.6% de diferencia, dentro de lo esperable por nc fijo vs. dinámico y semilla).
+
+**Sin el fix del bug de balance negativo aplicado aquí** — misma lógica exacta (con el bug) que produjo el $31,257, para que la comparación sea contra ese número tal como está hoy.
+
+| Variante | Umbral | p10 | p25 | p50 (mediana) | p75 | p90 |
+|---|---|---|---|---|---|---|
+| **Referencia externa ya publicada** | — | — | — | **$31,257** | — | — |
+| baseline (este experimento) | — | $6,142 | $10,091 | $15,752 | $22,878 | $30,540 |
+| A (parcial 50%) | $800 | $3,950 | $7,437 | $12,574 | $19,136 | $26,293 |
+| A (parcial 50%) | $1,000 | $5,689 | $9,724 | $15,340 | $22,323 | $29,849 |
+| A (parcial 50%) | $1,200 | $6,863 | $11,227 | $17,306 | $24,744 | $32,684 |
+| A (parcial 50%) | $1,500 | $6,630 | $10,736 | $16,583 | $23,645 | $31,606 |
+| A (parcial 50%) | $1,700 | $6,075 | $9,995 | $15,544 | $22,702 | $30,194 |
+| B (total 100%) | $800 | $2,790 | $6,041 | $11,076 | $17,926 | $25,205 |
+| B (total 100%) | $1,000 | $8,540 | $13,416 | $19,966 | $28,217 | $36,976 |
+| **B (total 100%)** | **$1,200** | **$11,566** | **$17,056** | **$24,488** | **$33,384** | **$42,345** |
+| B (total 100%) | $1,500 | $8,709 | $13,415 | $19,903 | $27,928 | $36,469 |
+| B (total 100%) | $1,700 | $7,116 | $11,209 | $17,080 | $24,443 | $32,171 |
+
+**Nota de escala (no de confiabilidad, ya documentada por separado):** el baseline de este experimento ($15,752 de mediana) queda por debajo del $31,257 externo — consistente con las dos limitaciones metodológicas ya declaradas: (1) el bar-walk fuerza el flatten real a las 14:30 CT dentro de la misma sesión (pass_rate más bajo que la convención de 100 barras), y (2) nc fijo=6 en vez de nc dinámico con Scaling Plan. Ninguna de las dos es nueva información — ya estaban declaradas; esta tabla simplemente las hace visibles en la MISMA escala de dólares que el número ya conocido, por primera vez.
+
+Código en `dd_ppp/full_chain_percentile_table.py`.
