@@ -2838,3 +2838,18 @@ El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el inte
 **Hallazgos:** (1) El bar-walk de sesión da WR condicional 47.43% en RR=1 (TP=120, SL=133, FLATTEN=262 de 515), idéntico al bar_walk de dd_ppp; la referencia "49.40%" citada en ese módulo no se reproduce con este método (discrepancia previa, no resuelta aquí). (2) ~51% de los trades a RR=1 terminan en FLATTEN, no en TP/SL: el WR condicional ignora la mayoría de los trades; el WR incondicional (TP/total) a RR=1 es 23.3%. (3) El WR condicional real supera la fórmula a RR bajo (p.ej. RR=0.25: 84.8% vs 80% teórico), pero los flatten tienen PnL medio negativo grande (-$685 a RR=0.25). (4) Payout p50 a 1 año (pista B, real): RR=1.0 $16,043; 0.67 $20,966; 0.43 $22,654 (máx); 0.33 $16,945; 0.25 $10,723; 0.18 $6,061. Curva en U invertida con máximo en RR≈0.43 (WR cond. 77%), NO en WR=80-88%. (5) EV por trade a nc=6: RR=1.0 -$54, 0.43 +$64, 0.25 +$13, 0.18 -$10.
 
 **Estado:** hallazgo exploratorio, NO candidato. Falta due diligence completo (fricción, Kelly, dependencia, sub-periodos, data snooping); 515 trades, H1/H2 de WR difieren (RR=0.43: 81.6% vs 74.4%). Sin cambios a producción.
+
+### Prioridad 1 — ¿El $31,257 es consistente con la distribución real que incluye FLATTEN? (19-sep-2026)
+
+**Evidencia de código:** `core/funded_account.py::simulate_xfa_lifetime_dynamic_nc` genera `is_win = rng.random(...) < wr` y `day_pnl = where(is_win, net_win, net_loss)` — SOLO dos resultados diarios (+TP / -SL), sin tercer estado. La etapa Combine (`DailyReturnDist`, WR/avg_win/avg_loss) es igual de binaria. Los time-exits (FLATTEN) no existen en el motor. El log ya sabía del time-exit share (30.2% en la calibración densa, 54%→31%→6% por sub-período) pero solo lo usó para validar el WR CONDICIONAL (49.97%); nunca se propagó al Monte Carlo.
+
+**Cuantificación** (`dd_wr/flatten_check.py`; engine copiado con distribución empírica por inverse-CDF; validado bit a bit contra el original con binario WR=.5 → mismo payout_usd y days por path). p50 a 1 año, 1 cuenta, cadena Combine→XFA, dyn-nc:
+- V0 publicado (binario WR=.50): $31,257
+- V1 binario con WR condicional medido (47.4%): $22,075 (-29%)
+- V2 empírico real con FLATTEN (515 trades reales): $16,048 (-49% vs publicado); con fix balance>0: $16,472
+- Bootstrap de los 515 días: p50 mediana $16,379, p5–p95 $9,625–$25,937; 0 de 40 remuestreos alcanza $31,257.
+- Por régimen: T1 (sep24–may25) $10,410; T2 (may25–ene26) $23,864; T3 (ene26–sep26) $14,426; últimos 120 días $14,385.
+El FLATTEN share cae con el tiempo: 78.4% → 50.6% → 23.8% (régimen de volatilidad creciente); WR condicional por tercio 48.6/50.6/45.0% (no significativamente distinto de 50%, n pequeño). Distribución diaria real: P(día>=+$150)=46%, P(|pnl|<$150)=6%, P(día<=-$2,000)=26% (publicado: 50%/0%/50%).
+nc dinámico vs fijo no importa (pista B fixed-nc $16,043 ≈ V2 dyn-nc $16,048).
+
+**Conclusión:** el $31,257 NO es una estimación confiable del baseline actual bajo la distribución real de MGC; el número consistente con datos reales es ≈$16k (IC bootstrap ~$10–26k). La geometría sigue siendo positiva en payout esperado, pero ~la mitad de lo publicado. Sin cambios a producción.
