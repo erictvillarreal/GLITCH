@@ -2963,3 +2963,14 @@ Código en `dd_ppp/full_chain_percentile_table.py`.
 **3. Recordatorio final, sin ambigüedad:** esta magnitud, aunque grande, **es el MISMO hallazgo estadísticamente frágil ya documentado** (Wilcoxon p=0.79; la regla perjudicó a 141 días y benefició a solo 116; umbral ganador anclado al caso motivador de $1,164). La escala de negocio de esta tabla lo hace más reconocible, **no más confiable**. **NO se avanza a la Fase A de due diligence con este hallazgo** — mismo criterio ya establecido. Dirección futura anotada arriba (umbral relativo a ATR), sin instruir.
 
 **Estado: rama cerrada como documentación de análisis. Sin cambios a producción, sin merge a `cerebro2-dev`/`main`.**
+
+## CIERRE FORMAL — PAUSADA como investigación futura, NO descartada (19-sep-2026)
+
+**Cómo retomarla (resumen visible):**
+- **El hallazgo es prometedor en magnitud, no solo anecdótico:** B (cierre total) a $1,200 → +55.5% mediana, +38.7% p90 en simulación (cadena completa, vs. baseline del mismo experimento). Más aplicable de lo esperado al inicio.
+- **Por qué está pausada y no avanzada:** la señal es estadísticamente frágil — Wilcoxon p=0.79 (no significativo), 141 días perjudicados vs. 116 beneficiados; la mejora depende de pocos casos extremos, no de un edge amplio y consistente. No pasa el umbral para invertir en Fase A de due diligence todavía.
+- **El diseño de umbrales fijos en dólares está probablemente mal planteado:** sesgado hacia el ejemplo que lo motivó ($1,200 ≈ pico de $1,164). No afinarlo más alrededor del mismo caso.
+- **Vía más robusta para revisitar:** umbral RELATIVO a volatilidad reciente (ej. múltiplo de ATR) en vez de umbral fijo en dólares — se adapta al régimen de mercado y reduce el riesgo de sobreajuste a un solo caso histórico.
+- **Condición de reactivación sugerida:** revisar cuando Cerebro 2 tenga más ciclos reales acumulados (ej. al llegar al deadline del 1-oct-2026), con más datos de producción real para contrastar contra la simulación.
+
+Sin cambios a producción. Rama queda intacta para retomar.
