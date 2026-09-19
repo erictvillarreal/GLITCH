@@ -2953,3 +2953,13 @@ Reconstruida usando `scripts/cerebro2_cashflow_monte_carlo.py::run_cashflow_simu
 **Nota de escala (no de confiabilidad, ya documentada por separado):** el baseline de este experimento ($15,752 de mediana) queda por debajo del $31,257 externo — consistente con las dos limitaciones metodológicas ya declaradas: (1) el bar-walk fuerza el flatten real a las 14:30 CT dentro de la misma sesión (pass_rate más bajo que la convención de 100 barras), y (2) nc fijo=6 en vez de nc dinámico con Scaling Plan. Ninguna de las dos es nueva información — ya estaban declaradas; esta tabla simplemente las hace visibles en la MISMA escala de dólares que el número ya conocido, por primera vez.
 
 Código en `dd_ppp/full_chain_percentile_table.py`.
+
+## CIERRE DE LA RAMA `research/mgc-partial-profit-protection` (19-sep-2026)
+
+**1. Bug de payout sobre balance negativo — PENDIENTE CONOCIDO, bajo riesgo, no urgente. Fix NO implementado por decisión explícita del usuario.** Afecta ~4-6% de los casos, en la dirección conservadora: el $31,257 publicado no está inflado, es levemente conservador (~1.6-1.8% subestimado). Fix propuesto y ya descrito arriba (`balance > 0` en la condición de elegibilidad de `simulate_xfa_lifetime()` y `simulate_xfa_lifetime_dynamic_nc()`), a aplicar cuando el usuario lo decida.
+
+**2. Comparación de negocio (tabla de cadena completa):** B (cierre total) a $1,200 muestra **+55.5% en mediana** ($24,488 vs. $15,752) y **+38.7% en p90** ($42,345 vs. $30,540) sobre el baseline de ESTE MISMO experimento. **No debe compararse directo contra el $31,257 externo** — metodologías distintas ya declaradas (flatten real de sesión vs. convención de 100 barras; nc fijo vs. dinámico).
+
+**3. Recordatorio final, sin ambigüedad:** esta magnitud, aunque grande, **es el MISMO hallazgo estadísticamente frágil ya documentado** (Wilcoxon p=0.79; la regla perjudicó a 141 días y benefició a solo 116; umbral ganador anclado al caso motivador de $1,164). La escala de negocio de esta tabla lo hace más reconocible, **no más confiable**. **NO se avanza a la Fase A de due diligence con este hallazgo** — mismo criterio ya establecido. Dirección futura anotada arriba (umbral relativo a ATR), sin instruir.
+
+**Estado: rama cerrada como documentación de análisis. Sin cambios a producción, sin merge a `cerebro2-dev`/`main`.**
