@@ -2897,3 +2897,32 @@ Código en `dd_ppp/` (`bar_walk.py`, `run_experiment.py`, `ppp_results.csv`). Si
 La observación original (ganancia no realizada que se erosiona antes del flatten forzado) sigue siendo válida — lo que resultó frágil fue la implementación probada, no la idea. **Afinar más el umbral en dólares alrededor del mismo ejemplo empeoraría el sobreajuste ya señalado arriba, no lo resolvería** — no es el camino correcto si se retoma esto.
 
 **Alternativa más robusta a explorar en el futuro, con más tiempo/rigor:** en vez de un umbral FIJO en dólares (que por construcción queda anclado a la escala de un solo ejemplo histórico), usar un umbral RELATIVO a la volatilidad del momento — ej. "proteger cuando la ganancia no realizada alcanza X veces el ATR reciente" — de forma que el disparador se adapte al régimen de mercado en vez de fijarse a un número que coincide, por diseño, con un caso particular. Esto conecta directamente con el hallazgo de volatilidad ya confirmado en la Fase A del due diligence (ATR14 subió ~161% entre el primer y último cuartil de los 2 años, r=−0.98 con el time-exit share) — un umbral relativo a ATR sería, por diseño, coherente con esa no-estacionariedad ya documentada, en vez de ignorarla.
+
+## PRIORITARIO — Investigación del bug de "payout sobre balance negativo" en `core/funded_account.py` (19-sep-2026)
+
+**Confirmado: es un bug real en el motor COMPARTIDO, presente en `simulate_xfa_lifetime()` Y `simulate_xfa_lifetime_dynamic_nc()` (el motor exacto detrás del $31,257 ya publicado).** La condición de elegibilidad (`winning_days_count >= winning_days_required`) nunca verifica que el balance TOTAL de la cuenta sea positivo — solo que se hayan acumulado 5 días individuales ganadores de ≥$150, sin importar si una pérdida grande anterior todavía deja el balance neto negativo.
+
+**Investigación corrida contra el escenario EXACTO que produjo el $31,257** (WR=0.5, nc_designed=6, seed=7, n_paths=50,000, max_days=756 — mismos parámetros de `scripts/cerebro2_cashflow_monte_carlo.py::build_xfa_pool`), instrumentando una copia de solo lectura, validada bit-a-bit contra la función real antes de confiar en los números:
+
+### a) Frecuencia — no trivial, confirmada
+
+- **5.69% de TODOS los eventos de payout** (every_payout) / **6.24%** (first_payout_only) ocurren con balance≤0 en el momento de elegibilidad.
+- **4.22% de las 50,000 trayectorias simuladas** tocan este caso al menos una vez en su vida.
+
+### b) Impacto en el $31,257 — SÍ es material, pero en la dirección CONTRARIA a la hipótesis original
+
+**No infla el número — lo cual sea encontró fue algo más serio: causa quiebres prematuros espurios.**
+
+- El "payout" con balance negativo resta una cifra negativa de `lifetime_payout_usd` (un arrastre pequeño hacia abajo, no hacia arriba) — esto por sí solo apunta a una SUBESTIMACIÓN, no sobreestimación.
+- Pero el efecto dominante es otro: **el evento de "payout" (aunque sea negativo) SIEMPRE resetea el floor de MLL a $0** (mismo código que un payout real), sin importar si el balance sigue siendo negativo. Esto dispara casi con certeza un QUIEBRE inmediato — confirmado: **de las trayectorias que tocan este bug, el 100% termina tronando eventualmente, y el 82.3% truena dentro de los 5 días siguientes al evento.**
+- Corriendo el escenario CON el fix propuesto (exigir `balance > 0` además de `winning_days_count >= required`): el payout promedio SUBE, no baja — **+1.59% (every_payout) / +1.82% (first_payout_only)**. La mediana no cambia (sigue en $0 en ambos casos, dominada por la mayoría de trayectorias que nunca llegan a un payout real).
+
+**Conclusión honesta: el $31,257 publicado está, si acaso, LIGERAMENTE SUBESTIMADO por este bug (~1.6-1.8%), no inflado.** La hipótesis original del usuario (que el bug podría estar inflando el número al contar payouts falsos como dinero real) no se confirma en esa dirección — pero el bug SÍ es real, material, y tiene una consecuencia más seria de lo anticipado: mata prematuramente ~4% de las cuentas simuladas via un reset de floor erróneo, no solo cuenta mal unos dólares.
+
+### c) Fix propuesto (NO implementado en `core/funded_account.py` — solo confirmado el alcance, tal como se pidió)
+
+Agregar `balance > 0` a la condición de elegibilidad en ambas funciones (`simulate_xfa_lifetime()`, línea ~364; `simulate_xfa_lifetime_dynamic_nc()`, línea ~545):
+```python
+eligible = still_active_today & (winning_days_count >= winning_days_required) & (balance > 0)
+```
+Sin cambios de código aplicados — pendiente de decisión del usuario sobre cuándo aplicarlo (es un fix a un módulo compartido usado por toda la línea de investigación de Cerebro 2, no específico de este experimento de protección de ganancia).
