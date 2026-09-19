@@ -2826,3 +2826,15 @@ El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el inte
 - **Margen real restante: $1,398** (no los $2,304 que reporta el sistema desplegado con el umbral fijo — una diferencia de $906, exactamente el tamaño del pico no capturado).
 
 **Conclusión de la auditoría: NO hay ninguna lectura histórica incorrecta que corregir.** En ningún punto del intento actual (ni de ningún intento anterior, dado que este es el único activo hoy) el estado "activa" reportado por el sistema fue falso bajo la regla real. **El hallazgo queda confirmado como un riesgo hacia ADELANTE, no un error retroactivo en los datos ya observados:** la próxima vez que un intento alcance un pico más alto seguido de una caída más profunda, la divergencia entre la regla fija (más permisiva) y la regla real (más estricta) sí podría cambiar el resultado — por eso se procede con el fix ahora, antes de que eso ocurra, no como corrección de un dato ya mal etiquetado.
+
+---
+
+## research/mgc-wr-improvement — experimento de 6 puntos de RR (19-sep-2026)
+
+**Pregunta:** ¿subir el WR de MGC_XFA de ~50% hacia ~80% (bajando el RR) sube el payout total a 1 año? WR≈SL/(SL+TP) sin edge; con SL=$2,184 fijo (364 ticks x nc=6) el RR=0.25 da TP≈$534 neto, muy por encima del mínimo de $150/día -> la regla de $150 NO es la restricción estructural (k=2: RR mínimo 0.067).
+
+**Metodología:** bar-walk de sesión real (entrada 7:13 CT, flatten 14:30 CT, alternar, win_first=False), 515 trades sobre `mgc_5min_2y_corrected_window`. Script `dd_wr/rr_experiment.py`, resultados `dd_wr/rr_experiment_results.csv`. Pista A = binario con WR condicional medido + `simulate_xfa_lifetime_dynamic_nc` (mismo motor que el $31,257; validado: WR=0.5 sintético reproduce p50=$31,257). Pista B = bootstrap del PnL real por trade (incluye flatten), nc fijo=6, con y sin fix `balance>0`.
+
+**Hallazgos:** (1) El bar-walk de sesión da WR condicional 47.43% en RR=1 (TP=120, SL=133, FLATTEN=262 de 515), idéntico al bar_walk de dd_ppp; la referencia "49.40%" citada en ese módulo no se reproduce con este método (discrepancia previa, no resuelta aquí). (2) ~51% de los trades a RR=1 terminan en FLATTEN, no en TP/SL: el WR condicional ignora la mayoría de los trades; el WR incondicional (TP/total) a RR=1 es 23.3%. (3) El WR condicional real supera la fórmula a RR bajo (p.ej. RR=0.25: 84.8% vs 80% teórico), pero los flatten tienen PnL medio negativo grande (-$685 a RR=0.25). (4) Payout p50 a 1 año (pista B, real): RR=1.0 $16,043; 0.67 $20,966; 0.43 $22,654 (máx); 0.33 $16,945; 0.25 $10,723; 0.18 $6,061. Curva en U invertida con máximo en RR≈0.43 (WR cond. 77%), NO en WR=80-88%. (5) EV por trade a nc=6: RR=1.0 -$54, 0.43 +$64, 0.25 +$13, 0.18 -$10.
+
+**Estado:** hallazgo exploratorio, NO candidato. Falta due diligence completo (fricción, Kelly, dependencia, sub-periodos, data snooping); 515 trades, H1/H2 de WR difieren (RR=0.43: 81.6% vs 74.4%). Sin cambios a producción.
