@@ -34,6 +34,7 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
     if start_mode == 0:
         cash -= cs.monthly_fee; n_att += 1
     cum = np.zeros((T, H), np.float32); pay_m = np.zeros((T, H // DAYS_PER_MONTH)); fee_m = np.zeros_like(pay_m)
+    fee_c_m = np.zeros_like(pay_m); fee_a_m = np.zeros_like(pay_m)
     first_pass = np.zeros(T, np.int8); first_day = np.zeros(T, np.int64)
     n_pay = np.zeros(T, np.int64); n_pass = np.zeros(T, np.int64)
     for day in range(H):
@@ -55,6 +56,7 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         cdays = cdays + m0
         renew = alive0 & ~passed & (cdays % DAYS_PER_MONTH == 0)
         fee_today += np.where(renew, cs.monthly_fee, 0.0)
+        fee_c_today = np.where(renew, cs.monthly_fee, 0.0)
         # ---- XFA
         nc_t = np.minimum(dynamic_nc_for_balance(xb, xs.mll_distance, "MGC"), acc.nc_x)
         p1 = np.where(m1, nc_t * acc.samp_x[idx], 0.0)
@@ -78,7 +80,9 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         new_fee = blown0 | blown1
         if single_episode: new_fee = blown0
         fee_today += np.where(new_fee, cs.monthly_fee, 0.0)
-        fee_today += np.where(passed, cs.activation_fee, 0.0)
+        fee_c_today = fee_c_today + np.where(new_fee, cs.monthly_fee, 0.0)
+        fee_a_today = np.where(passed, cs.activation_fee, 0.0)
+        fee_today += fee_a_today
         n_att = n_att + new_fee; n_pass = n_pass + passed
         newfirst = (first_pass == 0) & (blown0 | passed)
         first_pass = np.where(newfirst, np.where(passed, 1, 2), first_pass); first_day = np.where(newfirst, day + 1, first_day)
@@ -94,7 +98,8 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         mode = np.where(m3 & (wait <= 0), 1, mode).astype(np.int8)
         if single_episode: mode = np.where(blown1, 2, mode).astype(np.int8)
         cash = cash + take - fee_today
-        pay_m[:, mo] += take; fee_m[:, mo] += fee_today
+        pay_m[:, mo] += take; fee_m[:, mo] += fee_today; fee_c_m[:, mo] += fee_c_today; fee_a_m[:, mo] += fee_a_today
         cum[:, day] = cash
         take_d[:, day] = take; fee_d[:, day] = fee_today
-    return dict(take_d=take_d, fee_d=fee_d, cum=cum, pay_m=pay_m, fee_m=fee_m, n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day)
+    return dict(take_d=take_d, fee_d=fee_d, cum=cum, pay_m=pay_m, fee_m=fee_m, fee_c_m=fee_c_m, fee_a_m=fee_a_m,
+                n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day)
