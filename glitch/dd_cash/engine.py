@@ -21,7 +21,7 @@ class Account:
         self.cs, self.xs, self.nc_c, self.nc_x, self.samp_c, self.samp_x, self.name = combine_spec, xfa_spec, nc_c, nc_x, samp_c, samp_x, name
 
 
-def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_episode=False):
+def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_episode=False, lag=0):
     """D: (T,H) indices de dia (compartidos entre cuentas de la misma trayectoria). Devuelve dict de matrices."""
     T, H = D.shape
     cs, xs = acc.cs, acc.xs
@@ -29,7 +29,8 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
     cb = np.full(T, cs.account_size, float); cfl = np.full(T, cs.starting_floor, float)
     ccum = np.zeros(T); cbest = np.zeros(T); cdays = np.zeros(T, np.int64)
     xb = np.zeros(T); xfl = np.full(T, -xs.mll_distance); xwd = np.zeros(T, np.int64)
-    cash = np.zeros(T); n_att = np.zeros(T, np.int64)
+    cash = np.zeros(T); n_att = np.zeros(T, np.int64); wait = np.zeros(T, np.int64)
+    take_d = np.zeros((T, H), np.float32); fee_d = np.zeros((T, H), np.float32)
     if start_mode == 0:
         cash -= cs.monthly_fee; n_att += 1
     cum = np.zeros((T, H), np.float32); pay_m = np.zeros((T, H // DAYS_PER_MONTH)); fee_m = np.zeros_like(pay_m)
@@ -86,9 +87,14 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         cb = np.where(reset_c, cs.account_size, cb); cfl = np.where(reset_c, cs.starting_floor, cfl)
         ccum = np.where(reset_c, 0.0, ccum); cbest = np.where(reset_c, 0.0, cbest); cdays = np.where(reset_c, 0, cdays)
         xb = np.where(passed, 0.0, xb); xfl = np.where(passed, -xs.mll_distance, xfl); xwd = np.where(passed, 0, xwd)
-        mode = np.where(passed, 1, np.where(reset_c, 0, mode)).astype(np.int8)
+        m3 = mode == 3
+        wait = np.where(m3, wait - 1, wait)
+        wait = np.where(passed, lag, wait)
+        mode = np.where(passed, 1 if lag == 0 else 3, np.where(reset_c, 0, mode)).astype(np.int8)
+        mode = np.where(m3 & (wait <= 0), 1, mode).astype(np.int8)
         if single_episode: mode = np.where(blown1, 2, mode).astype(np.int8)
         cash = cash + take - fee_today
         pay_m[:, mo] += take; fee_m[:, mo] += fee_today
         cum[:, day] = cash
-    return dict(cum=cum, pay_m=pay_m, fee_m=fee_m, n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day)
+        take_d[:, day] = take; fee_d[:, day] = fee_today
+    return dict(take_d=take_d, fee_d=fee_d, cum=cum, pay_m=pay_m, fee_m=fee_m, n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day)
