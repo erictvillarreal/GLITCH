@@ -239,33 +239,111 @@ class TestAttemptWinningDays:
         assert scheduler._attempt_winning_days(log, 1) == 5
 
 
+class TestReplayPayoutCycles:
+    """22-sep-2026, pedido explicito del usuario: extension real de
+    Topstep -- el conteo de 5 dias se REINICIA tras cada payout, y a
+    partir del SEGUNDO payout se exige ademas profit neto >= $0.01
+    desde el balance del payout anterior (el primero esta exento).
+    Verificado contra help.topstep.com, ver GLITCH_RESEARCH_LOG.md."""
+
+    def _tp(self, date, pnl=2184, intento=1):
+        return {"date": date, "result": "TP", "pnl": pnl, "intento": intento}
+
+    def _sl(self, date, pnl=-2196, intento=1):
+        return {"date": date, "result": "SL", "pnl": pnl, "intento": intento}
+
+    def test_no_entries_yet(self):
+        state = scheduler._replay_payout_cycles([], 1)
+        assert state == {"events": [], "winning_days_since_last": 0, "balance": 0.0, "is_first_payout": True}
+
+    def test_first_payout_fires_at_exactly_5_winning_days_no_profit_condition_needed(self):
+        """El primer payout esta EXENTO de la condicion de profit neto
+        -- 5 dias ganadores, aunque el intento venga de mucho antes con
+        equity bajo, es suficiente por si solo."""
+        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]
+        state = scheduler._replay_payout_cycles(log, 1)
+        assert len(state["events"]) == 1
+        assert state["events"][0] == {"date": "2026-09-05", "balance": 2184 * 5, "n": 1}
+        assert state["winning_days_since_last"] == 0  # se reinicio tras el payout
+        assert state["is_first_payout"] is False  # ya paso el primero
+
+    def test_winning_day_count_resets_after_first_payout_not_a_simple_modulo(self):
+        """Confirma que el reinicio es un evento REAL (fecha del payout),
+        no un simple modulo-5 acumulado -- dias 6,7,8,9 (4 mas, no 5
+        mas) NO deben disparar un segundo evento todavia."""
+        log = [self._tp(f"2026-09-{d:02d}") for d in range(1, 10)]  # 9 dias ganadores seguidos
+        state = scheduler._replay_payout_cycles(log, 1)
+        assert len(state["events"]) == 1  # solo el primero (dia 5) -- dia 10 haria falta para el segundo
+        assert state["winning_days_since_last"] == 4  # dias 6,7,8,9 desde el primer payout
+
+    def test_second_payout_fires_when_profit_since_last_payout_is_positive(self):
+        log = ([self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
+               + [self._tp(f"2026-09-{d:02d}") for d in range(6, 11)])  # 5 mas, balance=21840 (> 10920)
+        state = scheduler._replay_payout_cycles(log, 1)
+        assert len(state["events"]) == 2
+        assert state["events"][1]["balance"] == 2184 * 10
+        assert state["winning_days_since_last"] == 0
+
+    def test_second_payout_blocked_when_profit_since_last_payout_is_negative(self):
+        """El caso critico pedido explicitamente por el usuario: 5 dias
+        ganadores NUEVOS desde el ultimo payout, pero el balance total
+        cayo por debajo del balance del ultimo payout (perdidas grandes
+        intercaladas) -- el segundo payout NO debe dispararse."""
+        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
+        log.append(self._sl("2026-09-06", pnl=-15000))          # balance: 10920-15000=-4080
+        log += [self._tp(f"2026-09-{d:02d}") for d in (7, 8, 9, 10, 11)]  # balance final: -4080+10920=6840 (< 10920)
+        state = scheduler._replay_payout_cycles(log, 1)
+        assert len(state["events"]) == 1  # el segundo NO se disparo -- bloqueado
+        assert state["winning_days_since_last"] >= scheduler.WINNING_DAYS_REQUIRED  # sigue "listo", esperando el profit-gate
+        profit_since = state["balance"] - state["events"][-1]["balance"]
+        assert profit_since < 0.01  # confirma por que esta bloqueado
+
+    def test_blocked_payout_unblocks_on_a_later_day_once_profit_turns_positive(self):
+        """Una vez bloqueado, el profit-gate se re-evalua cada dia
+        siguiente -- incluyendo un dia que en si mismo NO es ganador,
+        si ese dia alcanza a mover el balance por encima del ultimo
+        payout."""
+        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
+        log.append(self._sl("2026-09-06", pnl=-15000))          # balance=-4080
+        log += [self._tp(f"2026-09-{d:02d}") for d in (7, 8, 9, 10, 11)]  # balance=6840, bloqueado (5 ganadores desde el payout 1)
+        log.append({"date": "2026-09-12", "result": "FLATTEN", "pnl": 4200, "intento": 1})  # balance=11040 (> 10920), NO es dia ganador (<150? no, 4200>=150 en realidad)
+        state = scheduler._replay_payout_cycles(log, 1)
+        assert len(state["events"]) == 2  # se libero -- el dia 12 empujo el profit-gate a positivo
+        assert state["events"][1]["date"] == "2026-09-12"
+
+    def test_does_not_leak_across_attempts(self):
+        log = [self._tp(f"2026-09-0{d}", intento=1) for d in range(1, 6)]
+        log += [self._tp(f"2026-09-{d:02d}", intento=2) for d in (6, 7)]
+        state = scheduler._replay_payout_cycles(log, 2)
+        assert state["events"] == []
+        assert state["winning_days_since_last"] == 2
+        assert state["is_first_payout"] is True  # el intento 2 nunca tuvo un payout propio
+
+
 class TestCheckPayoutEligibilityCrossed:
     """Funcion PURA, mismo patron que TestCheckAttemptReset -- solo
-    dispara en el CRUCE (4->5), nunca por estar ya en o por encima del
-    umbral, para que el llamador (run()) no reavise cada dia."""
+    dispara cuando HOY agrego un evento NUEVO al historial (el conteo
+    de eventos subio), nunca por seguir en el mismo numero de eventos
+    (incluyendo el caso bloqueado por el profit-gate)."""
 
-    def test_fires_exactly_on_the_crossing(self):
-        assert scheduler._check_payout_eligibility_crossed(4, 5) is True
+    def test_fires_when_a_new_event_appears(self):
+        assert scheduler._check_payout_eligibility_crossed([], [{"date": "d", "balance": 1, "n": 1}]) is True
 
-    def test_does_not_fire_when_staying_below(self):
-        assert scheduler._check_payout_eligibility_crossed(2, 3) is False
+    def test_does_not_fire_when_event_count_is_unchanged(self):
+        one = [{"date": "d", "balance": 1, "n": 1}]
+        assert scheduler._check_payout_eligibility_crossed(one, one) is False
 
-    def test_does_not_refire_when_already_at_or_above(self):
-        """El caso critico pedido explicitamente: dias 6, 7, 8... del
-        mismo intento (ya elegible) NO deben re-disparar el aviso."""
-        assert scheduler._check_payout_eligibility_crossed(5, 6) is False
-        assert scheduler._check_payout_eligibility_crossed(5, 5) is False
-        assert scheduler._check_payout_eligibility_crossed(7, 8) is False
+    def test_does_not_fire_while_blocked_by_profit_gate(self):
+        """El caso critico pedido explicitamente: dias bloqueados (5+
+        ganadores desde el ultimo payout, profit-gate no cumplido)
+        siguen sin evento nuevo -- no deben re-avisar."""
+        one = [{"date": "d1", "balance": 1, "n": 1}]
+        assert scheduler._check_payout_eligibility_crossed(one, one) is False
 
-    def test_fires_even_on_a_jump_that_skips_the_exact_boundary(self):
-        """Improbable con esta geometria (un solo ciclo por dia), pero
-        la funcion debe ser correcta igual: un salto de 3->6 (ej. si se
-        reconciliaran varios dias pendientes de una sola corrida) debe
-        disparar una sola vez, no fallar por no pasar exactamente por 5."""
-        assert scheduler._check_payout_eligibility_crossed(3, 6) is True
-
-    def test_does_not_fire_on_a_fresh_attempt_starting_from_zero(self):
-        assert scheduler._check_payout_eligibility_crossed(0, 1) is False
+    def test_fires_on_the_second_event_too(self):
+        one = [{"date": "d1", "balance": 1, "n": 1}]
+        two = one + [{"date": "d2", "balance": 2, "n": 2}]
+        assert scheduler._check_payout_eligibility_crossed(one, two) is True
 
 
 class TestPayoutEligibilitySimulatedSequence:
@@ -279,9 +357,9 @@ class TestPayoutEligibilitySimulatedSequence:
         intento = 1
         fired_days = []
         for day, pnl in enumerate([2184, 2184, 2184, 2184, 2184, 2184, 2184], start=1):
-            before = scheduler._attempt_winning_days(paper_log, intento)
+            before = scheduler._replay_payout_cycles(paper_log, intento)["events"]
             paper_log.append({"date": f"2026-09-{day:02d}", "result": "TP", "pnl": pnl, "intento": intento})
-            after = scheduler._attempt_winning_days(paper_log, intento)
+            after = scheduler._replay_payout_cycles(paper_log, intento)["events"]
             if scheduler._check_payout_eligibility_crossed(before, after):
                 fired_days.append(day)
         assert fired_days == [5]  # dispara UNA sola vez, exactamente el dia que cruza a 5
@@ -298,7 +376,8 @@ class TestPayoutEligibilitySimulatedSequence:
         ]
         intento_nuevo = scheduler._current_intento(paper_log_tras_pase)
         assert intento_nuevo == 2
-        assert scheduler._attempt_winning_days(paper_log_tras_pase, intento_nuevo) == 0
+        state = scheduler._replay_payout_cycles(paper_log_tras_pase, intento_nuevo)
+        assert state["events"] == [] and state["winning_days_since_last"] == 0
 
 
 class TestAttemptResetIntegration:

@@ -370,13 +370,76 @@ def _attempt_winning_days(paper_log: list, intento: int) -> int:
                if e.get('pnl', 0) >= MIN_WINNING_DAY_USD)
 
 
-def _check_payout_eligibility_crossed(winning_days_before: int, winning_days_after: int) -> bool:
+def _replay_payout_cycles(paper_log: list, intento: int) -> dict:
+    """
+    Recorrido cronologico UNICO de las entradas resueltas del intento,
+    re-derivado COMPLETO de paper_log en cada corrida -- mismo
+    principio ya usado por _current_intento() (nunca un contador
+    separado que se pueda desincronizar del log real; "persistir en
+    el Gist" para este dato significa lo mismo que ya significa para
+    "intento": vive implicito en el log ya persistido, no en un campo
+    nuevo separado que alguien podria olvidar actualizar).
+
+    Implementa las DOS condiciones REALES de Topstep para elegibilidad
+    de payout (22-sep-2026, verificado contra help.topstep.com, ver
+    GLITCH_RESEARCH_LOG.md):
+      1. 5 dias ganadores (>= MIN_WINNING_DAY_USD) DESDE el ultimo
+         payout de este intento -- el conteo se REINICIA a 0 tras cada
+         payout ("your 5-day count restarts"), no es cada 5-multiplo
+         acumulado sin reinicio.
+      2. A partir del SEGUNDO payout: profit neto >= $0.01 desde el
+         balance registrado en el payout anterior ("positive net
+         profit since your last Payout"). El PRIMER payout esta
+         EXENTO de esta condicion.
+
+    Si dia-ganador-5 ya se cumplio pero el profit-gate (2) todavia no
+    (a partir del segundo payout), el intento queda BLOQUEADO: el
+    conteo de dias ganadores NO se reinicia por el bloqueo -- sigue
+    en o por encima del umbral, y el profit-gate se re-evalua cada
+    dia siguiente (incluyendo dias que en si mismos no son "ganadores"
+    pero si mueven el balance) hasta que tambien se cumpla, momento en
+    el que el payout se dispara con la fecha de ESE dia.
+
+    Devuelve {"events": [{"date", "balance", "n"} ...] (cronologico,
+    n=1,2,3... = numero de payout), "winning_days_since_last": int,
+    "balance": float (equity acumulado del intento completo, NO se
+    resetea por payout -- coincide con _attempt_pnl), "is_first_payout": bool}.
+    """
+    events: list[dict] = []
+    winning_since_last = 0
+    balance = 0.0
+    for e in _attempt_entries(paper_log, intento):
+        balance += e.get('pnl', 0)
+        if e.get('pnl', 0) >= MIN_WINNING_DAY_USD:
+            winning_since_last += 1
+        if winning_since_last >= WINNING_DAYS_REQUIRED:
+            is_first = not events
+            profit_ok = is_first or (balance - events[-1]["balance"] >= 0.01)
+            if profit_ok:
+                events.append({"date": e.get("date"), "balance": balance, "n": len(events) + 1})
+                winning_since_last = 0
+            # si no profit_ok: BLOQUEADO -- winning_since_last NO se
+            # reinicia, se re-evalua en la siguiente iteracion (el
+            # profit-gate puede volverse True en un dia posterior sin
+            # que ese dia sea "ganador" -- basta con que el balance
+            # supere el del ultimo payout).
+    return {
+        "events": events,
+        "winning_days_since_last": winning_since_last,
+        "balance": balance,
+        "is_first_payout": not events,
+    }
+
+
+def _check_payout_eligibility_crossed(events_before: list, events_after: list) -> bool:
     """Funcion PURA, testeable en aislamiento -- mismo patron que
-    _check_attempt_reset(). True solo en el CRUCE del umbral (before <
-    required <= after), nunca por estar ya por encima -- asi un intento
-    que ya tiene 6, 7, 8... dias ganadores (sin haber pasado por un
-    reinicio de intento) no reavisa cada corrida subsecuente."""
-    return winning_days_before < WINNING_DAYS_REQUIRED <= winning_days_after
+    _check_attempt_reset(). True solo cuando la entrada de HOY disparo
+    un NUEVO evento de payout (el conteo de eventos subio) -- funciona
+    igual para el primer payout y para cualquier payout posterior,
+    incluyendo el caso bloqueado-por-profit-gate que se libera el
+    mismo dia. Nunca reavisa por seguir en o por encima del umbral sin
+    un evento nuevo."""
+    return len(events_after) > len(events_before)
 
 
 def _attempt_trailing_floor(paper_log: list, intento: int) -> float:
@@ -743,15 +806,17 @@ def run():
     send(msg)
 
     # ── 5a. Elegibilidad de payout (22-sep-2026, pedido explicito del
-    #         usuario) -- capturar el intento y el conteo de dias
-    #         ganadores ANTES de agregar la entrada de hoy, para poder
-    #         detectar el CRUCE 4->5 (no solo el nivel) y no reavisar en
-    #         dias subsecuentes dentro del mismo intento. intento_hoy se
+    #         usuario; extendido el mismo dia con el profit-gate real
+    #         de Topstep a partir del segundo payout, ver
+    #         GLITCH_RESEARCH_LOG.md) -- capturar el estado del ciclo de
+    #         payout ANTES de agregar la entrada de hoy, para poder
+    #         detectar el CRUCE (nuevo evento disparado hoy, no solo el
+    #         nivel) y no reavisar en dias subsecuentes. intento_hoy se
     #         guarda por separado porque intento_actual puede reasignarse
     #         mas abajo (PASE/QUIEBRE) -- el cruce de elegibilidad de HOY
     #         pertenece al intento en el que HOY realmente se tageo. ──
     intento_hoy = intento_actual
-    winning_days_before = _attempt_winning_days(paper_log, intento_hoy)
+    payout_state_before = _replay_payout_cycles(paper_log, intento_hoy)
 
     paper_log.append({
         "date": today_str, "signal": True, "side": side,
@@ -764,7 +829,7 @@ def run():
     save_log(paper_log)
     save_pending({})  # posicion resuelta normalmente -- nada pendiente que reconciliar
 
-    winning_days_after = _attempt_winning_days(paper_log, intento_hoy)
+    payout_state_after = _replay_payout_cycles(paper_log, intento_hoy)
 
     # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) -- 09-sep-2026,
     #         ver GLITCH_RESEARCH_LOG.md. Mensaje separado del resumen
@@ -775,11 +840,15 @@ def run():
     #         pico de hoy ya cuenta para el floor de este chequeo. ──
     attempt_pnl_after = attempt_pnl_before + pnl
 
-    # ── 5a-bis. Alerta de elegibilidad de payout -- SOLO en el cruce
-    #         4->5 (no en cada dia que ya esta en >=5), usando el mismo
-    #         attempt_pnl_after de arriba como "balance actual" (mismo
-    #         concepto que core/funded_account.py::simulate_xfa_lifetime
-    #         -- PnL acumulado desde $0 relativo al intento, NO el
+    # ── 5a-bis. Alerta de elegibilidad de payout -- SOLO cuando HOY
+    #         dispara un evento NUEVO (nunca por seguir bloqueado en
+    #         >=5 dias ganadores esperando el profit-gate, ni por
+    #         seguir elegible tras ya haber avisado). "balance actual"
+    #         = payout_state_after["events"][-1]["balance"], que
+    #         coincide con attempt_pnl_after (el replay de arriba NO
+    #         resetea `balance` tras un payout -- mismo concepto que
+    #         core/funded_account.py::simulate_xfa_lifetime, PnL
+    #         acumulado desde $0 relativo al intento, NO el
     #         account_size de $150,000). min(balance*50%, cap) -- misma
     #         formula exacta del Monte Carlo ya validado
     #         (XFA_150K.payout_pct_of_balance/payout_cap_usd), sin
@@ -788,12 +857,15 @@ def run():
     #         mismo intento_hoy/attempt_pnl_after -- si ademas hoy
     #         cruza PASE/QUIEBRE, son dos eventos distintos y se avisan
     #         los dos, cada uno con su propio mensaje. ──
-    if _check_payout_eligibility_crossed(winning_days_before, winning_days_after):
-        payout_recomendado = min(attempt_pnl_after * XFA_150K.payout_pct_of_balance, XFA_150K.payout_cap_usd)
+    if _check_payout_eligibility_crossed(payout_state_before["events"], payout_state_after["events"]):
+        nuevo_evento = payout_state_after["events"][-1]
+        payout_recomendado = min(nuevo_evento["balance"] * XFA_150K.payout_pct_of_balance, XFA_150K.payout_cap_usd)
+        ordinal = "primer" if nuevo_evento["n"] == 1 else f"#{nuevo_evento['n']}"
         eligible_msg = (f"{PREFIX} [ELEGIBLE PARA PAYOUT]\n"
                         f"ELEGIBLE PARA PAYOUT: {WINNING_DAYS_REQUIRED} dias ganadores acumulados "
-                        f"(intento #{intento_hoy}).\n"
-                        f"Payout recomendado: 50% del balance actual (${attempt_pnl_after:,.2f}) = "
+                        f"desde el ultimo payout (intento #{intento_hoy}, este es el {ordinal} payout"
+                        f"{' -- exento de la condicion de profit neto' if nuevo_evento['n'] == 1 else ''}).\n"
+                        f"Payout recomendado: 50% del balance actual (${nuevo_evento['balance']:,.2f}) = "
                         f"${payout_recomendado:,.2f} (regla ya validada por Monte Carlo: retirar de "
                         f"inmediato, no esperar).\n"
                         f"{utc_now_str()}")
@@ -872,10 +944,20 @@ def run():
     attempt_equity = _attempt_pnl(paper_log, intento_actual)
     attempt_peak = _attempt_peak(paper_log, intento_actual)  # PORTADO (16-sep-2026) desde geometry_scheduler.py -- gap de paridad
     attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
-    winning_days_now = _attempt_winning_days(paper_log, intento_actual)
-    next_payout_line = f"{winning_days_now}/{WINNING_DAYS_REQUIRED} dias ganadores"
+    # Usa intento_actual (no intento_hoy) por la misma razon que
+    # attempt_equity/attempt_peak arriba -- si PASE/QUIEBRE reinicio el
+    # intento, el ciclo de payout del intento NUEVO arranca en 0/5 sin
+    # eventos, por construccion de _replay_payout_cycles().
+    payout_state_now = _replay_payout_cycles(paper_log, intento_actual)
+    winning_days_now = payout_state_now["winning_days_since_last"]
+    next_payout_line = f"{winning_days_now}/{WINNING_DAYS_REQUIRED} dias ganadores desde el ultimo payout"
     if winning_days_now >= WINNING_DAYS_REQUIRED:
-        next_payout_line += " (ELEGIBLE)"
+        # 5+ dias ganadores pero SIN evento nuevo disparado hoy (si lo
+        # hubiera disparado, _replay_payout_cycles ya lo habria
+        # resetado a 0) -- solo puede significar que esta BLOQUEADO
+        # esperando el profit-gate del segundo payout en adelante.
+        profit_since = payout_state_now["balance"] - payout_state_now["events"][-1]["balance"]
+        next_payout_line += f" (BLOQUEADO -- profit neto desde el ultimo payout: ${profit_since:+,.2f}, requiere >= $0.01)"
 
     summary = (f"{PREFIX}\n"
                f"Next Payout: {next_payout_line}\n"
