@@ -1,0 +1,59 @@
+MOTOR: diario empirico (FLATTEN real, timing real). T=20000 trayectorias, 252 dias = 12 meses de 21d. Fix balance>0 en payout. OPS=$45.0/mes
+
+== 1. UNA CUENTA, 12 meses: payout total (p10 p25 p50 p75 p90) | media | P(>=1 payout) | fees/año | neto/año p10 p50 p90 | P(neto año<0)
+ 50K-A payout:     2,467     4,026     6,404     9,506    12,890 | media    7,146 | P>=1 1.00 | fees  2,701 | neto   -1,025    3,153    9,935 | P(neto<0) 0.19 | (as-is p50 6,331)
+ 50K-B payout:     5,921     8,115    10,986    14,461    18,140 | media   11,588 | P>=1 1.00 | fees  3,641 | neto    1,297    6,791   14,428 | P(neto<0) 0.05 | (as-is p50 10,892)
+100K-A payout:     2,054     3,860     6,736    10,611    14,932 | media    7,790 | P>=1 0.99 | fees  2,965 | neto   -1,717    3,183   11,718 | P(neto<0) 0.23 | (as-is p50 6,585)
+100K-B payout:     8,638    11,596    15,511    20,265    25,227 | media   16,358 | P>=1 1.00 | fees  4,257 | neto    3,292   10,725   21,054 | P(neto<0) 0.02 | (as-is p50 15,235)
+150K-A payout:     3,105     5,837    10,101    15,864    22,270 | media   11,675 | P>=1 0.99 | fees  3,897 | neto   -1,728    5,619   18,242 | P(neto<0) 0.18 | (as-is p50 9,890)
+150K-B payout:    13,092    17,495    23,367    30,347    37,498 | media   24,508 | P>=1 1.00 | fees  5,226 | neto    6,644   17,567   32,493 | P(neto<0) 0.01 | (as-is p50 22,915)
+
+== 3. DISTRIBUCION MENSUAL (una cuenta). Meses 4-12 agrupados = regimen estable. payout p10 p25 p50 p75 p90 | P(payout=0) | neto mensual (payout-fees-OPS) p10 p50 p90 | P(neto<0)
+ 50K-A         0         0         0       984     1,968 | P0 0.60 | neto    -392    -241   1,760 | P(neto<0) 0.63 | media neto     357
+ 50K-B         0         0       596     1,541     2,745 | P0 0.39 | neto    -490     258   2,558 | P(neto<0) 0.44 | media neto     655
+100K-A         0         0         0       915     2,325 | P0 0.65 | neto    -392    -243   2,092 | P(neto<0) 0.67 | media neto     398
+100K-B         0         0       888     2,136     3,792 | P0 0.33 | neto    -541     475   3,589 | P(neto<0) 0.40 | media neto   1,015
+150K-A         0         0         0     1,389     3,518 | P0 0.64 | neto    -492    -343   3,231 | P(neto<0) 0.67 | media neto     664
+150K-B         0         0     1,354     3,229     5,706 | P0 0.32 | neto    -641     855   5,473 | P(neto<0) 0.38 | media neto   1,638
+
+P(payout=0) y mediana de payout por mes calendario (1..12):
+ 50K-A P0: 0.76 0.60 0.60 0.60 0.60 0.60 0.60 0.60 0.60 0.60 0.60 0.60 | mediana:     0     0     0     0     0     0     0     0     0     0     0     0
+ 50K-B P0: 0.54 0.39 0.39 0.40 0.39 0.39 0.39 0.39 0.39 0.39 0.39 0.39 | mediana:     0   587   603   587   582   583   594   588   609   603   607   614
+100K-A P0: 0.84 0.64 0.65 0.65 0.65 0.64 0.65 0.64 0.65 0.65 0.64 0.65 | mediana:     0     0     0     0     0     0     0     0     0     0     0     0
+100K-B P0: 0.48 0.33 0.33 0.33 0.33 0.33 0.33 0.33 0.33 0.33 0.33 0.33 | mediana:   140   885   886   887   886   887   887   880   905   864   899   895
+150K-A P0: 0.84 0.64 0.64 0.64 0.64 0.64 0.64 0.64 0.65 0.64 0.64 0.64 | mediana:     0     0     0     0     0     0     0     0     0     0     0     0
+150K-B P0: 0.47 0.32 0.32 0.32 0.32 0.32 0.32 0.32 0.32 0.33 0.32 0.32 | mediana:   271  1333  1357  1355  1357  1344  1355  1349  1375  1322  1372  1360
+
+== 2. CINCO CUENTAS DEL MISMO TAMAÑO (correlacionado = mismas 5 replicas; independiente = referencia irreal)
+5x 50K-A CORR payout:    12,334    20,129    32,022    47,532    64,451 | colchon p50/p90   3,215/  8,625 | neto año p10/p50/p90   -2,964/  17,926/  51,835
+           IND  payout:    24,242    29,047    34,963    41,679    48,256 | colchon p90   2,527 (subestima 3.4x)
+5x 50K-B CORR payout:    29,606    40,575    54,930    72,303    90,702 | colchon p50/p90   2,470/  7,175 | neto año p10/p50/p90    8,646/  36,117/  74,298
+           IND  payout:    44,654    50,278    57,306    64,824    72,008 | colchon p90   2,195 (subestima 3.3x)
+5x100K-A CORR payout:    10,268    19,302    33,678    53,053    74,659 | colchon p50/p90   4,449/ 11,025 | neto año p10/p50/p90   -6,427/  18,076/  60,751
+           IND  payout:    24,690    30,551    37,837    46,273    55,025 | colchon p90   3,518 (subestima 3.1x)
+5x100K-B CORR payout:    43,190    57,981    77,553   101,327   126,137 | colchon p50/p90   2,480/  7,393 | neto año p10/p50/p90   18,621/  55,787/ 107,429
+           IND  payout:    63,796    71,583    81,017    91,134   101,167 | colchon p90   2,430 (subestima 3.0x)
+5x150K-A CORR payout:    15,527    29,187    50,505    79,320   111,350 | colchon p50/p90   5,215/ 14,155 | neto año p10/p50/p90   -6,480/  30,254/  93,372
+           IND  payout:    37,116    45,928    56,776    69,205    81,987 | colchon p90   4,470 (subestima 3.2x)
+5x150K-B CORR payout:    65,459    87,476   116,834   151,736   187,491 | colchon p50/p90   2,980/  8,484 | neto año p10/p50/p90   35,381/  89,995/ 164,623
+           IND  payout:    95,916   107,464   121,540   136,511   150,981 | colchon p90   2,891 (subestima 2.9x)
+
+== 5. MEZCLAS DE TAMAÑO (mismas D para todas las cuentas = mismo mercado). Pipeline A y B
+-- pipeline A
+                5x150K: payout/año    15,527    29,187    50,505    79,320   111,350 | media   58,373 CV 0.67 | mes(4-12) P(payout=0) 0.64 P(neto<0) 0.66 | neto/mes p10/p50/p90  -2,280/ -1,535/ 16,337 | colchon p90  14,155 | P(neto año<0) 0.16
+                5x100K: payout/año    10,268    19,302    33,678    53,053    74,659 | media   38,950 CV 0.68 | mes(4-12) P(payout=0) 0.65 P(neto<0) 0.67 | neto/mes p10/p50/p90  -1,780/ -1,035/ 10,642 | colchon p90  11,025 | P(neto año<0) 0.20
+                 5x50K: payout/año    12,334    20,129    32,022    47,532    64,451 | media   35,731 CV 0.59 | mes(4-12) P(payout=0) 0.60 P(neto<0) 0.62 | neto/mes p10/p50/p90  -1,780/ -1,025/  8,982 | colchon p90   8,625 | P(neto año<0) 0.15
+   2x150K+2x100K+1x50K: payout/año    13,473    23,923    40,106    62,199    86,671 | media   46,076 CV 0.65 | mes(4-12) P(payout=0) 0.53 P(neto<0) 0.64 | neto/mes p10/p50/p90  -1,929/ -1,135/ 12,310 | colchon p90  11,039 | P(neto año<0) 0.16
+          3x100K+2x50K: payout/año    12,081    20,369    33,018    50,194    69,560 | media   37,663 CV 0.62 | mes(4-12) P(payout=0) 0.53 P(neto<0) 0.59 | neto/mes p10/p50/p90  -1,678/   -933/  9,619 | colchon p90   9,003 | P(neto año<0) 0.16
+                1x150K: payout/año     3,105     5,837    10,101    15,864    22,270 | media   11,675 CV 0.67 | mes(4-12) P(payout=0) 0.64 P(neto<0) 0.67 | neto/mes p10/p50/p90    -492/   -343/  3,231 | colchon p90   2,831 | P(neto año<0) 0.18
+   correlacion de payout anual entre tamaños (mismo mercado): 50K-100K 0.85 | 50K-150K 0.85 | 100K-150K 0.99
+   payout medio/año por $ de MLL: 50K: 3.57 | 100K: 2.60 | 150K: 2.59
+-- pipeline B
+                5x150K: payout/año    65,459    87,476   116,834   151,736   187,491 | media  122,541 CV 0.39 | mes(4-12) P(payout=0) 0.32 P(neto<0) 0.38 | neto/mes p10/p50/p90  -3,025/  4,454/ 27,547 | colchon p90   8,484 | P(neto año<0) 0.01
+                5x100K: payout/año    43,190    57,981    77,553   101,327   126,137 | media   81,788 CV 0.40 | mes(4-12) P(payout=0) 0.33 P(neto<0) 0.39 | neto/mes p10/p50/p90  -2,525/  2,556/ 18,126 | colchon p90   7,393 | P(neto año<0) 0.02
+                 5x50K: payout/año    29,606    40,575    54,930    72,303    90,702 | media   57,939 CV 0.41 | mes(4-12) P(payout=0) 0.39 P(neto<0) 0.44 | neto/mes p10/p50/p90  -2,270/  1,468/ 12,972 | colchon p90   7,175 | P(neto año<0) 0.04
+   2x150K+2x100K+1x50K: payout/año    49,958    66,549    88,712   115,391   143,105 | media   93,319 CV 0.39 | mes(4-12) P(payout=0) 0.28 P(neto<0) 0.38 | neto/mes p10/p50/p90  -2,674/  3,112/ 20,473 | colchon p90   7,417 | P(neto año<0) 0.01
+          3x100K+2x50K: payout/año    38,505    51,373    68,562    89,427   110,918 | media   72,248 CV 0.40 | mes(4-12) P(payout=0) 0.29 P(neto<0) 0.38 | neto/mes p10/p50/p90  -2,423/  2,117/ 15,589 | colchon p90   6,791 | P(neto año<0) 0.02
+                1x150K: payout/año    13,092    17,495    23,367    30,347    37,498 | media   24,508 CV 0.39 | mes(4-12) P(payout=0) 0.32 P(neto<0) 0.38 | neto/mes p10/p50/p90    -641/    855/  5,473 | colchon p90   1,697 | P(neto año<0) 0.01
+   correlacion de payout anual entre tamaños (mismo mercado): 50K-100K 0.91 | 50K-150K 0.90 | 100K-150K 0.98
+   payout medio/año por $ de MLL: 50K: 5.79 | 100K: 5.45 | 150K: 5.45
