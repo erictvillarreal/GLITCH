@@ -103,6 +103,7 @@ from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E4
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
 from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
 from core.prop_firm import TOPSTEP_150K  # noqa: E402
+from core.funded_account import XFA_150K  # noqa: E402
 
 CT = ZoneInfo("America/Chicago")
 # Logging con timestamp SIEMPRE en America/Chicago -- mismo fix del
@@ -188,6 +189,16 @@ DIAS_ESPERADOS = 13.9
 # candidato antes de reusar estos numeros en un candidato nuevo.
 PROFIT_TARGET = TOPSTEP_150K.profit_target      # $9,000
 MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500
+
+# Elegibilidad de payout REAL de Topstep (distinta de PASE/QUIEBRE de arriba,
+# que son los umbrales de Combine reusados aqui como limite de "intento" --
+# ver docstring de run(), este scheduler NO simula el ciclo de payout real de
+# la XFA). 5 dias con PnL neto del dia >= $150, SIN importar si el dia
+# resolvio TP/SL/FLATTEN -- criterio DISTINTO de "balance/equity acumulado
+# positivo" (22-sep-2026, pedido explicito del usuario de no confundir
+# ambos). Fuente unica: XFA_150K (core/funded_account.py), no hardcodeado.
+MIN_WINNING_DAY_USD = XFA_150K.min_winning_day_usd     # $150
+WINNING_DAYS_REQUIRED = XFA_150K.winning_days_required  # 5
 
 _front_month_cache: dict[str, tuple[str, str]] = {}
 
@@ -333,6 +344,39 @@ def _attempt_peak(paper_log: list, intento: int) -> float:
         if running > peak:
             peak = running
     return peak
+
+
+def _attempt_winning_days(paper_log: list, intento: int) -> int:
+    """
+    Conteo REAL de elegibilidad de payout de Topstep (22-sep-2026, pedido
+    explicito del usuario): dias DENTRO del intento actual con PnL neto
+    del dia >= MIN_WINNING_DAY_USD ($150) -- cuenta CUALQUIER dia
+    resuelto (TP, SL o FLATTEN) que cumpla el monto, no solo los TP.
+    Un SL o FLATTEN nunca llega a +$150 en esta geometria (SL=TP=364
+    ticks, el unico resultado con pnl positivo grande es TP), pero la
+    funcion no asume eso -- lee pnl real de cada entrada, igual que
+    _attempt_peak()/_attempt_pnl().
+
+    NO confundir con equity/balance acumulado del intento
+    (_attempt_pnl): son criterios DISTINTOS por diseño de Topstep -- un
+    intento puede tener equity acumulado bajo o negativo y aun asi
+    tener 5 dias individuales de +$150 (si estan intercalados con SL
+    grandes), y viceversa. _attempt_entries() ya excluye RECONCILED por
+    construccion (mismo filtro que el resto de este modulo) -- un dia
+    con posicion pendiente sin resolver nunca cuenta como dia ganador
+    hasta que se reconcilie con un resultado real.
+    """
+    return sum(1 for e in _attempt_entries(paper_log, intento)
+               if e.get('pnl', 0) >= MIN_WINNING_DAY_USD)
+
+
+def _check_payout_eligibility_crossed(winning_days_before: int, winning_days_after: int) -> bool:
+    """Funcion PURA, testeable en aislamiento -- mismo patron que
+    _check_attempt_reset(). True solo en el CRUCE del umbral (before <
+    required <= after), nunca por estar ya por encima -- asi un intento
+    que ya tiene 6, 7, 8... dias ganadores (sin haber pasado por un
+    reinicio de intento) no reavisa cada corrida subsecuente."""
+    return winning_days_before < WINNING_DAYS_REQUIRED <= winning_days_after
 
 
 def _attempt_trailing_floor(paper_log: list, intento: int) -> float:
@@ -698,6 +742,17 @@ def run():
            f"{utc_now_str()}")
     send(msg)
 
+    # ── 5a. Elegibilidad de payout (22-sep-2026, pedido explicito del
+    #         usuario) -- capturar el intento y el conteo de dias
+    #         ganadores ANTES de agregar la entrada de hoy, para poder
+    #         detectar el CRUCE 4->5 (no solo el nivel) y no reavisar en
+    #         dias subsecuentes dentro del mismo intento. intento_hoy se
+    #         guarda por separado porque intento_actual puede reasignarse
+    #         mas abajo (PASE/QUIEBRE) -- el cruce de elegibilidad de HOY
+    #         pertenece al intento en el que HOY realmente se tageo. ──
+    intento_hoy = intento_actual
+    winning_days_before = _attempt_winning_days(paper_log, intento_hoy)
+
     paper_log.append({
         "date": today_str, "signal": True, "side": side,
         "direction": direction_str, "entry": entry_price,
@@ -709,6 +764,8 @@ def run():
     save_log(paper_log)
     save_pending({})  # posicion resuelta normalmente -- nada pendiente que reconciliar
 
+    winning_days_after = _attempt_winning_days(paper_log, intento_hoy)
+
     # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) -- 09-sep-2026,
     #         ver GLITCH_RESEARCH_LOG.md. Mensaje separado del resumen
     #         diario normal, enviado el mismo dia que ocurre. CORREGIDO
@@ -717,6 +774,32 @@ def run():
     #         incluye la entrada de HOY (append de arriba), asi que el
     #         pico de hoy ya cuenta para el floor de este chequeo. ──
     attempt_pnl_after = attempt_pnl_before + pnl
+
+    # ── 5a-bis. Alerta de elegibilidad de payout -- SOLO en el cruce
+    #         4->5 (no en cada dia que ya esta en >=5), usando el mismo
+    #         attempt_pnl_after de arriba como "balance actual" (mismo
+    #         concepto que core/funded_account.py::simulate_xfa_lifetime
+    #         -- PnL acumulado desde $0 relativo al intento, NO el
+    #         account_size de $150,000). min(balance*50%, cap) -- misma
+    #         formula exacta del Monte Carlo ya validado
+    #         (XFA_150K.payout_pct_of_balance/payout_cap_usd), sin
+    #         reimplementarla con numeros nuevos. Se evalua ANTES del
+    #         chequeo de PASE/QUIEBRE de abajo porque ambos leen el
+    #         mismo intento_hoy/attempt_pnl_after -- si ademas hoy
+    #         cruza PASE/QUIEBRE, son dos eventos distintos y se avisan
+    #         los dos, cada uno con su propio mensaje. ──
+    if _check_payout_eligibility_crossed(winning_days_before, winning_days_after):
+        payout_recomendado = min(attempt_pnl_after * XFA_150K.payout_pct_of_balance, XFA_150K.payout_cap_usd)
+        eligible_msg = (f"{PREFIX} [ELEGIBLE PARA PAYOUT]\n"
+                        f"ELEGIBLE PARA PAYOUT: {WINNING_DAYS_REQUIRED} dias ganadores acumulados "
+                        f"(intento #{intento_hoy}).\n"
+                        f"Payout recomendado: 50% del balance actual (${attempt_pnl_after:,.2f}) = "
+                        f"${payout_recomendado:,.2f} (regla ya validada por Monte Carlo: retirar de "
+                        f"inmediato, no esperar).\n"
+                        f"{utc_now_str()}")
+        send(eligible_msg)
+        log.info(eligible_msg.replace("\n", " | "))
+
     attempt_floor = _attempt_trailing_floor(paper_log, intento_actual)
     event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, attempt_floor)
     if event is not None:
@@ -758,16 +841,35 @@ def run():
     # Dias vs. Estimado caen naturalmente en 0.00/0, consistente con
     # "Iniciando intento #N+1 desde $0" del mensaje de reinicio de arriba.
     #
-    # Next Payout / Payout Total: placeholder deliberado -- este scheduler
-    # no implementa la regla de elegibilidad real de Topstep (5 dias
-    # ganadores de $150+ neto, O balance >= $55k). Implementar eso es
-    # logica nueva, fuera de alcance de este cambio.
+    # Next Payout: implementado (22-sep-2026) -- conteo real de dias
+    # ganadores (>=$150 neto) del intento actual, ver _attempt_winning_days().
+    # Usa intento_actual (no intento_hoy) a proposito: si PASE/QUIEBRE
+    # reinicio el intento arriba, el conteo del intento NUEVO es 0 por
+    # construccion (ningun dia registrado todavia) -- consistente con
+    # "Iniciando intento #N+1 desde $0" del mensaje de reinicio.
+    #
+    # Payout Total: SIGUE siendo placeholder deliberado -- distinto de
+    # Next Payout. Trackear el total de payouts ya COBRADOS requeriria
+    # modelar el evento "el usuario solicito y cobro el payout" (que no
+    # existe en este paper trading -- ver la alerta ELEGIBLE arriba, es
+    # una recomendacion, no una accion automatica). Fuera de alcance de
+    # este cambio, igual que antes.
+    #
+    # NOTA (no verificada, ver reporte): existe un comentario legado en
+    # este mismo modulo mencionando una ruta alterna de elegibilidad
+    # ("balance >= $55k") -- NO esta en core/funded_account.py::XFASpec
+    # ni en ningun research log -- NO implementada aqui, solo la ruta
+    # de "5 dias ganadores" que SI esta validada por el Monte Carlo.
     attempt_equity = _attempt_pnl(paper_log, intento_actual)
     attempt_peak = _attempt_peak(paper_log, intento_actual)  # PORTADO (16-sep-2026) desde geometry_scheduler.py -- gap de paridad
     attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
+    winning_days_now = _attempt_winning_days(paper_log, intento_actual)
+    next_payout_line = f"{winning_days_now}/{WINNING_DAYS_REQUIRED} dias ganadores"
+    if winning_days_now >= WINNING_DAYS_REQUIRED:
+        next_payout_line += " (ELEGIBLE)"
 
     summary = (f"{PREFIX}\n"
-               f"Next Payout: sin tracking de elegibilidad implementado todavia\n"
+               f"Next Payout: {next_payout_line}\n"
                f"Payout Total: sin tracking de elegibilidad implementado todavia\n"
                f"Equity: ${attempt_equity:,.2f}\n"
                f"Peak: ${attempt_peak:,.2f}\n"

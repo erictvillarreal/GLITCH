@@ -176,6 +176,131 @@ class TestAttemptTrailingFloor:
         assert scheduler._attempt_trailing_floor(log, 2) == scheduler.MLL_THRESHOLD
 
 
+class TestAttemptWinningDays:
+    """22-sep-2026, pedido explicito del usuario -- contador REAL de
+    elegibilidad de payout de Topstep (5 dias con PnL neto >= $150),
+    DISTINTO de equity/balance acumulado (_attempt_pnl)."""
+
+    def test_min_winning_day_usd_matches_xfa_150k(self):
+        from core.funded_account import XFA_150K
+        assert scheduler.MIN_WINNING_DAY_USD == XFA_150K.min_winning_day_usd == 150.0
+        assert scheduler.WINNING_DAYS_REQUIRED == XFA_150K.winning_days_required == 5
+
+    def test_counts_days_at_or_above_threshold_only(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 2184, "intento": 1},   # cuenta
+            {"date": "2026-09-02", "result": "SL", "pnl": -2196, "intento": 1},  # no cuenta
+            {"date": "2026-09-03", "result": "TP", "pnl": 149.99, "intento": 1},  # justo debajo, no cuenta
+            {"date": "2026-09-04", "result": "TP", "pnl": 150.0, "intento": 1},  # exacto, SI cuenta
+        ]
+        assert scheduler._attempt_winning_days(log, 1) == 2
+
+    def test_flatten_with_pnl_above_threshold_counts_too(self):
+        """La regla es sobre el PnL del dia, no sobre que barrera se
+        toco -- un FLATTEN que por lo que sea cerro en +$150 o mas
+        tambien es un dia ganador elegible."""
+        log = [{"date": "2026-09-01", "result": "FLATTEN", "pnl": 300, "intento": 1}]
+        assert scheduler._attempt_winning_days(log, 1) == 1
+
+    def test_does_not_leak_across_attempts(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 2184, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 2184, "intento": 2},
+        ]
+        assert scheduler._attempt_winning_days(log, 2) == 1
+
+    def test_reconciled_entry_never_counts_as_winning_day(self):
+        """Una posicion pendiente sin resolver (RECONCILED) nunca cuenta
+        como dia ganador, aunque su pnl estimado sea >= $150 -- misma
+        exclusion ya aplicada a equity/peak via _attempt_entries()."""
+        log = [{"date": "2026-09-01", "result": "RECONCILED", "pnl": 5000,
+                "pnl_estimated": True, "reconciled": True, "intento": 1}]
+        assert scheduler._attempt_winning_days(log, 1) == 0
+
+    def test_high_equity_with_zero_winning_days_is_possible(self):
+        """Confirma explicitamente que equity acumulado y dias ganadores
+        son criterios INDEPENDIENTES -- un intento puede tener equity
+        positivo alto sin ningun dia individual >= $150 (ej. muchos
+        dias pequeños), pedido explicito del usuario de no confundirlos."""
+        log = [{"date": f"2026-09-{d:02d}", "result": "TP", "pnl": 50, "intento": 1} for d in range(1, 11)]
+        assert scheduler._attempt_pnl(log, 1) == 500  # equity alto
+        assert scheduler._attempt_winning_days(log, 1) == 0  # pero ningun dia individual califica
+
+    def test_low_or_negative_equity_with_five_winning_days_is_possible(self):
+        log = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 200, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 200, "intento": 1},
+            {"date": "2026-09-03", "result": "TP", "pnl": 200, "intento": 1},
+            {"date": "2026-09-04", "result": "TP", "pnl": 200, "intento": 1},
+            {"date": "2026-09-05", "result": "TP", "pnl": 200, "intento": 1},
+            {"date": "2026-09-06", "result": "SL", "pnl": -1200, "intento": 1},  # equity: 1000-1200=-200
+        ]
+        assert scheduler._attempt_pnl(log, 1) == -200
+        assert scheduler._attempt_winning_days(log, 1) == 5
+
+
+class TestCheckPayoutEligibilityCrossed:
+    """Funcion PURA, mismo patron que TestCheckAttemptReset -- solo
+    dispara en el CRUCE (4->5), nunca por estar ya en o por encima del
+    umbral, para que el llamador (run()) no reavise cada dia."""
+
+    def test_fires_exactly_on_the_crossing(self):
+        assert scheduler._check_payout_eligibility_crossed(4, 5) is True
+
+    def test_does_not_fire_when_staying_below(self):
+        assert scheduler._check_payout_eligibility_crossed(2, 3) is False
+
+    def test_does_not_refire_when_already_at_or_above(self):
+        """El caso critico pedido explicitamente: dias 6, 7, 8... del
+        mismo intento (ya elegible) NO deben re-disparar el aviso."""
+        assert scheduler._check_payout_eligibility_crossed(5, 6) is False
+        assert scheduler._check_payout_eligibility_crossed(5, 5) is False
+        assert scheduler._check_payout_eligibility_crossed(7, 8) is False
+
+    def test_fires_even_on_a_jump_that_skips_the_exact_boundary(self):
+        """Improbable con esta geometria (un solo ciclo por dia), pero
+        la funcion debe ser correcta igual: un salto de 3->6 (ej. si se
+        reconciliaran varios dias pendientes de una sola corrida) debe
+        disparar una sola vez, no fallar por no pasar exactamente por 5."""
+        assert scheduler._check_payout_eligibility_crossed(3, 6) is True
+
+    def test_does_not_fire_on_a_fresh_attempt_starting_from_zero(self):
+        assert scheduler._check_payout_eligibility_crossed(0, 1) is False
+
+
+class TestPayoutEligibilitySimulatedSequence:
+    """Simulacion de varios 'dias' compuestos con las funciones puras
+    reales (mismo patron que TestCurrentIntentoAdvancesPastCompletedAttempt
+    -- sin invocar run(), que hace I/O de red), para confirmar el
+    comportamiento end-to-end del contador + el disparo de una sola vez."""
+
+    def test_crosses_on_day_5_then_never_refires_through_day_8(self):
+        paper_log = []
+        intento = 1
+        fired_days = []
+        for day, pnl in enumerate([2184, 2184, 2184, 2184, 2184, 2184, 2184], start=1):
+            before = scheduler._attempt_winning_days(paper_log, intento)
+            paper_log.append({"date": f"2026-09-{day:02d}", "result": "TP", "pnl": pnl, "intento": intento})
+            after = scheduler._attempt_winning_days(paper_log, intento)
+            if scheduler._check_payout_eligibility_crossed(before, after):
+                fired_days.append(day)
+        assert fired_days == [5]  # dispara UNA sola vez, exactamente el dia que cruza a 5
+
+    def test_after_attempt_resets_the_next_attempt_starts_the_count_at_zero(self):
+        """Confirma que un intento NUEVO (post PASE/QUIEBRE) empieza su
+        propio conteo desde 0 -- consistente con 'Iniciando intento
+        #N+1 desde $0' del mensaje de reinicio ya existente. Escenario:
+        un intento QUE YA PASO (PASE real via profit_target), seguido
+        del intento siguiente, todavia sin ningun dia registrado."""
+        paper_log_tras_pase = [
+            {"date": "2026-09-01", "result": "TP", "pnl": 4500, "intento": 1},
+            {"date": "2026-09-02", "result": "TP", "pnl": 4500, "intento": 1},  # 9000, PASE
+        ]
+        intento_nuevo = scheduler._current_intento(paper_log_tras_pase)
+        assert intento_nuevo == 2
+        assert scheduler._attempt_winning_days(paper_log_tras_pase, intento_nuevo) == 0
+
+
 class TestAttemptResetIntegration:
     def test_full_reset_cycle_after_pass(self):
         # Intento 1: dos TP que acumulan a 9200 -> PASE.
