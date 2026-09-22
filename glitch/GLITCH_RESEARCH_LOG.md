@@ -1560,3 +1560,15 @@ Raspberry Pi OS 64-bit (Bookworm o más reciente), Python 3.11+. La única depen
 
 **Estado: diseño completo, sin implementación contra la API real (no hay credenciales de ProjectX activas ni Pi físico todavía).** Rama `design/pi-execution` aislada de `main`/`cerebro2-dev` — cero riesgo para los schedulers en producción.
 
+
+## Playbook de migración a Raspberry Pi, formato ejecutable (22-sep-2026)
+
+Pedido explícito del usuario: no un diseño nuevo, sino consolidar el diseño ya hecho (11-sep-2026, `pi/pi_executor.py`, esta misma rama) en un checklist ejecutable para el día que el hardware llegue. Documento nuevo: `RASPBERRY_PI_MIGRATION_PLAYBOOK.md` (raíz de `glitch/`), 6 secciones (inventario, pre-requisitos, setup de hardware/OS, plan de fallas, secuencia de transición, estado actual vs. pendiente).
+
+**Verificado antes de escribir (sin asumir que el diseño de hace 11 días sigue vigente):** `pi/pi_executor.py` sigue con 8 `NotImplementedError`, sin cambios desde el commit original — nada implementado, nada contradicho. `DRY_RUN` en `geometry_scheduler.py` sigue siendo solo una etiqueta (confirmado de nuevo con grep), el cambio de código necesario en Railway sigue pendiente. `brokers/projectx.py` sigue huérfano con el mismo `OrderSide` invertido respecto a la doc oficial, sin resolver.
+
+**Nota de honestidad:** la ventana de paper trading del Pi "1–15 de octubre" que el usuario dio como "ya acordada" NO se encontró documentada en ningún punto de este research log — se usó tal cual la dio el usuario, marcada explícitamente en el documento como no verificada independientemente por este agente (mismo estándar que ya se aplicó al "$55k": no repetir un número sin fuente como si fuera confirmado).
+
+**Hallazgo lateral, NO relacionado con esta rama, reportado aparte al usuario:** el directorio por defecto de esta sesión (`GLITCH-main`, distinto del checkout usado toda la sesión, `GLITCH-clean`) tiene un `main` local desincronizado de `origin/main` (diverge 61 commits atrás, con 7 commits locales propios nunca pusheados: deploy-config, DRY_RUN graduation criterion, Camino B production module). No se tocó — es de otro checkout, fuera del alcance de esta tarea.
+
+**Resumen de lo que falta (Sección 6 del playbook):** todo lo pendiente NO necesita el hardware físico — resolver el bloqueante de `OrderSide` contra una cuenta de práctica, implementar las 8 funciones de `pi_executor.py`, implementar el `DRY_RUN` real en Railway, y confirmar el modo "Auto OCO Brackets" de la cuenta. El hardware en sí (Sección 3) es lo único que sí depende de la compra.
