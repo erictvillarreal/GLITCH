@@ -855,11 +855,20 @@ def run():
     # una recomendacion, no una accion automatica). Fuera de alcance de
     # este cambio, igual que antes.
     #
-    # NOTA (no verificada, ver reporte): existe un comentario legado en
-    # este mismo modulo mencionando una ruta alterna de elegibilidad
-    # ("balance >= $55k") -- NO esta en core/funded_account.py::XFASpec
-    # ni en ningun research log -- NO implementada aqui, solo la ruta
-    # de "5 dias ganadores" que SI esta validada por el Monte Carlo.
+    # NOTA (22-sep-2026, CONFIRMADO no real -- ver GLITCH_RESEARCH_LOG.md):
+    # un comentario legado en este mismo modulo mencionaba una ruta
+    # alterna de elegibilidad ("balance >= $55k"). Rastreado con git
+    # blame hasta GLITCH_RESEARCH_LOG.md linea 113 (commit 286bc8d,
+    # 14-ago-2026 -- la fase mas temprana del proyecto, sin cita a
+    # ninguna fuente, en la misma zona del log ya marcada [NO
+    # VERIFICADO] por un incidente documentado de un numero fabricado
+    # por otra sesion de IA). Verificado contra help.topstep.com
+    # (Topstep Payout Policy + Express Funded Account Parameters,
+    # fuente oficial, mismo sitio ya usado para MLL/Scaling Plan/regla
+    # de 5 dias): NO existe ninguna ruta alterna por balance minimo
+    # para el PRIMER payout -- solo "5 dias ganadores de $150+". El
+    # $55k NO es una regla real de Topstep -- residuo/alucinacion de la
+    # fase inicial, NO implementado aqui a proposito.
     attempt_equity = _attempt_pnl(paper_log, intento_actual)
     attempt_peak = _attempt_peak(paper_log, intento_actual)  # PORTADO (16-sep-2026) desde geometry_scheduler.py -- gap de paridad
     attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)

@@ -111,6 +111,19 @@ hay ni una línea de código de investigación para la fase funded.
   - Sin trailing MLL (el floor no sube)
   - Regla de consistencia: mejor día <40% del total
   - Payout trigger: 5 días ganadores de $150+ O balance ≥ $55k
+    > **[NO CONFIRMADO -- INVESTIGADO Y DESCARTADO, 22-sep-2026]** el "O
+    > balance ≥ $55k" NO es una regla real de Topstep -- verificado
+    > directo contra help.topstep.com (Topstep Payout Policy + Express
+    > Funded Account Parameters, fuente oficial): la única vía de
+    > elegibilidad para el PRIMER payout es "5 días ganadores de $150+
+    > Net P&L, no consecutivos". No existe ninguna alternativa por
+    > balance mínimo. Esta línea es de la nota original 14-ago-2026 (sin
+    > cita a ninguna fuente), en la misma zona ya marcada [NO VERIFICADO]
+    > por el incidente conocido de un número fabricado por otra sesión de
+    > IA en este mismo análisis de Cerebro 2 (ver advertencia al inicio
+    > de este archivo). Tratar como residuo no confiable de esa fase, no
+    > como una regla real. Ver sección "Verificación de la regla de $55k"
+    > más abajo para el detalle completo.
   - Max payout: $5,000 por retiro (90/10 split)
 
 **Implicación:** la estrategia óptima para el Cerebro 2 NO es la misma que para el Combine.
@@ -2832,3 +2845,20 @@ El usuario corrió `scripts/audit_mgc_trailing_mll_2026_09_16.py` contra el inte
 Implementado en `scheduler/geometry_mgc_scheduler.py`: `_attempt_winning_days()` (cuenta días del intento actual con PnL neto >= $150, fuente `XFA_150K.min_winning_day_usd`/`winning_days_required` de `core/funded_account.py`, no hardcodeado) y `_check_payout_eligibility_crossed()` (dispara SOLO en el cruce before<5<=after, mismo patrón que `_check_attempt_reset`, para no reavisar en días 6/7/8... del mismo intento). Wireado en `run()`: mensaje `[ELEGIBLE PARA PAYOUT]` separado con el payout recomendado (`min(balance*50%, cap)`, misma fórmula exacta del Monte Carlo ya validado, XFA_150K.payout_pct_of_balance/payout_cap_usd — "balance" = PnL acumulado del intento desde $0, mismo concepto que `simulate_xfa_lifetime`, NO el account_size de $150k). Línea "Next Payout" del SUMMARY actualizada de placeholder a conteo real ("N/5 días ganadores", "(ELEGIBLE)" si N>=5). 20 tests nuevos (`tests/test_geometry_mgc_scheduler.py`), 205/205 tests del repo pasan.
 **Hallazgo no verificado, NO implementado:** un comentario legado en este mismo módulo mencionaba una ruta alterna de elegibilidad ("balance >= $55k") — no existe en `core/funded_account.py::XFASpec` ni en ningún research log anterior. Solo se implementó la ruta de 5 días ganadores (la única validada por el Monte Carlo). Si esa ruta alterna es real (fuente oficial de Topstep), queda pendiente confirmarla y modelarla por separado.
 **NO verificado contra el Gist real** (sin GITHUB_GIST_TOKEN/GIST_ID en esta sesión) si el usuario ya lleva 4/5 días ganadores hoy — el mensaje del usuario lo asume, este agente no lo confirmó con datos reales. El próximo cron de GEOMETRY-MGC (7:00 CT) ya correrá con este código y reportará el conteo real en el SUMMARY de hoy.
+
+## Verificación de la regla de "$55k" y auditoría de las reglas de payout reales de Topstep (22-sep-2026)
+
+**Pedido explícito del usuario:** antes de seguir con la Tarea 2 (playbook del Pi), verificar la ruta alterna de elegibilidad "balance >= $55k" que quedó mencionada (sin implementar) en el comentario legado de `geometry_mgc_scheduler.py` al construir el contador real de elegibilidad de esta misma sesión.
+
+**1. Origen exacto (git blame):** `git blame -L 113,113 GLITCH_RESEARCH_LOG.md` → commit `286bc8d`, autor erictvillarreal, **14-ago-2026 05:47 UTC** — el segundo día de vida del proyecto (el header del log dice "Fecha: 13-ago-2026"). Mensaje del commit: "research: Exp-001/002/003 señales intradiarias y MNQ, Cerebro2 payout optimizer, fix MLL post-payout, triple_barrier bugfix, combo2d scheduler" — sin `Co-Authored-By`, sin cita a ninguna fuente junto a la línea. Esa línea vive en la sección de notas MÁS TEMPRANA del archivo (línea 113, antes de que existiera cualquier disciplina de verificación posterior), en el mismo bloque que la propia advertencia del archivo ya marca `[NO VERIFICADO — posible contaminación de otra sesión]` por un incidente CONFIRMADO de un número fabricado ($134,174) en este mismo análisis de Cerebro 2. El comentario de `geometry_mgc_scheduler.py` (commit `65990c3`, 08-sep-2026) heredó esta frase del research log sin volver a verificarla contra la fuente oficial.
+
+**2. Fuente oficial (help.topstep.com, fetch directo de las páginas, no resumen de terceros):**
+- **Payout Policy** (`help.topstep.com/en/articles/8284233`): XFA Standard — "5 winning days of $150+ Net P&L. Days don't need to be consecutive." Tope por tamaño: 50K=$2,000, 100K=$3,000, **150K=$5,000** (coincide exacto con `XFA_150K.payout_cap_usd` ya en el código). Split 90/10. Al cobrar: "MLL resets to $0 permanently, and your 5-day count restarts."
+- **Express Funded Account Parameters** (`help.topstep.com/en/articles/8284215`): confirma "5 winning days with at least $150 profit each" para el path Standard — **el documento NO contiene ninguna ruta alterna por balance mínimo**.
+- **Ninguna de las dos páginas oficiales menciona los $55,000 en ningún contexto.**
+
+**3. Conclusión: el "$55k" NO es una regla real de Topstep.** Es, con alta probabilidad, un residuo de la misma contaminación de la fase inicial ya documentada (13/14-ago-2026), nunca vuelto a verificar en 39 días de trabajo posterior sobre este candidato. **NO se agrega como segunda condición de disparo en `_check_payout_eligibility_crossed()`** — agregarla habría sido implementar una regla inexistente, cambiando CUANDO se dispara la alerta con una condición fabricada.
+
+**4. Hallazgo lateral real, no implementado (fuera del alcance de esta verificación puntual):** la fuente oficial SÍ revela una condición real que ni el modelo (`core/funded_account.py::simulate_xfa_lifetime*`) ni el contador nuevo de esta sesión modelan: para el **segundo payout en adelante** (el primero está exento), además de las 5 días ganadores, Topstep exige *"positive net profit since your last Payout (>= $0.01)"*. Es una condición ADICIONAL, no alternativa, y solo aplica después del primer cobro. Con la geometría actual (SL=TP=364, alternar) es poco probable que 5 días de +$150 coincidan con un balance neto negativo desde el último payout, pero no es imposible (podría ocurrir con suficientes pérdidas grandes intercaladas) — el modelo de Monte Carlo y el scheduler actualmente lo ignorarían en ese caso raro. Pendiente decidir si vale la pena modelarlo; no se tocó nada de esto en esta sesión.
+
+**Acción tomada:** anotado en línea con `>` en la nota original de línea 113 (arriba) para que nadie la vuelva a asumir como real; comentario de `geometry_mgc_scheduler.py` actualizado para reflejar la confirmación (commit separado). Sin cambios a la lógica de disparo ya implementada y pusheada (Tarea 1) — sigue siendo correcta tal como está.
