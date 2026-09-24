@@ -2,7 +2,7 @@
 
 **Propósito:** que el día que el Raspberry Pi llegue físicamente, exista una secuencia de pasos ejecutable, sin tener que investigar ni decidir nada en el momento. Este documento no diseña nada nuevo — consolida el diseño ya hecho en la rama `design/pi-execution` (`pi/pi_executor.py`, commit `c47efb7`, 11-sep-2026) en forma de checklist, y agrega lo que faltaba: pre-requisitos, setup de hardware/OS, plan de fallas, y secuencia de transición.
 
-**Estado del diseño verificado hoy (22-sep-2026):** `pi/pi_executor.py` sigue siendo pseudocódigo puro — 8 funciones con `raise NotImplementedError`, cero cambios desde el 11-sep. Nada de esto está implementado todavía.
+**Estado del diseño re-verificado hoy (23-sep-2026):** `pi/pi_executor.py` sigue siendo pseudocódigo puro — 8 funciones con `raise NotImplementedError`, cero cambios desde el 11-sep. El cambio de `DRY_RUN` real en Railway sigue sin implementar (`grep "orden_pendiente"` en ambos schedulers: 0 resultados). `scripts/verify_orderside_demo.py` existe y está listo, pero gateado para no correr hasta Fase 3 (ver Sección 2). **Ninguno de los 5 bloqueantes está resuelto — la Sección 3 (hardware/OS) es segura de hacer ahora porque no depende de ninguno de ellos; la Sección 3.6 (systemd) se prepara pero NO se arranca por esta misma razón.**
 
 **Una fecha en este documento NO está verificada contra el research log:** la ventana de paper trading del Pi "1–15 de octubre" viene de la instrucción del usuario ("ya acordado"), no encontré ningún registro de esa fecha en `GLITCH_RESEARCH_LOG.md`. La uso tal cual me la dieron, marcada explícitamente aquí para que quede claro que no es un hecho que yo haya confirmado de forma independiente.
 
@@ -58,41 +58,124 @@ Nada de esto necesita el Raspberry Pi físico. Todo se puede hacer desde cualqui
 
 ---
 
-## 3. Setup del hardware — primera vez
+## 3. Setup del hardware — primera vez, paso a paso desde Terminal de Mac
 
-- [ ] **Sistema operativo:** Raspberry Pi OS 64-bit (Bookworm o más reciente), grabado con Raspberry Pi Imager.
-- [ ] **Python:** confirmar la versión preinstalada (Bookworm trae 3.11+ típicamente); si no, instalar 3.11+ vía `apt` o `pyenv`.
-- [ ] **Entorno aislado:** crear un venv dedicado (`python3 -m venv ~/glitch-pi/venv`), `pip install requests` — nada más.
-- [ ] **Red — verificación de salida, antes de correr nada:**
-  ```bash
-  curl -sS https://api.topstepx.com/ -o /dev/null -w "%{http_code}\n"
-  curl -sS https://api.github.com/ -o /dev/null -w "%{http_code}\n"
-  curl -sS https://api.telegram.org/ -o /dev/null -w "%{http_code}\n"
-  ```
-  Confirmar que ninguno está bloqueado por el firewall del router/ISP antes de asumir que el diseño funciona igual que desde Railway (datacenter).
-- [ ] **IP estática local:** no es un requisito funcional (el Pi solo hace llamadas salientes, no expone ningún servicio) — pero conviene una reserva DHCP en el router para que SSH de administración remota sea predecible.
-- [ ] **SSH:** habilitar, cambiar la contraseña default, preferir autenticación por llave sobre contraseña.
-- [ ] **Arranque automático — systemd, NO cron:** `pi_executor.py` está diseñado como un daemon de larga duración (`while True`, mantiene el JWT en memoria entre polls) — cron es para invocaciones puntuales periódicas (así corren los schedulers de Railway), no para un proceso persistente. Ejemplo de unit file:
-  ```ini
-  # /etc/systemd/system/glitch-pi-executor.service
-  [Unit]
-  Description=GLITCH Pi Executor
-  After=network-online.target
-  Wants=network-online.target
+**Split explícito, por lo confirmado en la Sección 2:** todo 3.1–3.5 (hasta tener SSH, Python y `requests` funcionando) **no depende de ningún bloqueante pendiente — se puede hacer completo hoy.** 3.6 (systemd) se prepara pero **NO se arranca** — `pi_executor.py` sigue siendo pseudocódigo (Sección 6), arrancarlo no haría nada útil todavía.
 
-  [Service]
-  Type=simple
-  User=pi
-  WorkingDirectory=/home/pi/glitch-pi
-  EnvironmentFile=/home/pi/glitch-pi/.env
-  ExecStart=/home/pi/glitch-pi/venv/bin/python pi/pi_executor.py
-  Restart=on-failure
-  RestartSec=30
+### 3.1 Flashear la SD (GUI de Raspberry Pi Imager, desde el Mac)
 
-  [Install]
-  WantedBy=multi-user.target
-  ```
-  `EnvironmentFile` mantiene las credenciales fuera del unit file mismo (permisos `600`, nunca en git).
+```bash
+# Terminal de Mac -- instalar Raspberry Pi Imager si no lo tienes
+brew install --cask raspberry-pi-imager
+open -a "Raspberry Pi Imager"
+```
+Si no usas Homebrew: descargar desde `raspberrypi.com/software` e instalar como cualquier `.dmg`.
+
+En la ventana de Raspberry Pi Imager:
+1. **Device:** el modelo de Pi que tengas.
+2. **Operating System:** "Raspberry Pi OS (other)" → **"Raspberry Pi OS Lite (64-bit)"** — sin escritorio, es lo correcto para un daemon headless.
+3. **Storage:** la SD card.
+4. Click el ícono de engranaje (⚙️, esquina inferior derecha) o `Cmd+Shift+X` — **esto es lo que evita necesitar teclado/monitor en el Pi**:
+   - Hostname: `glitch-pi` (queda como `glitch-pi.local` en la red)
+   - Habilitar SSH → "Allow public-key authentication only" (ver 3.2 para generar la llave ANTES de esto)
+   - Username: `glitch` (o el que prefieras — se usa en todos los comandos siguientes)
+   - Configurar WiFi (SSID/password) si el Pi no va por cable Ethernet — **Ethernet es más confiable para algo que ejecuta órdenes reales, preferirlo si es posible**
+   - Configurar timezone: `America/Chicago` (mismo TZ que Railway, evita el mismo tipo de bug de `ct_logging.py` que ya se encontró ahí)
+5. Guardar, "Write", esperar a que termine y expulsar la SD.
+
+### 3.2 Generar una llave SSH en el Mac (ANTES del paso 3.1.4 si aún no tienes una)
+
+```bash
+# Terminal de Mac
+ls ~/.ssh/id_ed25519.pub 2>/dev/null || ssh-keygen -t ed25519 -C "glitch-pi" -f ~/.ssh/id_ed25519
+cat ~/.ssh/id_ed25519.pub   # pegar este contenido en el campo de la llave publica del Imager (paso 3.1.4)
+```
+
+### 3.3 Primer arranque y conexión desde el Mac
+
+Insertar la SD en el Pi, conectar Ethernet (o confirmar que el WiFi configurado alcanza), energizar. Esperar ~90 segundos al primer arranque.
+
+```bash
+# Terminal de Mac
+ssh glitch@glitch-pi.local
+```
+La primera vez pedirá confirmar el fingerprint del host — escribir `yes`.
+
+**Si `glitch-pi.local` no resuelve** (mDNS a veces falla entre Mac y Pi en la primera conexión):
+```bash
+# Terminal de Mac -- opción 1: refrescar cache de mDNS
+sudo dscacheutil -flushcache
+# opción 2: buscar la IP por MAC (los Pi empiezan con b8:27:eb, dc:a6:32, o e4:5f:01)
+arp -a | grep -iE "b8:27:eb|dc:a6:32|e4:5f:01"
+# luego: ssh glitch@<ip-encontrada>
+```
+Si ninguna funciona: entrar al router (típicamente `192.168.1.1` o `192.168.0.1` en un navegador) y buscar "glitch-pi" en la lista de dispositivos conectados.
+
+### 3.4 Setup del sistema (ya dentro del Pi, vía SSH desde el Mac)
+
+```bash
+# Dentro de la sesion SSH (glitch@glitch-pi:~$)
+sudo apt update && sudo apt full-upgrade -y
+python3 --version                                   # confirmar 3.11+ (Bookworm lo trae por default)
+sudo apt install -y python3-venv python3-pip git
+```
+
+### 3.5 Clonar el repo y preparar el entorno (SOLO `requests`, nada de numpy/pandas)
+
+```bash
+# Dentro de la sesion SSH
+git clone https://github.com/erictvillarreal/GLITCH.git ~/glitch-pi
+cd ~/glitch-pi/glitch
+git checkout design/pi-execution     # aqui vive pi_executor.py y este mismo playbook -- actualizar cuando el codigo se apruebe para main
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install requests                 # UNICA dependencia -- no correr `pip install -r requirements.txt` ni pyproject.toml completo, eso trae numpy/pandas/scipy que este dispositivo no necesita
+```
+
+**Verificación de red saliente** (correr DENTRO del Pi vía SSH, no desde el Mac — es la conexión del Pi la que importa):
+```bash
+curl -sS https://api.topstepx.com/ -o /dev/null -w "topstepx: %{http_code}\n"
+curl -sS https://api.github.com/ -o /dev/null -w "github: %{http_code}\n"
+curl -sS https://api.telegram.org/ -o /dev/null -w "telegram: %{http_code}\n"
+```
+Un código HTTP cualquiera (200, 401, 404...) confirma que la salida no está bloqueada — lo único preocupante es un timeout o error de conexión. Si alguno falla, revisar el firewall del router/ISP antes de asumir que el diseño funciona igual que desde Railway (datacenter).
+
+**Endurecer SSH** (solo después de confirmar que el login por llave ya funciona — hacerlo antes te puede dejar fuera):
+```bash
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+```
+
+### 3.6 Preparar (NO arrancar) el servicio systemd
+
+Dejar el archivo escrito para cuando `pi_executor.py` esté implementado (Sección 6) — **no habilitar ni arrancar el servicio todavía**, correr un daemon con funciones `NotImplementedError` no hace nada útil y solo generaría ruido en los logs.
+
+```bash
+# Dentro de la sesion SSH
+sudo tee /etc/systemd/system/glitch-pi-executor.service > /dev/null <<'EOF'
+[Unit]
+Description=GLITCH Pi Executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=glitch
+WorkingDirectory=/home/glitch/glitch-pi/glitch
+EnvironmentFile=/home/glitch/glitch-pi/glitch/.env
+ExecStart=/home/glitch/glitch-pi/venv/bin/python pi/pi_executor.py
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+# NO correr: sudo systemctl enable --now glitch-pi-executor
+# -- esperar a que los 5 bloqueantes de la Seccion 2/6 esten resueltos.
+```
+`EnvironmentFile` (`.env`, permisos `600`, nunca en git) es donde van a vivir `TOPSTEP_USERNAME`/`TOPSTEP_API_KEY`/`TOPSTEP_ACCOUNT_ID`/`GITHUB_GIST_TOKEN`/`GIST_ID`/`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`/`GLITCH_PRODUCT` cuando llegue el momento — no crearlo todavía si las credenciales de práctica no están gestionadas (Sección 2).
 
 ---
 
@@ -133,19 +216,21 @@ Mismo tipo de criterio ya usado para la ventana de 20 días de Cerebro 1 (pass_r
 
 ## 6. Estado actual vs. pendiente
 
-| Pieza | Estado hoy (22-sep-2026) |
+| Pieza | Estado hoy (23-sep-2026) |
 |---|---|
 | Diseño Railway↔Pi (qué se queda, qué se mueve) | ✅ Completo (11-sep-2026) |
 | Investigación de la API oficial de ProjectX | ✅ Completo (auth, órdenes, posiciones, rate limits) |
 | Evaluación de SDKs de terceros | ✅ Completo — decisión: ninguno, `requests` directo |
-| Mecanismo de comunicación Gist (`orden_pendiente_{producto}.json`) | ✅ Diseñado, confirmado hoy sin cambios |
+| Mecanismo de comunicación Gist (`orden_pendiente_{producto}.json`) | ✅ Diseñado, confirmado sin cambios |
+| Script de verificación de `OrderSide` (`scripts/verify_orderside_demo.py`) | ✅ Escrito y listo — **gateado explícitamente, NO correr hasta Fase 3** (ver Sección 2) |
 | `pi/pi_executor.py` | ❌ Pseudocódigo puro, 8 `NotImplementedError`, sin cambios desde el diseño |
 | Bloqueante `OrderSide` (buy/sell invertido) | ❌ **Sin resolver** — bloqueante para cualquier orden real |
 | Cambio de `DRY_RUN` real en Railway (`geometry_scheduler.py`/`geometry_mgc_scheduler.py`) | ❌ Sin implementar — hoy es solo una etiqueta |
 | Confirmación de modo "Auto OCO Brackets" de la cuenta | ❌ Sin confirmar |
 | Credenciales de cuenta de práctica | ❌ Pendiente de solicitar |
-| Hardware físico (Raspberry Pi) | ❌ Todavía no comprado |
-| Setup de OS/systemd | ❌ No aplica todavía (sin hardware) |
-| Medición de delay de red desde el Pi | ❌ No aplica todavía (necesita hardware + red real) |
+| Hardware físico (Raspberry Pi) | 🟡 Llega este domingo |
+| Setup de OS/SSH/Python (Sección 3.1–3.5) | 🟡 Ejecutable este domingo — no depende de ningún bloqueante de arriba |
+| Servicio systemd (Sección 3.6) | 🟡 Se prepara este domingo, **no se arranca** hasta resolver los bloqueantes |
+| Medición de delay de red desde el Pi | ❌ Pendiente hasta tener hardware conectado (domingo en adelante) |
 
-**Para que este playbook sea 100% ejecutable el día que el hardware llegue, falta completar la Sección 2 completa (pre-requisitos) — ninguno de esos ítems necesita el Pi físico.**
+**El domingo se puede completar toda la Sección 3 (hardware/OS/SSH/Python/`requests`). Lo que sigue bloqueado es instalar y arrancar `pi_executor.py` como servicio real — eso espera a que se resuelvan los 5 bloqueantes de la Sección 2, ninguno de los cuales necesita el Pi físico.**
