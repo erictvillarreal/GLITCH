@@ -127,35 +127,30 @@ class TestPayoutAndMLLResetPolicy:
             acct.request_payout()
 
     def test_every_payout_policy_resets_floor_to_zero_every_time(self):
+        """CORREGIDO 25-sep-2026 (help.topstep.com/8284204, 8284233): el MLL de la XFA se traba en $0 de forma PERMANENTE
+        ("resets to $0 permanently"); tras el primer payout queda en $0 y ya no sube -- el trailing viejo (+MLL) era incorrecto."""
         acct = self._make_eligible_account("every_payout")
         acct.request_payout()
         assert acct.mll_floor == 0.0
 
-        # segundo ciclo de 5 dias ganadores -> segundo payout
         for _ in range(5):
             acct.start_day()
             acct.record_trade_pnl(1_000.0)
             acct.end_of_day()
-        floor_before_second_payout = acct.mll_floor
-        assert floor_before_second_payout != 0.0  # trailing normal lo subio de nuevo
+        assert acct.mll_floor == 0.0  # permanece trabado en $0, no sube por encima
         acct.request_payout()
-        assert acct.mll_floor == 0.0  # "every_payout" lo fuerza a 0 OTRA VEZ
+        assert acct.mll_floor == 0.0
 
-    def test_first_payout_only_policy_does_not_reset_floor_on_second_payout(self):
-        acct = self._make_eligible_account("first_payout_only")
-        acct.request_payout()
-        assert acct.mll_floor == 0.0  # la primera vez SI se fuerza a 0
-
-        for _ in range(5):
-            acct.start_day()
-            acct.record_trade_pnl(1_000.0)
-            acct.end_of_day()
-        floor_before_second_payout = acct.mll_floor
-        assert floor_before_second_payout != 0.0
-        acct.request_payout()
-        # "first_payout_only": la segunda vez NO se fuerza -- el floor
-        # sigue exactamente donde el trailing normal ya lo tenia
-        assert acct.mll_floor == floor_before_second_payout
+    def test_first_payout_only_policy_matches_every_payout_under_the_official_lock(self):
+        """Con el piso trabado en $0 ('If it's already at $0, it stays there'), las dos politicas historicas son equivalentes:
+        la ambiguedad original sobre payouts subsecuentes quedo resuelta por la fuente oficial."""
+        a = self._make_eligible_account("every_payout"); b = self._make_eligible_account("first_payout_only")
+        for acct in (a, b):
+            acct.request_payout()
+            for _ in range(5):
+                acct.start_day(); acct.record_trade_pnl(1_000.0); acct.end_of_day()
+            acct.request_payout()
+        assert a.mll_floor == b.mll_floor == 0.0
 
     def test_both_policies_agree_on_first_payout(self):
         """La ambiguedad es sobre pagos SUBSECUENTES, no el primero -- ambas politicas deben coincidir ahi."""

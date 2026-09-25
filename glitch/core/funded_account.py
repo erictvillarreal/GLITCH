@@ -66,7 +66,10 @@ class XFASpec:
 
     @property
     def floor_lock_level(self) -> float:
-        return self.mll_distance
+        # CORREGIDO 25-sep-2026 (help.topstep.com/8284204 y 8284233): en la XFA el MLL arranca en -mll_distance, sube con el balance EOD y
+        # se TRABA EN $0 de forma permanente (50K: al llegar el balance a $2,000). Tras un payout el MLL queda en $0 y el balance restante
+        # es el piso efectivo. Antes: +mll_distance (el piso seguia subiendo por encima de $0, mas estricto que la regla real).
+        return 0.0
 
 
 # Tope de payout por tamaño, ruta Standard (help.topstep.com/articles/8284233, 24-sep-2026): 50K $2,000 / 100K $3,000 / 150K $5,000
