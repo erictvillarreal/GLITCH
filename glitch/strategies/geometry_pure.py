@@ -136,8 +136,13 @@ SPECS = {
 # (~1.4% de diferencia) como alternativas -- cambiar CANDIDATES["MES"] por
 # CANDIDATES["MGC"] o CANDIDATES["M2K"] es la unica accion necesaria para
 # rotar de producto.
+# Candidato A (24/25-sep-2026, ver GLITCH_RESEARCH_LOG.md, "Parte B"): MES entrando a las 8:43 CT, TP=SL=100 ticks, nc=16, alternar.
+# Disenado con las reglas OFICIALES reales (liquidacion MLL en tiempo real, consistencia 55%): pass ~28.9%, ~7.1 dias/pase, costo por pase
+# ~$319 vs G2 ~$339, toques de MLL ~35/100d vs ~48, 32% del maximo de micros (G2: 80%), perdida:ganancia 1:1 (G2: 2.5:1).
+# SOLO PAPER, sin desplegar. Clave separada: no toca CANDIDATES["MES"] (G2).
 CANDIDATES = {
     "MES": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=40, max_holding_bars=100, nc=40, direction="alternate"),
+    "MES_A": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=100, max_holding_bars=100, nc=16, direction="alternate"),
     "MGC": GeometryConfig(SPECS["MGC"], sl_ticks=136, tp_ticks=45, max_holding_bars=100, nc=30, direction="alternate"),
     "M2K": GeometryConfig(SPECS["M2K"], sl_ticks=200, tp_ticks=80, max_holding_bars=100, nc=50, direction="alternate"),
     # Cerebro 2 -- candidato de geometria pura para SOBREVIVIR en la XFA
