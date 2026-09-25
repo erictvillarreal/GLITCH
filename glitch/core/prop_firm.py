@@ -56,7 +56,7 @@ class TopstepCombineSpec:
     max_micro_contracts: int        # 50 / 100 / 150
 
     # Cost
-    monthly_fee: float              # $49 / $99 / $149 (Standard path)
+    monthly_fee: float              # $49 / $99 / $199 (Standard path, help.topstep.com pricing, 24-sep-2026)
     activation_fee: float           # $149 (Standard path, paid on pass)
 
     # Session rules
@@ -121,7 +121,7 @@ TOPSTEP_150K = TopstepCombineSpec(
     consistency_cap_pct=0.50,
     max_mini_contracts=15,
     max_micro_contracts=150,
-    monthly_fee=149.0,
+    monthly_fee=199.0,   # corregido 24-sep-2026: Standard 150K = $199/mes (antes $149, sin fuente); ver GLITCH_RESEARCH_LOG.md
     activation_fee=149.0,
 )
 

@@ -14,7 +14,7 @@ def setup(nc=40, tp=40, sl=100):
     keep = [d for d in df.index if d in pos]; rows = [pos[d] for d in keep]
     mgc = df.loc[keep, "mgc"].values
     real = dict(adv=adv[rows], tp=tpt[rows], flat=flat[rows], nc=nc, tv=TV, sl=sl, tp_ticks=tp, comm=1.22, cons=0.55, kmax=KMAX, inf=INF)
-    xfa = dataclasses.replace(XFA_50K, payout_cap_usd=2000.0)
+    xfa = XFA_50K   # cap $2,000 ya viene de core/funded_account.py (corregido 24-sep-2026)
     return Account(TOPSTEP_50K, xfa, nc, 3, None, mgc), real, len(keep)
 
 def run(nc=40, tp=40, sl=100, T=20000, H=252, seed=2026, lag=0):

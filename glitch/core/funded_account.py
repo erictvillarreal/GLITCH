@@ -69,9 +69,11 @@ class XFASpec:
         return self.mll_distance
 
 
-XFA_50K  = XFASpec(label="XFA-50K",  mll_distance=2_000)
-XFA_100K = XFASpec(label="XFA-100K", mll_distance=3_000)
-XFA_150K = XFASpec(label="XFA-150K", mll_distance=4_500)
+# Tope de payout por tamaño, ruta Standard (help.topstep.com/articles/8284233, 24-sep-2026): 50K $2,000 / 100K $3,000 / 150K $5,000
+# (antes $5,000 fijo para todos, sin fuente). Ruta Consistency: 3k/4k/6k (no modelada).
+XFA_50K  = XFASpec(label="XFA-50K",  mll_distance=2_000, payout_cap_usd=2_000.0)
+XFA_100K = XFASpec(label="XFA-100K", mll_distance=3_000, payout_cap_usd=3_000.0)
+XFA_150K = XFASpec(label="XFA-150K", mll_distance=4_500, payout_cap_usd=5_000.0)
 
 XFA_SPECS = {"50K": XFA_50K, "100K": XFA_100K, "150K": XFA_150K}
 
