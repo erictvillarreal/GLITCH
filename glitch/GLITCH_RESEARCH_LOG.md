@@ -6,6 +6,29 @@
 
 ---
 
+## >>> HALLAZGOS CRÍTICOS 24–25 SEP 2026 — LEER PRIMERO (auditoría de reglas oficiales de Topstep) <<<
+
+**Qué pasó:** el 24-sep se verificó contra help.topstep.com (53 artículos leídos; sitemap oficial) si el "Consistency Target 55%" invalidaba a G2. No lo hace, pero la verificación destapó que **varias reglas reales no estaban en el simulador, el código de producción ni los números de negocio**. Este bloque resume todo; el detalle está en las secciones fechadas 24–25-sep más abajo.
+
+| # | Hallazgo | Impacto |
+|---|---|---|
+| 1 | **Consistency Target 55%** (Combine): el mejor día ≤ 55% del profit; si se excede el target SUBE a mejor_día/0.55 (no es falla). | G2: −0.6pp de pass, +0.03 días. NO es el problema. El simulador usaba 50% estricto (más severo). |
+| 2 | **Liquidación del MLL en tiempo real** con P&L no realizado (Combine y XFA); el DLL es OPCIONAL y también liquida. | **El pass rate de G2 con reglas reales es ~25–26%, no 81.4%** (cota de juego justo ≈ 24.5%). El 81.4% dependía de un clip de pérdida a −$1,000 (DLL) que el simulador aplicaba sin cambiar el WR. El paper trading tiene el mismo defecto (SL de 100 ticks se ejecuta completo, sin liquidación) y sobrecuenta TP (~24%). El "80.0% empírico vs 81.4% teórico" no compara lo mismo. |
+| 3 | **Riesgo de conducta** (no es un veredicto; Topstep tiene discreción): "excessive purchases of Combines/Resets", "account stacking", "trading inconsistent with real futures markets", "any other conduct that games the market"; Responsible Trading Program (pérdidas > ganancias, max position en la mayoría de trades, varias cuentas tocando el MLL el mismo día). No hay umbrales numéricos oficiales. | G2: 80% del máximo de micros en todos los trades, pérdida:ganancia nominal 2.5:1, ~48 toques de MLL/100 días. 5 cuentas idénticas = todas tocan el MLL el mismo día. **Decisión pendiente del usuario.** |
+| 4 | **Errores del código corregidos** (rama de investigación): fee Combine 150K $199 (era $149); tope de payout XFA por tamaño 50K $2,000 / 100K $3,000 / 150K $5,000 (era $5,000 fijo); piso del MLL de la XFA se traba en **$0** permanentemente (era +MLL). | XFA MGC 150K: payout medio $1,772 sin liquidación → **$1,346** con liquidación en tiempo real (−24%); 50K $822 → $620. |
+| 5 | **P&L 50K-B corregido** (pass rate real 26%): payout anual p50 ≈ $9.7k, neto acumulado 12m p10/p50/p90 −$1.9k/+$3.5k/+$11.0k, caja mediana ≥ 0 en el día 49 (mes 3), **colchón recomendado $4,000–4,500** (antes $3,000). | Los números "$31,257", "81.4%", colchón $3,000 y P&L del 22-sep quedan INVALIDADOS. |
+| 6 | **Candidato A** (MES 8:43 CT, TP=SL=100 ticks, nc=16): pass 28.9%, 7.1 días/pase, costo por pase $319 (G2 $339), 35 toques MLL/100d (G2 48), 32% del máximo (G2 80%), pérdida:ganancia 1:1; robusto en H1/H2, fricción y DLL. Ingreso por ciclo ≈ G2. | Scheduler de paper PREPARADO en la rama `candidate-a/paper-scheduler`, **NO desplegado**: modela liquidación MLL, consistencia 55%, comisión y flatten condicional; se niega a arrancar hasta medir el delay de Massive para MES (`scripts/probe_massive_mes_delay.py`). |
+| 7 | **Feriados de cierre anticipado**: 27-nov y 24-dic-2026 (cerrar antes de 12:00 CT); 26-nov ya estaba excluido. | Implementado `execution/session_calendar.py` + flatten condicional (11:30 CT en esos días) en GEOMETRY y GEOMETRY-MGC, con tests; se agregó 2027-01-01. Ver estado de push abajo. |
+| 8 | **Otras reglas nuevas:** API $14.50/mes (código `topstep`), no permitida en Live Funded, ejecución solo desde dispositivo personal; Practice Account gratis con Combine activo; rebill 30 días, fallar NO cancela la suscripción, reset = precio de la mensualidad; front month obligatorio; zona 2% de precio límite; restricciones ~10 min alrededor del CPI; IDV antes de la 2a compra. | Ver "PARTE A" (24-sep). |
+
+**Números que YA NO deben usarse:** pass rate 81.4% de G2, $31,257 (y sus derivados), P&L y colchón del 22-sep, cualquier cifra de XFA sin liquidación en tiempo real.
+**Resuelto el 25-sep (Prioridad 1):** el piso del MLL en XFA se traba en $0 (texto oficial 8284204 y 8284233); la ambigüedad de "$1,158 vs $1,346" queda resuelta a **$1,346**. Incertidumbre residual: los artículos dan cifras solo del 50K (100K/150K asumidos análogos).
+**Sin verificar / pendiente:** (a) auditoría del Gist real de G2 (`scripts/audit_g2_pass_reality.py`, la corre el usuario); (b) Terms of Use (documento legal aparte, no leído); (c) tiers del Scaling Plan (imagen, sin fuente textual); (d) MLL/profit target de 100K/150K no vistos numéricamente; (e) 3 artículos del centro de ayuda no identificados (56 vs 53); (f) delay de Massive para MES; (g) decisión de conducta/reemplazo de G2 por Candidato A (requiere paper trading propio).
+**Estado de pushes (freeze windows normales):** `research/g2-consistency-check` y `candidate-a/paper-scheduler` pusheadas; los commits de feriados en `main` (`ba88626`) y `cerebro2-dev` (`d0d06ce`) están LOCALES hasta salir de sus freeze windows (main 08:00–15:00 CT, cerebro2-dev 07:00–14:30 CT).
+
+---
+
+
 ## Estado del Arte — Lo que sabemos con certeza
 
 ### Dataset disponible
