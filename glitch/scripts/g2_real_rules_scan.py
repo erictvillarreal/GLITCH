@@ -21,8 +21,8 @@ MLL, TARGET, DLL_USD = 2000.0, 3000.0, 1000.0
 KMAX, TMAX, INF = 400, 120, 10**6
 
 
-def build_tables():
-    adv_bar, tp_bar, flat_ticks = [], [], []
+def build_tables(with_dates=False):
+    adv_bar, tp_bar, flat_ticks, dates = [], [], [], []
     for day, h, l, c, m in load_sessions("mes_5min_2y"):
         a = np.nonzero(m >= ENTRY_M)[0]
         if len(a) == 0: continue
@@ -36,8 +36,9 @@ def build_tables():
         ai = np.searchsorted(M, np.arange(1, KMAX + 1), side="left"); ai = np.where(ai >= len(M), INF, ai)
         ti = np.searchsorted(F, np.arange(1, TMAX + 1), side="left"); ti = np.where(ti >= len(F), INF, ti)
         adv_bar.append(np.concatenate([[INF], ai])); tp_bar.append(np.concatenate([[INF], ti]))
-        flat_ticks.append((cc[-1] - e) * side / TICK)
-    return np.array(adv_bar), np.array(tp_bar), np.array(flat_ticks)
+        flat_ticks.append((cc[-1] - e) * side / TICK); dates.append(str(day))
+    out = (np.array(adv_bar), np.array(tp_bar), np.array(flat_ticks))
+    return (out, dates) if with_dates else out
 
 
 def simulate(T, days_idx, nc, tp, sl, dll=False, cons=0.55, n=20000, max_days=15, seed=7, min_days=2, liquidate=True):
