@@ -29,15 +29,22 @@ for k in ("TP", "SL", "FLATTEN"):
     v = [e["pnl"] for e in log if e["result"] == k]
     if v: print(f"  pnl medio {k}: ${sum(v)/len(v):,.0f} (min ${min(v):,.0f}, max ${max(v):,.0f})")
 passes = blows = open_ = 0
-print("\nPor intento (regla del scheduler):")
+print("\nPor intento: regla del scheduler (PASE a +$3,000, QUIEBRE al piso trailing) vs. regla OFICIAL (target = max($3,000, mejor_dia/0.55), min 2 dias)")
+print("y chequeo de liquidacion MLL en tiempo real (una perdida realizada >= distancia al piso implica que la cuenta real habria sido liquidada).")
 for i in sorted(by):
-    run = peak = 0.0; end = "EN CURSO"; seq = []
-    for e in by[i]:
-        run += e["pnl"]; peak = max(peak, run); seq.append(f"{e['result']}{e['pnl']:+,.0f}")
-        if run >= TARGET: end = "PASE"; break
-        if run <= min(peak + MLL, 0.0): end = "QUIEBRE"; break
+    run = peak = best = 0.0; end = "EN CURSO"; seq = []; off_day = None; sched_day = None; liq_flag = False
+    for n_, e in enumerate(by[i], 1):
+        floor = min(peak + MLL, 0.0)
+        if e["pnl"] < 0 and -e["pnl"] >= run - floor: liq_flag = True      # la perdida excede la distancia al piso
+        run += e["pnl"]; peak = max(peak, run); best = max(best, e["pnl"]); seq.append(f"{e['result']}{e['pnl']:+,.0f}")
+        if off_day is None and n_ >= 2 and run >= max(TARGET, best / 0.55): off_day = n_
+        if end == "EN CURSO":
+            if run >= TARGET: end = "PASE"; sched_day = n_
+            elif run <= min(peak + MLL, 0.0): end = "QUIEBRE"; sched_day = n_
+    adj = max(TARGET, best / 0.55)
     passes += end == "PASE"; blows += end == "QUIEBRE"; open_ += end == "EN CURSO"
-    print(f"  #{i}: {end:9s} pnl_final=${run:+,.0f} | {' '.join(seq)}")
+    extra = (f"oficial pasa en dia {off_day}" if off_day else "oficial NO pasa todavia") + (f" (scheduler: dia {sched_day})" if end == "PASE" else "")
+    print(f"  #{i}: {end:9s} mejor_dia=${best:,.0f} target_ajustado=${adj:,.0f} | {extra} | perdida>=distancia_al_piso: {'SI (liquidacion real)' if liq_flag else 'no'} | {' '.join(seq)}")
 n = passes + blows
 if n:
     print(f"\nPass rate empirico: {passes}/{n} = {passes/n:.1%}  (intentos en curso: {open_})")
