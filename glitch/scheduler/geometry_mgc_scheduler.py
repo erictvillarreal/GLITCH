@@ -100,6 +100,7 @@ import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el 
 from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
 from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E402
+from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
 from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
 from core.prop_firm import TOPSTEP_150K  # noqa: E402
@@ -269,7 +270,8 @@ def is_trading_day():
     if now.weekday() >= 5: return False
     holidays = {
         (2026,1,1),(2026,1,19),(2026,2,16),(2026,4,3),
-        (2026,5,25),(2026,7,3),(2026,9,7),(2026,11,26),(2026,12,25)
+        (2026,5,25),(2026,7,3),(2026,9,7),(2026,11,26),(2026,12,25),
+        (2027,1,1)   # agregado 25-sep-2026 (help.topstep.com/13350348: mercado cerrado)
     }
     return (now.year, now.month, now.day) not in holidays
 
@@ -762,11 +764,11 @@ def run():
         now = ct_now()
         t = now.hour * 60 + now.minute
 
-        if t >= FLATTEN_HOUR * 60 + FLATTEN_MINUTE:
+        if is_flatten_time(now):   # 14:30 CT normal; antes en 27-nov y 24-dic (cierre anticipado), ver execution/session_calendar.py
             price = fetch_latest_price(ticker)
             exit_price = price if price is not None else entry_price
             result = "FLATTEN"
-            log.info(f"[{now.strftime('%H:%M')} CT] Cierre forzado de sesion @ {exit_price:.4f}")
+            log.info(f"[{now.strftime('%H:%M')} CT] Cierre forzado de sesion (flatten {flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT) @ {exit_price:.4f}")
             break
 
         price = fetch_latest_price(ticker)

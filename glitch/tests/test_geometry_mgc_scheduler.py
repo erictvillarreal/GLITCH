@@ -705,3 +705,36 @@ class TestPendingPositionFullCycle:
         paper_log.append({"date": "2026-09-10", "result": "TP", "pnl": 2184, "intento": 1})
         assert scheduler._current_intento(paper_log) == 1
         assert scheduler._attempt_pnl(paper_log, 1) == 4184  # 2000 + 2184, la reconciliada sigue sin contar
+
+
+class TestEarlyCloseHolidays:
+    """25-sep-2026: mismo tratamiento que GEOMETRY (MES) -- 27-nov y 24-dic se operan con flatten temprano; 26-nov, 25-dic y
+    1-ene-2027 no se operan. Fuente: help.topstep.com/13350348."""
+
+    def _trading(self, monkeypatch, y, m, d):
+        import datetime as dt
+        monkeypatch.setattr(scheduler, "ct_now", lambda: dt.datetime(y, m, d, 7, 0, tzinfo=scheduler.CT))
+        return scheduler.is_trading_day()
+
+    def test_closed_days_are_not_trading_days(self, monkeypatch):
+        assert self._trading(monkeypatch, 2026, 11, 26) is False
+        assert self._trading(monkeypatch, 2026, 12, 25) is False
+        assert self._trading(monkeypatch, 2027, 1, 1) is False
+
+    def test_early_close_days_are_still_trading_days(self, monkeypatch):
+        assert self._trading(monkeypatch, 2026, 11, 27) is True
+        assert self._trading(monkeypatch, 2026, 12, 24) is True
+
+    def test_scheduler_loop_uses_the_conditional_flatten(self):
+        import inspect
+        src = inspect.getsource(scheduler.run)
+        assert "is_flatten_time(now)" in src
+        assert "FLATTEN_HOUR * 60 + FLATTEN_MINUTE" not in src
+
+    def test_mgc_entry_window_fits_before_the_early_flatten(self):
+        """La entrada de MGC (7:13 CT) queda bien antes del flatten temprano (11:30 CT) -- el trade tiene ventana en esos dias."""
+        from execution.session_calendar import flatten_minutes_ct
+        import datetime as dt
+        entry = scheduler.RTH_OPEN_HOUR * 60 + scheduler.RTH_OPEN_MINUTE + scheduler.ENTRY_WAIT_MINUTES
+        assert entry < flatten_minutes_ct(dt.date(2026, 11, 27))
+        assert entry < flatten_minutes_ct(dt.date(2026, 12, 24))
