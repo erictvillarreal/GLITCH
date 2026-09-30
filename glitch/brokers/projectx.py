@@ -258,6 +258,24 @@ class ProjectXClient:
         })
         return resp if isinstance(resp, list) else resp.get("orders", [])
 
+    def get_orders(self, account_id: int, only_open: bool = False) -> list[dict]:
+        """
+        POST /api/Order/search -- generaliza get_open_orders() (que fuerza
+        onlyOpen=True) para poder consultar TAMBIEN ordenes ya resueltas
+        (fill price, timestamp de cierre). Anadido 29-sep-2026 para que
+        pi/pi_executor.py pueda leer el precio de fill REAL de una orden
+        despues de que se llena, en vez de asumir el precio objetivo
+        (tp_price/sl_price) como si fuera el fill exacto. No toca la
+        logica de OrderSide -- ver bloqueante #1 en la clase OrderSide
+        arriba, sigue sin resolver.
+        """
+        self.ensure_auth()
+        resp = self._post("/api/Order/search", {
+            "accountId": account_id,
+            "onlyOpen":  only_open,
+        })
+        return resp if isinstance(resp, list) else resp.get("orders", [])
+
     # ── Positions ─────────────────────────────────────────────────────────
 
     def get_positions(self, account_id: int) -> list[dict]:
