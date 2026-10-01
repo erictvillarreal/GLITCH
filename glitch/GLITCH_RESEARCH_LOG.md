@@ -3203,3 +3203,113 @@ expectativa razonada, NO una cifra simulada -- ninguno de los tres se corrió co
 - Fee de cada firma, instrumento exacto (confirmar MGC, no solo GC, en Bulenox específicamente).
 - Correr el mismo motor de g2_real_rules_scan.py con los parámetros reales de la firma elegida, una vez
   confirmada su política de automatización con fuente propia -- mismo proceso que se hizo hoy para Apex.
+
+
+## 30-sep-2026 (continuación 2) — Verificación propia de Tradeify/Bulenox/MFFU: los 3 sobreviven, Bulenox es el mejor hallazgo
+
+### Filtro 1 — Automatización (cita verbatim, fuente propia de cada firma)
+
+**Tradeify** (`help.tradeify.co/en/articles/12268167`, 26-ago-2026): "Algorithmic Trading: Allowed if: - You own
+the strategy exclusively - Not shared with other traders/firms - Not high-frequency trading - Can prove
+ownership if requested." **PASA** -- GLITCH es propio, no compartido, no HFT (1 trade/dia).
+
+**Bulenox** (`bulenox.com/es/faq`, verbatim, español original): "Sí. Los bots, algoritmos y copiadores están
+permitidos... Solo se permiten herramientas creadas por el propio usuario y destinadas exclusivamente a su uso
+personal. No se admiten herramientas de automatización comerciales, compartidas, alquiladas o distribuidas
+públicamente." Costo adicional si se conecta a Rithmic vía API de terceros: +$100/mes. **PASA** (con un costo
+adicional a presupuestar si la ejecución pasa por un bridge de terceros).
+
+**MyFundedFutures** (`help.myfundedfutures.com/en/articles/8444599-fair-play-and-prohibited-trading-practices`,
+verbatim): "Traders may make use of automated trading strategies tailored to their own specific settings so
+long as these automated tools do not aim to exploit the favorable fills offered in the Simulated Environment."
+No exige supervisión humana activa ni prohíbe sistemas 100% autónomos -- solo restringe explotar fills
+favorables del simulador y HFT. **PASA.** Nota: un agregador de terceros había afirmado "solo semi-automatizado,
+bots 100% autónomos prohibidos" -- **ese dato es INCORRECTO**, contradicho por la fuente oficial de MFFU leída
+hoy. No reusar esa afirmación de terceros en ningún reporte futuro.
+
+### Filtro 2 — "Usar el límite de drawdown/DLL como stop-loss" (la regla que mató a Apex)
+
+Revisadas las páginas propias más relevantes de las 3 (reglas esenciales de Tradeify, FAQ+drawdown de Bulenox,
+"fair play" de MFFU): **ninguna de las 3 tiene, en el texto encontrado hoy, una prohibición explícita
+equivalente a la de Apex.** Esto es un resultado negativo de una búsqueda razonable, no una revisión exhaustiva
+del Term of Service completo de cada una -- queda abierto si se quiere blindar al 100%. Dado que no hay
+prohibición textual, la geometría G2 (nc=40 sin modificar) no cae en ningún "prohibido" encontrado en ninguna
+de las 3 -- pero ver la nota de advertencia en el script (misma practica que Apex sí nombra, solo que estas 3
+no la nombran).
+
+### Filtro 3 — Elegibilidad México
+
+Confirmado en fuente propia de las 3 que México **no aparece** en ninguna lista de países restringidos:
+- Bulenox (`bulenox.com/es/faq`, lista completa leída verbatim -- ~95 países restringidos, México no está).
+- MyFundedFutures (`help.myfundedfutures.com/en/articles/8229993-restricted-countries-policy`, lista completa
+  leída -- México no está; nota colateral: Turquía, EAU, Qatar, Ucrania, Rusia SÍ están restringidos para MFFU,
+  contradice una afirmación previa de que "las firmas de futuros aceptan EAU" -- al menos MFFU no).
+- Tradeify (confirmado via su página oficial de países restringidos, resumen de búsqueda, no cita verbatim
+  completa -- México no aparece en la lista).
+
+**Los 3 sobreviven los 3 filtros.**
+
+### Simulación con el motor real (scripts/alt_firms_feasibility_check.py, mismo motor, 515 días MES, max_days=30)
+
+Parámetros 50K verificados hoy en fuente propia de cada firma:
+
+| Firma (plan) | MLL(EOD) | DLL | Target | Consistencia eval | Días mín. | Fee |
+|---|---|---|---|---|---|---|
+| Tradeify Growth 50K | $2,000 | $1,250 | $3,000 | Ninguna | 1 | $139/mes (sub.) |
+| Bulenox Opción2 50K | $2,500 | $1,100 | $3,000 | Ninguna | Ninguno | **$175 pago único**, reset $78 |
+| MFFU Rapid EOD 50K | $2,000 | Ninguno | $3,000 | **30% (eval)** | 4 | No confirmado hoy |
+
+(Bulenox: "Contratos EOD: 7" en la página de precios -- interpretado como 7 mini-equivalentes = 70 micros via
+la nota "1 mini = 10 micros" de la misma página, mismo patrón que Apex/Tradeify. **No 100% confirmado** -- si
+"7" fuera un tope literal de 7 contratos sin importar tipo, nc=40 violaría el límite directamente. Verificar
+con soporte de Bulenox antes de operar en real.)
+
+**Resultados (referencia: Topstep 50K=25.5%, Apex 50K=25.1%, ambos ya conocidos):**
+
+| Firma | nc sin modificar | pass | pases/año | nc redimensionado (evita depender del MLL/DLL como SL) | pass |
+|---|---|---|---|---|---|
+| Tradeify Growth 50K | 40 | **26.7%** | 23.3 | 10 | 22.9% |
+| **Bulenox Opción2 50K** | 40 | **30.6%** | 18.9 | 8 | 24.5% |
+| MFFU Rapid EOD 50K | 30 (tope duro, 40 no permitido) | 16.1% | 17.8 | 16 | **25.9%** |
+
+**Bulenox (sin modificar nc=40) tiene el mejor pass rate de TODO lo que se ha simulado hasta hoy en esta
+investigación** (30.6%, vs 25.5% Topstep, 25.1% Apex, 26.7% Tradeify) -- mejor incluso que Topstep, con
+automatización explícitamente permitida y fee de pago único. MFFU es el más débil de los 3 por la combinación
+de 30% de consistencia en el eval + mínimo 4 días + tope duro de contrato a 30 micros, que fuerza una
+geometría peor (16.1%) a menos que se redimensione nc deliberadamente a 16 (25.9%, ahí sí comparable a
+Topstep).
+
+### Costo por pase y economía (Paso 5, Bulenox 50K -- el que sobrevivió con mejor pass rate)
+
+Fee $175 (pago único, acceso 30 días) + reset $78 si se quiebra dentro de ese mismo acceso (fuente:
+`bulenox.com/es/faq`, pregunta "¿Qué pasa si incumplo una regla?": "el reinicio cuesta $78... Los reinicios se
+procesan al instante... tus días de trading completados empiezan de nuevo"). **No confirmado si el reinicio
+reinicia también la ventana de 30 días o si está acotado al acceso original** -- esto cambia el cálculo, por
+eso se dan dos cotas:
+
+- **Cota conservadora** (sin asumir reinicios gratuitos dentro del mismo acceso, comprar $175 de nuevo cada
+  vez que se quiebra): costo/pase = $175 / 0.306 = **~$572**.
+- **Cota optimista** (renewal theory con reinicios de $78 ilimitados dentro del acceso de 30 días, teoría de
+  renovación: costo = fee_inicial + reinicios_esperados × fee_reinicio = $175 + $78×(1/0.306 − 1) =
+  $175 + $78×2.27 = **~$352**), prácticamente igual al costo/pase ya conocido de Topstep ($339-341).
+
+**Conclusión honesta:** en el mejor de los casos (reinicios ilimitados), Bulenox iguala la economía de Topstep
+(~$350-370/pase) con un pass rate MEJOR (30.6% vs 25.5%) y automatización permitida -- el candidato más fuerte
+encontrado hasta ahora como extra de diversificación. En el peor caso (sin reinicios), es más caro por pase
+que Topstep (~$572 vs $339-341). **No se calculó la proyección de flujo de caja de la cuenta YA FONDEADA**
+(payout bruto/neto anual, equivalente al "P&L 50K-B corregido" de Topstep) -- eso requeriría adaptar
+`dd_cash/engine_real.py` a la estructura de Bulenox (90/10 split, escalado de contratos post-fondeo, mismo tipo
+de trabajo que se hizo para Topstep) y está fuera del alcance de esta pasada de prioridad baja. Es el siguiente
+paso natural si el usuario decide perseguir Bulenox en serio.
+
+### Pendiente si se quiere profundizar
+
+- Confirmar con soporte de Bulenox si "Contratos EOD: 7" en $50K es 7 contratos literales o 7 mini-equivalentes
+  (70 micros) -- cambia si nc=40 es viable en absoluto.
+- Confirmar si el reinicio de $78 de Bulenox reinicia la ventana de 30 días (determina cuál de las 2 cotas de
+  costo/pase es la real).
+- Confirmar disponibilidad de MGC (oro micro) en Bulenox -- el ticker visible en su sitio es GC (oro completo),
+  no se confirmó MGC explícitamente hoy.
+- Fee de MyFundedFutures Rapid EOD 50K no confirmado en esta pasada.
+- Construir el motor de cash-flow de cuenta fondeada (Bulenox Master, 90/10 split, escalado 2→4→7 post-fondeo
+  según un agregador de terceros, no confirmado en fuente propia) si se decide avanzar con Bulenox.
