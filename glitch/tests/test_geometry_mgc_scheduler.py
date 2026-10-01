@@ -738,3 +738,69 @@ class TestEarlyCloseHolidays:
         entry = scheduler.RTH_OPEN_HOUR * 60 + scheduler.RTH_OPEN_MINUTE + scheduler.ENTRY_WAIT_MINUTES
         assert entry < flatten_minutes_ct(dt.date(2026, 11, 27))
         assert entry < flatten_minutes_ct(dt.date(2026, 12, 24))
+
+
+class TestFetchLatestPriceStaleness:
+    """
+    01-oct-2026: incidente real donde Massive no publico ninguna barra
+    nueva de MGCV6 por 700+ minutos y fetch_latest_price() la acepto sin
+    cuestionarla (unreal=$0.00 reportado como si fuera precio en vivo
+    todo ese tiempo). Verifica que ahora SI reporte la antiguedad de la
+    barra, y que el umbral quede fijado en el valor documentado (20 min
+    = ~2x el delay normal de Massive/MGC ya confirmado el 09-sep-2026,
+    9.43-9.50 min promedio, 9.94 min maximo observado).
+    """
+
+    @staticmethod
+    def _mock_response(close, age_seconds, monkeypatch):
+        import datetime as _dt
+        bar_time = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=age_seconds)
+        window_start_ns = int(bar_time.timestamp() * 1e9)
+
+        class _Resp:
+            def raise_for_status(self_):
+                pass
+
+            def json(self_):
+                return {"results": [{"close": close, "window_start": window_start_ns}]}
+
+        monkeypatch.setattr(scheduler.requests, "get", lambda *a, **k: _Resp())
+
+    def test_stale_threshold_matches_documented_value(self):
+        """20 min, no un numero arbitrario -- ver comentario junto a la constante."""
+        assert scheduler.STALE_BAR_MAX_AGE_SECONDS == 20 * 60
+
+    def test_fresh_bar_reports_small_age(self, monkeypatch):
+        self._mock_response(4172.8, age_seconds=30, monkeypatch=monkeypatch)
+        price, age = scheduler.fetch_latest_price("MGCV6")
+        assert price == 4172.8
+        assert age < scheduler.STALE_BAR_MAX_AGE_SECONDS
+
+    def test_stale_bar_still_returned_but_flagged_old(self, monkeypatch):
+        """fetch_latest_price() NO filtra -- solo reporta; el llamador decide. Esto reproduce
+        el incidente real: una barra de hace 700 min (>> 20 min) sigue viniendo con su precio,
+        pero ahora con la antiguedad real adjunta en vez de pasar por precio en vivo."""
+        self._mock_response(4175.3, age_seconds=700 * 60, monkeypatch=monkeypatch)
+        price, age = scheduler.fetch_latest_price("MGCV6")
+        assert price == 4175.3
+        assert age > scheduler.STALE_BAR_MAX_AGE_SECONDS
+
+    def test_no_results_returns_none_none(self, monkeypatch):
+        class _Resp:
+            def raise_for_status(self_):
+                pass
+
+            def json(self_):
+                return {"results": []}
+
+        monkeypatch.setattr(scheduler.requests, "get", lambda *a, **k: _Resp())
+        price, age = scheduler.fetch_latest_price("MGCV6")
+        assert price is None and age is None
+
+    def test_request_exception_returns_none_none(self, monkeypatch):
+        def _raise(*a, **k):
+            raise ConnectionError("boom")
+
+        monkeypatch.setattr(scheduler.requests, "get", _raise)
+        price, age = scheduler.fetch_latest_price("MGCV6")
+        assert price is None and age is None

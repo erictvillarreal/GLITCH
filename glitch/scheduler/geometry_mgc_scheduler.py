@@ -574,13 +574,39 @@ def _paper_progress(paper_log: list, today_str: str) -> dict:
     }
 
 
-def fetch_latest_price(ticker: str) -> Optional[float]:
+# Umbral de "barra vieja" (01-oct-2026, incidente real documentado en
+# GLITCH_RESEARCH_LOG.md: MGCV6 se quedo sin ninguna barra nueva por
+# 700+ minutos, mientras unreal=$0.00 se reportaba como si fuera precio
+# en vivo). ANTES, fetch_latest_price() aceptaba sin cuestionar lo que
+# Massive devolviera como "la mas reciente" -- sin comparar su propio
+# window_start contra la hora real, exactamente el patron de "medir, no
+# asumir" que ya se aplico a ENTRY_WAIT_MINUTES, solo que aqui no se
+# habia blindado en el codigo de produccion, solo en el script de
+# diagnostico (scripts/probe_massive_mgc_delay.py).
+#
+# Valor: el delay NORMAL de Massive para MGC ya quedo CONFIRMADO
+# (09-sep-2026, 2 corridas en horarios distintos) en 9.43-9.50 min
+# promedio, maximo observado 9.94 min. 20 minutos = ~2x ese maximo
+# confirmado -- suficiente margen para no disparar en operacion normal,
+# muy por debajo de las horas que tomo el incidente real.
+STALE_BAR_MAX_AGE_SECONDS = 20 * 60
+
+
+def fetch_latest_price(ticker: str) -> tuple[Optional[float], Optional[float]]:
     """
     Precio actual via Massive -- patron YA CORREGIDO (ver docstring del
     modulo): sort=window_start.desc + limit=1, SIN rango de fechas. El
     patron de rango+sort=asc (usado para descargas historicas) NO
     devuelve el dato mas reciente en este endpoint -- no repetir ese
     error aqui.
+
+    Devuelve (precio, antiguedad_segundos) -- o (None, None) si no hay
+    dato o la llamada fallo. `window_start` es NANOSEGUNDOS epoch
+    (confirmado contra scripts/fetch_mes_2y.py y
+    scripts/probe_massive_mgc_delay.py, que ya usan /1e9 -- NO
+    milisegundos). El llamador decide si `antiguedad_segundos` es
+    aceptable (ver STALE_BAR_MAX_AGE_SECONDS) -- esta funcion solo
+    reporta el dato, no filtra.
     """
     api_key = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -595,10 +621,16 @@ def fetch_latest_price(ticker: str) -> Optional[float]:
             r.raise_for_status()
             results = r.json().get("results", [])
             if results:
-                return float(results[0]["close"])
+                bar = results[0]
+                age_seconds = None
+                ws = bar.get("window_start")
+                if ws is not None:
+                    bar_time = dt.datetime.fromtimestamp(ws / 1e9, tz=dt.timezone.utc)
+                    age_seconds = (dt.datetime.now(dt.timezone.utc) - bar_time).total_seconds()
+                return float(bar["close"]), age_seconds
         except Exception as e:
             log.error(f"fetch_latest_price {ticker} ({resolution}): {e}")
-    return None
+    return None, None
 
 
 def run():
@@ -634,11 +666,12 @@ def run():
     pending = load_pending()
     if pending:
         log.info(f"Posicion pendiente encontrada de {pending.get('date')} -- reconciliando antes de continuar...")
-        recon_price = fetch_latest_price(pending["ticker"])
-        if recon_price is None:
+        recon_price, recon_age = fetch_latest_price(pending["ticker"])
+        if recon_price is None or (recon_age is not None and recon_age > STALE_BAR_MAX_AGE_SECONDS):
+            reason = "sin datos de precio" if recon_price is None else f"solo datos viejos ({recon_age/60:.0f} min)"
             msg = (f"{PREFIX}\nSTATUS: ERROR\n"
                    f"ERROR: posicion pendiente de {pending.get('date')} no se pudo reconciliar "
-                   f"(sin datos de precio) -- reintentando la proxima corrida. No se abre "
+                   f"({reason}) -- reintentando la proxima corrida. No se abre "
                    f"posicion nueva hoy.\n{utc_now_str()}")
             send(msg)
             log.error(msg.replace("\n", " | "))
@@ -714,11 +747,17 @@ def run():
 
     entry_price = None
     for attempt in range(20):
-        entry_price = fetch_latest_price(ticker)
-        if entry_price is not None:
-            log.info(f"  {ticker}: precio recibido en intento {attempt+1}/20: {entry_price:.4f}")
+        entry_price, entry_age = fetch_latest_price(ticker)
+        if entry_price is not None and (entry_age is None or entry_age <= STALE_BAR_MAX_AGE_SECONDS):
+            log.info(f"  {ticker}: precio recibido en intento {attempt+1}/20: {entry_price:.4f}"
+                     + (f" (barra de hace {entry_age/60:.1f} min)" if entry_age is not None else ""))
             break
-        log.info(f"  Esperando precio {ticker} ({attempt+1}/20)...")
+        if entry_price is not None:
+            log.info(f"  {ticker}: barra recibida pero vieja ({entry_age/60:.1f} min > "
+                     f"{STALE_BAR_MAX_AGE_SECONDS/60:.0f} min) -- descartada, reintentando ({attempt+1}/20)...")
+            entry_price = None
+        else:
+            log.info(f"  Esperando precio {ticker} ({attempt+1}/20)...")
         time.sleep(30)
 
     if entry_price is None:
@@ -759,21 +798,39 @@ def run():
     # ── 4. Monitorea la posicion -- flatten obligatorio a las 14:30 CT ──
     result = None
     exit_price = entry_price
+    stale_alerted = False  # una sola alerta por corrida, mismo criterio anti-spam que check_expiry_alerts()
 
     while True:
         now = ct_now()
         t = now.hour * 60 + now.minute
 
         if is_flatten_time(now):   # 14:30 CT normal; antes en 27-nov y 24-dic (cierre anticipado), ver execution/session_calendar.py
-            price = fetch_latest_price(ticker)
-            exit_price = price if price is not None else entry_price
+            price, age = fetch_latest_price(ticker)
+            stale = price is not None and age is not None and age > STALE_BAR_MAX_AGE_SECONDS
+            exit_price = price if (price is not None and not stale) else entry_price
             result = "FLATTEN"
-            log.info(f"[{now.strftime('%H:%M')} CT] Cierre forzado de sesion (flatten {flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT) @ {exit_price:.4f}")
+            log.info(f"[{now.strftime('%H:%M')} CT] Cierre forzado de sesion (flatten {flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT) @ {exit_price:.4f}"
+                     + (" (ADVERTENCIA: precio Massive viejo, se uso entry_price como fallback)" if stale else ""))
+            if stale:
+                send(f"{PREFIX}\nSTATUS: ADVERTENCIA\n"
+                     f"Flatten de hoy usado con precio de respaldo (entry_price) -- Massive no tenia "
+                     f"una barra fresca ({age/60:.0f} min de antiguedad) para {ticker} al cierre.\n{utc_now_str()}")
             break
 
-        price = fetch_latest_price(ticker)
-        if price is None:
-            log.info(f"[{now.strftime('%H:%M')} CT] Sin datos, reintentando...")
+        price, age = fetch_latest_price(ticker)
+        if price is None or (age is not None and age > STALE_BAR_MAX_AGE_SECONDS):
+            if price is None:
+                log.info(f"[{now.strftime('%H:%M')} CT] Sin datos, reintentando...")
+            else:
+                log.info(f"[{now.strftime('%H:%M')} CT] Barra vieja ({age/60:.0f} min > "
+                         f"{STALE_BAR_MAX_AGE_SECONDS/60:.0f} min), ignorada, reintentando...")
+                if not stale_alerted:
+                    send(f"{PREFIX}\nSTATUS: ADVERTENCIA\n"
+                         f"Massive no tiene datos frescos de {ticker} ({age/60:.0f} min de antiguedad) -- "
+                         f"posicion {direction_str} sigue abierta, monitoreo pausado hasta que haya dato "
+                         f"fresco o llegue el flatten de las "
+                         f"{flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT.\n{utc_now_str()}")
+                    stale_alerted = True
             time.sleep(POLL_INTERVAL)
             continue
 
