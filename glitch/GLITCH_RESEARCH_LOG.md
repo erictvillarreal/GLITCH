@@ -3084,10 +3084,15 @@ al dia o en tiempo real:
 | Apex 100K (DLL=$1,500) | pass=21.9%, 11.6 pases/año | -- |
 | Apex 150K (DLL=$2,000) | pass=18.4%, 7.5 pases/año | -- |
 
-Apex 50K (DLL=$2,000... error de tabla, ver nota) iguala casi exactamente a Topstep 50K porque ambos truncan el
-SL nominal de 100 ticks al mismo punto en dolares via su propio limite de riesgo de $2,000 (Topstep: MLL
-$2,000 sobre nc=40*$1.25=$50/tick -> 40 ticks efectivos; Apex 150K: DLL $2,000, mismo calculo) -- NO porque
-el mecanismo "EOD vs tiempo real" cambie nada. El pass rate es MEJOR en los tiers chicos de Apex (25K: 29.9%)
+**CORRECCION (misma sesion, antes de reportar al usuario):** la primera redaccion de este parrafo afirmaba que
+Apex 50K "iguala" a Topstep 50K porque ambos truncarian el SL a 40 ticks via un limite de $2,000 -- eso es
+INCORRECTO, Apex 50K tiene DLL=$1,000 (no $2,000), que trunca el SL efectivo a 20 ticks (floor($1,000/$50)),
+no 40. La similitud de pass rate (25.1% vs 25.5%) ES real (ambos numeros vienen directo de la corrida del
+script) pero NO viene de que ambos limites truncaran al mismo punto en ticks -- son R:R efectivos distintos
+(20:40 en Apex 50K vs 40:40 en Topstep 50K) que resultan en pass rates parecidos por coincidencia de esta
+muestra de 515 dias, no por una equivalencia matematica demostrada. No reafirmar la explicacion causal
+descartada en ningun reporte futuro -- limitarse a los numeros de la tabla de arriba, que si son correctos.
+El pass rate es MEJOR en los tiers chicos de Apex (25K: 29.9%)
 simplemente porque un DLL mas chico ($500) fuerza un SL efectivo mas angosto (10 ticks) contra el mismo TP
 nominal de 40 -- una mejora de R:R accidental, no una ventaja estructural real. **A tiers grandes (100K-150K)
 Apex es PEOR que Topstep para esta geometria exacta** porque el profit target crece ($6,000-$9,000) mas rapido
