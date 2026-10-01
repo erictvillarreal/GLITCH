@@ -3118,3 +3118,88 @@ ni en contra); comision real por contrato de Apex (se asumio la misma $1.22 de T
 reglas de "PA Scaling" por tramo de profit (impone max contracts mas chicos que el eval durante la cuenta
 fondeada -- 100K PA: 3 contratos a profit $0-$1,999, escalando a 6 a partir de $10,000 -- no modelado en esta
 simulacion, que solo cubre el EVAL).
+
+
+## 30-sep-2026 (continuación) — Apex DESCARTADO por automatización; sondeo de otras prop firms de futuros
+
+### TAREA 1 (bloqueante): política de automatización de Apex — CONFIRMADA, Apex queda DESCARTADO
+
+Fuente oficial, texto citado VERBATIM, leído hoy via browser pane (no un agregador de terceros):
+`apextraderfunding.com/help-center/getting-started/prohibited-activities/`
+
+> "**No Automation or Algorithm Usage allowed:** Rewards are intended to recognize human traders actively
+> participating in the learning process, not to reward automated systems executing preprogrammed logic."
+
+Es categórico, sin matiz de "bots de gestión" ni excepción por tamaño. La misma página prohíbe además, como
+hallazgo colateral (no bloqueante, pero documentado): "Using the Trailing Threshold as a Stop Loss: Traders
+are prohibited from using the account's full threshold as a stop-loss mechanism to absorb large losses,
+leading to account liquidation" — **esto es exactamente lo que modeló el bloque "G2 sin modificar (nc=40)" de
+la simulación del 30-sep anterior** (dejar que el DLL trunque el SL en vez de dimensionar nc). Esos números
+(pass=25.1%-29.9%) seguían siendo matemáticamente correctos como ejercicio de "qué pasaría", pero describían
+una práctica que las reglas de Apex prohíben explícitamente — no solo la arquitectura de GLITCH (ejecución
+100% automatizada) viola sus reglas, también la forma en que dimensionamos la posición en la simulación lo
+haría. Doble descalificación, no una.
+
+Verificación secundaria (no oficial, consistente): búsquedas de terceros confirman que Apex sí permite DCA
+bots y "ATM" (gestión semi-automática de una posición ya abierta manualmente) — ninguno de los dos aplica a
+GLITCH, que decide entrada Y salida sin intervención humana.
+
+**Decisión, por instrucción explícita del usuario: Apex Trader Funding queda DESCARTADO para este proyecto,
+sin importar su economía.** No se ejecuta Tarea 2 (proyección de cash flow Apex 50K, ni verificación de PA
+Scaling para un equivalente de Cerebro 2) — ambas estaban condicionadas a este resultado. No se generó ningún
+análisis de cash flow con payouts para Apex.
+
+### Sondeo de otras prop firms de futuros (no EE.UU. incluido, filtro primario = automatización explícitamente permitida)
+
+Dado que Apex cae por el filtro de automatización, ese pasa a ser el filtro PRIMARIO antes de mirar economía —
+ya no tiene sentido simular una firma que prohíbe la arquitectura del proyecto. Fuentes: oficiales donde fue
+posible, terceros especializados (tradingfinder, pickmytrade, etc.) donde el sitio oficial no fue accesible
+directamente — marcado explícitamente abajo cuál es cuál.
+
+**Rusia — descartada sin profundizar.** CME Group prohíbe el acceso de partes sancionadas (OFAC) a cualquiera
+de sus exchanges o a su compensación; ~18 prop firms de futuros bloquean explícitamente traders rusos en 2026
+por sanciones OFAC/UE y falta de marco regulatorio para prop trading ahí. No existe un camino realista a
+futuros reales de CME desde Rusia vía ninguna prop firm legítima. No vale la pena seguir investigando esta
+vía.
+
+**UAE/Medio Oriente — no hay prop firms de FUTUROS con sede ahí; lo que existe son firmas de forex/CFD
+(FundedNext, Funding Pips) que aceptan clientes de la región, más las mismas firmas de futuros de EE.UU.
+(Apex, Topstep, Tradeify, Take Profit Trader, Lucid Trading) que aceptan clientes desde EAU.** El acceso a
+futuros reales de CME corre, casi sin excepción, a través de relaciones de compensación/FCM reguladas en
+EE.UU. (Tradovate, Rithmic, ProjectX/TopstepX) sin importar en qué país está incorporada la marca que vende
+la evaluación -- esto significa que "otro país" no es realmente una palanca distinta para el mismo tipo de
+activo (futuros CME); el verdadero menú de opciones es "cuál marca sobre el mismo riel de ejecución", no
+geografía real de acceso al exchange.
+
+**Europa — FTMO (ya investigado 30-sep anterior) sigue siendo el único con track de Futures real con sede en
+Europa (Chequia); política de automatización específica del lado Futures (no CFD) sigue sin confirmar —
+pendiente del turno anterior, no resuelto hoy.**
+
+**3 candidatos con automatización EXPLÍCITAMENTE permitida (a diferencia de Apex), mismo tipo de activo
+(CME micro futures, MES/MGC confirmados), todos con el mismo patrón estructural EOD-trail + DLL que Apex:**
+
+| Firma | Automatización (fuente) | Drawdown | 50K: target/DD/DLL | Consistencia |
+|---|---|---|---|---|
+| **Bulenox** | EAs/bots/API Rithmic/webhooks TradingView **explícitamente permitidos** (terceros especializados, no verificado en texto oficial propio todavía); prohíbe HFT y scalping abusivo, requiere aprobación previa de terceros-automatización | 2 opciones: trailing tiempo real (defecto tipo Topstep) O EOD+DLL (tipo Apex) — el trader elige | DLL $1,100-$3,300 según tamaño (no confirmado el target/DD exacto 50K) | No confirmada |
+| **Tradeify** | EA/bot **propio y exclusivo** permitido ("debes ser el único dueño, no compartido, no usado en otra firma"); prohíbe HFT y bots de terceros/off-the-shelf; regla de "microscalping" exige holding >10seg en 50%+ de trades y profit | EOD, se traba al llegar a balance inicial+DD, enforced en tiempo real | $3,000 / $2,000 / $1,250, sin consistencia, 1 día mínimo | **Ninguna** |
+| **MyFundedFutures (MFFU)** | Automatización completa y EAs **explícitamente permitidos desde jul-2025** ("CME-compliant, no explotar quirks del simulador"); HFT prohibido en todos los planes | Core/Pro: 3% EOD trailing; Rapid: 4% intradía (el trader elige el plan) | $50K=$2,000 DD (target/DLL no confirmados en esta pasada) | Sí tiene (no cuantificada aquí) |
+
+**Lectura honesta, no optimista:** los tres convergen en el MISMO orden de magnitud de DLL/drawdown que Apex
+y Topstep (~$1,000-$2,000 a 50K) -- dado que el hallazgo del 30-sep anterior fue que el pass rate de G2 lo
+determina el tamaño en dólares del límite de riesgo relativo al SL (no el mecanismo EOD vs tiempo real), es
+razonable ESPERAR que G2 en cualquiera de estos tres aterrice cerca del mismo ~25% que ya vimos en Topstep y
+Apex 50K -- no una mejora estructural, sino una via ADICIONAL con la MISMA economía esperada, cuya única
+ventaja real sobre Apex es que no descalifica la arquitectura del proyecto por automatización. Esto es una
+expectativa razonada, NO una cifra simulada -- ninguno de los tres se corrió con el motor real todavía.
+
+**No verificado / pendiente si el usuario quiere profundizar en alguno de los tres:**
+- Confirmar cada política de automatización contra la fuente PROPIA de cada firma (hoy se usaron agregadores
+  de terceros para Bulenox y MFFU, no sus propias páginas de reglas -- el mismo estándar de rigor que se le
+  exigió a Apex, con cita textual, todavía no se aplicó a estas tres).
+- Elegibilidad para traders en México específicamente (ninguna fuente leída hoy menciona restricciones por
+  país salvo las ya sancionadas -- Rusia, Irán, Corea del Norte, Cuba, Siria vía OFAC -- México no aparece en
+  ninguna lista de restricción encontrada, pero no se confirmó explícitamente con la página de elegibilidad de
+  cada firma).
+- Fee de cada firma, instrumento exacto (confirmar MGC, no solo GC, en Bulenox específicamente).
+- Correr el mismo motor de g2_real_rules_scan.py con los parámetros reales de la firma elegida, una vez
+  confirmada su política de automatización con fuente propia -- mismo proceso que se hizo hoy para Apex.
