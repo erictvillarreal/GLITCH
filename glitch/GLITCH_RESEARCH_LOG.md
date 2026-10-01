@@ -3313,3 +3313,65 @@ paso natural si el usuario decide perseguir Bulenox en serio.
 - Fee de MyFundedFutures Rapid EOD 50K no confirmado en esta pasada.
 - Construir el motor de cash-flow de cuenta fondeada (Bulenox Master, 90/10 split, escalado 2→4→7 post-fondeo
   según un agregador de terceros, no confirmado en fuente propia) si se decide avanzar con Bulenox.
+
+
+## 01-oct-2026 — Incidente real: GEOMETRY-MGC atorado 3h+ por barra vieja de Massive (NO por el wait de 13 min)
+
+El usuario reportó GEOMETRY-MGC corriendo 3h26m con `unreal=$0.00` fijo. Diagnóstico con el log completo
+descargado de Railway (1000 líneas, 28-sep a 01-oct) + una consulta directa a Massive durante el incidente:
+
+- La entrada SÍ ocurrió a tiempo (07:13 CT, dentro del wait de 13 min ya confirmado el 09-sep). El problema
+  empieza DESPUÉS: desde 07:13 hasta 10:28+ CT, cada ciclo de monitoreo reportó el mismo precio (4172.8000)
+  sin moverse ni un tick.
+- **No era exclusivo de hoy.** Comparando los 4 días del log: 28-sep el precio se actualizaba normal tick a
+  tick todo el día; 29-sep, 30-sep y hoy mostraron el mismo patrón -- precio congelado por N minutos, luego un
+  salto brusco que coincide exactamente con el TP o con el flatten, sin ningún paso intermedio. En 30-sep fueron
+  31 minutos (07:13→07:44) antes de saltar directo a `EXIT TP @ 4214.5000`; hoy fueron 700+ minutos.
+- **Consulta directa a Massive durante el incidente** (script ad-hoc corrido por el usuario en su propia
+  terminal, con su `MASSIVE_API_KEY`): la barra más reciente disponible para MGCV6 a las 10:43 CT era de
+  **23:04 CT de la noche anterior** (close=4175.3) -- ni siquiera coincide con el propio precio de entrada de
+  hoy (4172.8 a las 07:13 CT). Confirma que Massive mismo no tenía ningún dato más nuevo para este contrato
+  específico, cubriendo toda la mañana de hoy -- no es un problema del contenedor. El status page de Massive
+  ("todo verde") es sobre disponibilidad del servicio, no sobre completitud de datos por instrumento -- son
+  cosas distintas, y la discrepancia entre el precio de entrada (4172.8) y la barra más reciente ahora
+  (4175.3, de ANTES de la entrada) queda sin explicar del todo -- posible dato transitorio/corregido del lado
+  de Massive, no se investigó más a fondo por no ser necesario para la decisión (ver abajo).
+- **Se descartó reiniciar el contenedor como "ping".** `_reconcile_pending_position()` cierra la posición
+  pendiente de inmediato con el precio disponible EN ESE MOMENTO, marcado `RECONCILED/pnl_estimated=True` --
+  excluido del WR acumulado (mismo mecanismo ya documentado para el incidente del 09-sep). Si Massive seguía
+  sin dato fresco, reiniciar solo habría cerrado el día como "INCONCLUSIVE" sin resolver nada. Decisión:
+  esperar el flatten normal de las 14:30 CT.
+- **Nota de seguridad (fuera de este incidente, mencionada aparte):** durante el diagnóstico la API key de
+  Massive del usuario quedó pegada en texto plano en el chat dos veces (al pegarla sin `export` primero, y de
+  nuevo al reexportarla). Se le indicó rotarla en el dashboard de Massive -- no se usó ni se repitió el valor.
+
+### Fix aplicado (commit `70b3ac0`, LOCAL en `cerebro2-dev`, NO PUSHEADO -- freeze window 07:00-14:30 CT activo)
+
+`fetch_latest_price()` en `scheduler/geometry_mgc_scheduler.py` ahora devuelve `(precio, antigüedad_segundos)`
+en vez de solo precio -- `window_start` es NANOSEGUNDOS epoch (confirmado contra `scripts/fetch_mes_2y.py` y
+`scripts/probe_massive_mgc_delay.py`, que ya usan `/1e9` -- el primer intento del script de diagnóstico de hoy
+asumió milisegundos por error y tronó con "year ... out of range", corregido antes de usarlo).
+
+- `STALE_BAR_MAX_AGE_SECONDS = 20*60` -- no arbitrario: ~2x el delay normal de Massive/MGC ya confirmado el
+  09-sep-2026 (9.43-9.50 min promedio, 9.94 min máximo observado en 2 corridas independientes). Suficiente
+  margen para no disparar en operación normal, muy por debajo de las horas que tomó el incidente real.
+- Los 5 call sites (reconciliación al reiniciar, entrada, flatten de las 14:30, loop de monitoreo) tratan una
+  barra vieja igual que "sin datos": reintentan en vez de operar a ciegas con un precio parado.
+- Una sola alerta de Telegram por corrida al detectar staleness (mismo criterio anti-spam que
+  `check_expiry_alerts()`), más una advertencia explícita si el flatten tuvo que usar `entry_price` como
+  respaldo por falta de dato fresco al cierre.
+- 5 tests nuevos (`TestFetchLatestPriceStaleness`), reproducen el incidente real con un mock de 700 min de
+  antigüedad. 77/77 tests del archivo, 261/261 de todo el repo en `cerebro2-dev`.
+
+**Pendiente de empujar después de las 14:30 CT hoy** (fin del freeze window), tras confirmar que el día 22 ya
+se resolvió solo (TP/SL/flatten) y volver a correr la suite completa una vez más antes del push.
+
+### Pendiente real, no de código
+
+- La discrepancia entre el precio de entrada (4172.8, 07:13 CT) y la barra más reciente consultada 3.5h
+  después (4175.3, de ANTES de la entrada) no se explicó del todo -- posible dato transitorio de Massive en
+  el momento de la entrada que luego "desapareció" del ranking de más-reciente. No bloqueante para el fix de
+  hoy, pero vale la pena si el patrón se repite.
+- Si el staleness persiste en días futuros a pesar del fix (alertas repetidas), reconsiderar si MGCV6
+  realmente sigue siendo el contrato correcto a operar pese a que su vencimiento oficial (~28-oct) está lejos
+  -- el volumen real pudo haber migrado a MGCZ6 (diciembre) antes de lo que sugiere la fecha de vencimiento.
