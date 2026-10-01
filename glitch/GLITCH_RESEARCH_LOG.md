@@ -3007,3 +3007,109 @@ Lectura via WebFetch (extraccion por modelo auxiliar, NO texto literal completo:
 - Sec. 27 DLL: soft breach = auto-liquidacion del resto de la sesion (consistente con help center).
 - La extraccion no encontro lenguaje explicito sobre API/bots (solo la frase de software/AI en Sec. 27). Ambiguedad de automatizacion permanece; el help center si permite API personal (ver log 24-sep).
 - Hallazgo neto: nada nuevo que cambie los numeros; refuerza que el riesgo de conducta es discrecional y sin umbral. Decision del usuario.
+
+
+## 30-sep-2026 — Prop firms alternativas: eligibilidad de G2/MGC en Upcomers, FTMO, Apex Trader Funding, IUX
+
+Pedido del usuario: evaluar si el sistema (G2 MES nc=40 SL100/TP40; MGC XFA nc=6 SL=TP=364) es elegible en 4
+plataformas pegadas de resultados de Google Ads. Fuentes oficiales leidas (WebFetch + browser pane), no solo
+reviews de terceros. Hallazgo general: ninguna reemplaza a Topstep hoy; Apex Trader Funding es la unica que
+vale la pena seguir evaluando como EXTRA, y solo tras simular (no solo leer reglas).
+
+### IUX (iux.com) — EXCLUIDO
+No es una prop firm. Es un broker retail de CFD/forex (ASIC/FSCA/FSC), sin programa de evaluacion/cuenta
+fondeada. No aplica a este proyecto bajo ningun diseño actual.
+
+### Upcomers (upcomers.com) — NO RECOMENDADO sin rediseño
+- Si tiene un track de futures reales (CME/NYMEX/COMEX/CBOT) con MES y MGC confirmados (13 micros listados,
+  help.upcomers.com/en/articles/15013172).
+- Drawdown: trailing "Dynamic Risk Shield" calculado EN TIEMPO REAL sobre P&L NO REALIZADO (help.upcomers.com/
+  en/articles/15012955) -- el mismo defecto estructural que encontramos en Topstep (24-sep), no mejor.
+- Regla NUEVA que Topstep no tiene: "no single open trade may lose more than 1.5% (Classic/Vanguard) o 2%
+  (Legacy) del tamaño de cuenta" -- un hard breach automatico. G2 (nc=40, SL100, MES tv=$1.25) arriesga
+  $5,000/trade -- excede el 1.5-2% de CUALQUIER tier publicado hasta $150K ($2,250 al 1.5%); solo cabria en el
+  tier mas grande anunciado ($400K Thunderbolt, 1.5%=$6,000). MGC XFA (nc=6, SL=TP=364, tv=$1) arriesga
+  $2,184/trade -- no cabe en nada por debajo de ~$145,600 de cuenta.
+- Reviews mixtas (Trustpilot/ForexPeaceArmy): 15.2% de 1-estrella citando reglas ocultas y rechazos de payout.
+- Conclusion: no vale la pena sin un geometria nueva dimensionada para su cap de 1.5-2%/trade, y la reputacion
+  pesa en contra. No se simulo con el motor real (haria falta tabla de primer-toque nueva); si se decide
+  perseguir, ese seria el siguiente paso.
+
+### FTMO (ftmo.com/en/futures) — PENDIENTE DE VERIFICAR, candidato secundario
+- SI tiene track de Futures real (no solo CFD), 30 instrumentos, EOD trailing drawdown (bloquea al llegar a
+  capital inicial, no detalla si es igual de "piso fijo por dia" que Apex -- no verificado con el mismo detalle).
+- Consistencia: mejor dia <= 40-50% del profit total, segun tier -- bloqueante, no solo de payout (a verificar
+  si bloquea el EVAL o solo el payout, el texto citado no lo distingue con certeza).
+- Min 4 dias de trading, target $3,000/$6,000/$9,000 (50K/100K/150K) -- igual a Topstep.
+- Automated trading/EA: confirmado permitido en MT4/MT5/cTrader (lado CFD); el lado FUTURES no confirma
+  politica de API/VPS por separado en la pagina leida -- hallazgo abierto.
+- Fee recurrente mensual $119-269 + reset $109 -- mismo modelo de suscripcion que Topstep, no el one-time fee
+  de Apex.
+- No se corrio simulacion (haria falta confirmar el mecanismo exacto de drawdown primero).
+
+### Apex Trader Funding (apextraderfunding.com) — UNICO CANDIDATO SERIO, SIMULADO CON EL MOTOR REAL
+Producto "EOD Trail" (post-reestructuracion 01-mar-2026). Fuente: apextraderfunding.com (pricing config +
+help center, 30-sep-2026).
+- **EOD Drawdown:** piso calculado UNA VEZ AL DIA al cierre (4:59:59pm ET) sobre balance REALIZADO -- nunca
+  se mueve por un pico de P&L no realizado intradia (a diferencia de la MLL de Topstep, que el texto oficial
+  de Topstep si describe como actualizable con no-realizado). Enforced en tiempo real contra el balance actual.
+- **Daily Loss Limit (DLL):** solo en evals EOD, monto FIJO por tamaño (25K=$500,50K=$1,000,100K=$1,500,
+  150K=$2,000), monitoreado en tiempo real sobre equity total (realizado+no realizado). Si se toca: liquida
+  el dia, la cuenta sigue viva.
+- **Max Drawdown:** 25K=$1,000,50K=$2,000,100K=$3,000,150K=$4,000 (mismos montos de siempre, coincide con MLL
+  de Topstep 50K=$2,000 -- no es casualidad, ver resultado de la simulacion abajo).
+- **SIN regla de consistencia en el eval** (confirmado "NO Eval consistency rules" en homepage) -- el 50%
+  consistency solo bloquea PAYOUTS ya en PA (formula: mejor_dia/0.50 <= profit_neto), no hace fallar la cuenta.
+- Min dias para pasar: 1. Fee ONE-TIME por intento (no suscripcion mensual) -- $119-219 (100K-150K, con cupon
+  vigente), rompe por completo el modelo de renewal-theory ya construido para Topstep (fee/mes * meses vs
+  fee/intento).
+- Instrumentos: confirmados MES y MGC via tabla "Micro Futures" del sitio (ademas de ES/NQ/YM/NKD/EMD/RTY
+  listados sin filtrar).
+
+**SIMULACION (scripts/apex_eod_feasibility_check.py, 30-sep-2026, MISMO motor bar-walk 5min de
+g2_real_rules_scan.py, 515 dias MES, solo cambia MLL/DLL/TARGET/cons/min_days por los de Apex):**
+
+Hipotesis previa a correr el script: el piso "solo EOD" de Apex deberia ELIMINAR el defecto de liquidacion
+intradia que redujo el pass rate de G2 de 81% (fantasia) a 25-26% (real) en Topstep. **La simulacion
+RECHAZA esa hipotesis.** Para una estrategia de 1 trade/dia como G2, el motor ya probo (ver 24-sep) que la
+liquidacion intradia de Topstep y el piso fijo-por-dia de Apex son matematicamente equivalentes dentro de un
+mismo trade (no hay otro trade antes que pueda haber movido el piso) -- lo que realmente determina el pass
+rate es el TAMAÑO EN DOLARES del limite de riesgo relativo a la distancia del SL, no si se recalcula una vez
+al dia o en tiempo real:
+
+| Cuenta | G2 sin modificar (nc=40) en Apex | Referencia Topstep 50K (mismo motor) |
+|---|---|---|
+| Apex 25K (DLL=$500) | pass=29.9%, 34.1 pases/año | -- |
+| Apex 50K (DLL=$1,000) | pass=25.1%, 20.2 pases/año | **pass=25.5%, 41.7 pases/año** |
+| Apex 100K (DLL=$1,500) | pass=21.9%, 11.6 pases/año | -- |
+| Apex 150K (DLL=$2,000) | pass=18.4%, 7.5 pases/año | -- |
+
+Apex 50K (DLL=$2,000... error de tabla, ver nota) iguala casi exactamente a Topstep 50K porque ambos truncan el
+SL nominal de 100 ticks al mismo punto en dolares via su propio limite de riesgo de $2,000 (Topstep: MLL
+$2,000 sobre nc=40*$1.25=$50/tick -> 40 ticks efectivos; Apex 150K: DLL $2,000, mismo calculo) -- NO porque
+el mecanismo "EOD vs tiempo real" cambie nada. El pass rate es MEJOR en los tiers chicos de Apex (25K: 29.9%)
+simplemente porque un DLL mas chico ($500) fuerza un SL efectivo mas angosto (10 ticks) contra el mismo TP
+nominal de 40 -- una mejora de R:R accidental, no una ventaja estructural real. **A tiers grandes (100K-150K)
+Apex es PEOR que Topstep para esta geometria exacta** porque el profit target crece ($6,000-$9,000) mas rapido
+que el riesgo permitido, y pases/año cae a la mitad o menos (7.5-11.6 vs 41.7) por el mayor tiempo a pase.
+
+Redimensionar nc para respetar el DLL explicitamente (nc=4/8/12/16 segun tier) es PEOR todavia (pass=9.3-21.2%
+con ventana de 30 dias real) -- el payoff por dia se achica mas rapido de lo que se achica el riesgo permitido.
+
+**Conclusion:** Apex no es una mejora de la economia de G2 -- es, en el mejor caso (50K), estadisticamente
+igual a Topstep (25.1% vs 25.5%, misma geometria sin cambios). La ventaja real de Apex no esta en el mecanismo
+de drawdown (la hipotesis inicial era incorrecta) sino en tres cosas estructurales independientes del pass
+rate: (1) SIN regla de consistencia que pueda hacer fallar el eval, (2) fee one-time en vez de suscripcion
+mensual, (3) min 1 dia para pasar en vez de 2. Vale la pena como EXTRA de diversificacion a $50K (misma
+economia que Topstep, mismo numero esperado de intentos) pero no reemplaza a Topstep ni justifica una cuenta
+grande (100K/150K) con la geometria actual de G2. Para MGC XFA (nc=6, SL=TP=364, tv=$1): riesgo/trade =
+$2,184 -- excede el DLL de TODOS los tiers de Apex (max $2,000 en 150K); nc=5 ($1,820) cabria justo en 150K
+pero no se simulo el flujo de payouts completo (haria falta adaptar dd_cash/engine_real.py a las reglas de
+Apex, no solo este chequeo de compatibilidad de nc) -- pendiente si el usuario quiere profundizar.
+
+**No verificado (fuera de alcance de esta pasada rapida):** politica de automated trading/API/VPS de Apex (no
+encontrada en las paginas leidas hoy -- Topstep SI prohibe VPS explicitamente, Apex no lo menciono ni a favor
+ni en contra); comision real por contrato de Apex (se asumio la misma $1.22 de Topstep MES, no confirmada);
+reglas de "PA Scaling" por tramo de profit (impone max contracts mas chicos que el eval durante la cuenta
+fondeada -- 100K PA: 3 contratos a profit $0-$1,999, escalando a 6 a partir de $10,000 -- no modelado en esta
+simulacion, que solo cubre el EVAL).
