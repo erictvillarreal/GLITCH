@@ -3375,3 +3375,16 @@ se resolvió solo (TP/SL/flatten) y volver a correr la suite completa una vez m�
 - Si el staleness persiste en días futuros a pesar del fix (alertas repetidas), reconsiderar si MGCV6
   realmente sigue siendo el contrato correcto a operar pese a que su vencimiento oficial (~28-oct) está lejos
   -- el volumen real pudo haber migrado a MGCZ6 (diciembre) antes de lo que sugiere la fecha de vencimiento.
+
+### Cierre del incidente (01-oct-2026, 19:30 UTC)
+
+Telegram confirmó el resultado final del día 22: `[CLOSE] [FLATTEN] ... PnL: $-0.00`. Massive nunca recuperó
+datos frescos de MGCV6 en TODO el resto de la sesión (07:13→14:30 CT, 7h17min) -- no fue un bache de minutos,
+fue el día entero. Esto sube la prioridad del punto pendiente de arriba: si este patrón se repite, vale la pena
+revisar si el volumen real de MGCV6 ya migró a MGCZ6 (diciembre) pese a que el vencimiento oficial (~28-oct)
+está lejos.
+
+**Push confirmado:** `cerebro2-dev` actualizado (`f4a1ed0..70b3ac0`, 3 commits: el fix de staleness de hoy +
+2 commits del 25-sep que habían quedado locales sin pushear -- flatten condicional de feriados y el puntero del
+research log). Suite completa (261/261) verde justo antes del push. Railway debería redesplegar
+`GEOMETRY-MGC` automáticamente con el código nuevo para la sesión de mañana.
