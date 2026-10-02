@@ -111,6 +111,14 @@ LOG_FILE = f"geometry_{PRODUCT_KEY.lower()}_log.json"  # nombre del archivo DENT
 # append-only). Reconciliacion de crash-a-mitad-de-monitoreo: ver
 # _reconcile_pending_position() y el paso 0 de run().
 PENDING_FILE = f"geometry_{PRODUCT_KEY.lower()}_pending.json"
+# NUEVO (29-sep-2026, bloqueante #5 -- ver GLITCH_RESEARCH_LOG.md / reporte
+# del mismo dia): archivo DISTINTO de PENDING_FILE arriba -- PENDING_FILE es
+# el estado interno de ESTE scheduler cuando el simula el ciclo completo
+# (DRY_RUN=true); ORDER_FILE es la señal que este scheduler entrega a
+# pi/pi_executor.py (Raspberry Pi) cuando DRY_RUN=false, para que el Pi
+# coloque la orden REAL contra ProjectX. Ver paso 2c de run() abajo y el
+# docstring de pi_executor.py para el contrato completo del payload.
+ORDER_FILE = f"orden_pendiente_{PRODUCT_KEY.lower()}.json"
 POLL_INTERVAL = 60  # segundos entre polls
 
 # Benchmark teorico para el reporte diario de pass_rate -- ver
@@ -423,6 +431,18 @@ def save_pending(d: dict):
     _gist_save_state(PENDING_FILE, d)
 
 
+def load_order_signal() -> dict:
+    """{} si no hay ninguna señal pendiente sin consumir por el Pi -- ver
+    ORDER_FILE arriba y pi/pi_executor.py."""
+    return _gist_load_state(ORDER_FILE)
+
+
+def save_order_signal(d: dict):
+    """Pasar {} para limpiar (señal ya consumida por el Pi, o para permitir
+    que una nueva señal se escriba sin chocar con una anterior)."""
+    _gist_save_state(ORDER_FILE, d)
+
+
 def is_trading_day():
     """
     Calendario de feriados duplicado deliberadamente desde
@@ -572,6 +592,56 @@ def run():
                f"{utc_now_str()}")
     send(kickoff)
     log.info(kickoff.replace("\n", " | "))
+
+    # ── 2c. Modo real (DRY_RUN=false): delega la ejecucion al Pi -- bloqueante
+    #         #5, ver GLITCH_RESEARCH_LOG.md / reporte 29-sep-2026. ANTES de
+    #         este cambio, DRY_RUN era solo una ETIQUETA -- run() siempre
+    #         simulaba el ciclo completo (steps 3-5 abajo) sin importar su
+    #         valor, y nunca escribia nada que pi_executor.py pudiera leer.
+    #
+    #         Con DRY_RUN=false, este scheduler YA NO simula: escribe la
+    #         señal de hoy a ORDER_FILE (mismo Gist) y termina aqui.
+    #         pi_executor.py (Raspberry Pi, nunca Railway -- Topstep prohibe
+    #         VPN/VPS para transmitir ordenes) es quien coloca la orden real,
+    #         monitorea hasta cierre, y escribe el resultado REAL directo a
+    #         LOG_FILE -- mismo historico, misma logica de intento/PASE/
+    #         QUIEBRE de este scheduler (_current_intento, _attempt_pnl,
+    #         etc.), sin cambios ahi: la transicion paper -> real es
+    #         transparente para esos calculos.
+    #
+    #         Deliberadamente NO se espera el precio de entrada de yfinance
+    #         aqui (steps 3+) -- ese precio es solo la referencia usada por
+    #         la SIMULACION interna; la ejecucion real usa el precio de
+    #         mercado real de ProjectX en el momento en que el Pi coloca la
+    #         orden (ver pi_executor.py::_reference_price).
+    if not DRY_RUN:
+        existing_signal = load_order_signal()
+        if existing_signal:
+            msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
+                   f"ERROR: ya hay una señal de {existing_signal.get('date')} sin consumir por el Pi "
+                   f"-- no se sobreescribe (evita perder o duplicar una orden real). Verificar que "
+                   f"pi_executor.py este corriendo en el Pi. No se envia señal nueva hoy.\n"
+                   f"{utc_now_str()}")
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
+
+        save_order_signal({
+            "date": today_str, "side": side, "direction": direction_str,
+            "ticker": CFG.spec.yf_ticker, "product_code": CFG.spec.product_code,
+            "nc": CFG.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+            "product": PRODUCT_KEY, "intento": intento_actual, "dry_run": False,
+        })
+        real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+                    f"Direction: {direction_str}\nContracts: {CFG.nc}\n"
+                    f"SL/TP: {CFG.sl_ticks}/{CFG.tp_ticks} ticks\n"
+                    f"Intento #{intento_actual}\n"
+                    f"Ejecucion real delegada a pi_executor.py -- este scheduler no coloca la "
+                    f"orden ni monitorea el resultado en este modo.\n"
+                    f"{utc_now_str()}")
+        send(real_msg)
+        log.info(real_msg.replace("\n", " | "))
+        return
 
     # ── 3. Espera apertura RTH + margen de propagacion de Yahoo.
     #        CAMBIO (03-sep-2026): 9:32 -> 9:35 CT. La ventana anterior

@@ -205,6 +205,98 @@ class TestLoadSaveLogDelegatesToGistStore:
         assert captured["data"] == {}
 
 
+class TestDryRunFalseDelegatesToPi:
+    """
+    29-sep-2026, bloqueante #5 -- ver GLITCH_RESEARCH_LOG.md / reporte del
+    mismo dia. ANTES de este cambio, DRY_RUN era solo una ETIQUETA: run()
+    simulaba el ciclo completo (fetch_intraday, monitor loop, PnL) sin
+    importar su valor. Estos tests cubren el comportamiento nuevo: con
+    DRY_RUN=false, run() debe escribir la señal a ORDER_FILE y retornar
+    ANTES de llegar a fetch_intraday() -- confirmado haciendo que
+    fetch_intraday explote si se llega a invocar.
+    """
+
+    def _patch_common(self, monkeypatch, sent):
+        monkeypatch.setattr(scheduler, "is_trading_day", lambda: True)
+        monkeypatch.setattr(scheduler, "send", lambda msg: sent.append(msg))
+        monkeypatch.setattr(scheduler, "get_front_month", lambda code, cache: "MESZ6")
+        monkeypatch.setattr(scheduler, "check_expiry_alerts", lambda cache, send_fn, prefix: None)
+        monkeypatch.setattr(scheduler, "load_log", lambda: [])
+        monkeypatch.setattr(scheduler, "save_log", lambda l: None)
+        monkeypatch.setattr(scheduler, "load_pending", lambda: {})
+        monkeypatch.setattr(scheduler, "save_pending", lambda d: None)
+
+        def _boom(*a, **k):
+            raise AssertionError("fetch_intraday no deberia llamarse cuando DRY_RUN=false -- "
+                                  "eso significaria que la simulacion interna sigue corriendo.")
+        monkeypatch.setattr(scheduler, "fetch_intraday", _boom)
+
+    def test_writes_order_signal_and_returns_without_simulating(self, monkeypatch):
+        monkeypatch.setattr(scheduler, "DRY_RUN", False)
+        sent = []
+        self._patch_common(monkeypatch, sent)
+        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+        captured = {}
+        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: captured.update(d))
+
+        scheduler.run()
+
+        assert captured["product"] == "MES"
+        assert captured["dry_run"] is False
+        assert captured["side"] in (1, -1)
+        assert captured["nc"] == scheduler.CFG.nc
+        assert captured["sl_ticks"] == scheduler.CFG.sl_ticks
+        assert captured["tp_ticks"] == scheduler.CFG.tp_ticks
+        assert "intento" in captured and "date" in captured
+        assert any("SEÑAL ENVIADA AL PI" in m for m in sent)
+
+    def test_does_not_overwrite_an_unconsumed_signal(self, monkeypatch):
+        monkeypatch.setattr(scheduler, "DRY_RUN", False)
+        sent = []
+        self._patch_common(monkeypatch, sent)
+        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {"date": "2026-09-28", "side": 1})
+        save_calls = []
+        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: save_calls.append(d))
+
+        scheduler.run()
+
+        assert save_calls == []
+        assert any("STATUS: BLOCKED" in m for m in sent)
+
+    def test_dry_run_true_never_touches_order_signal(self, monkeypatch):
+        """Guardia de regresion -- el modo DRY_RUN=true (produccion actual,
+        paper trading simulado) no debe tocar ORDER_FILE en absoluto."""
+        monkeypatch.setattr(scheduler, "DRY_RUN", True)
+        sent = []
+        monkeypatch.setattr(scheduler, "is_trading_day", lambda: True)
+        monkeypatch.setattr(scheduler, "send", lambda msg: sent.append(msg))
+        monkeypatch.setattr(scheduler, "get_front_month", lambda code, cache: "MESZ6")
+        monkeypatch.setattr(scheduler, "check_expiry_alerts", lambda cache, send_fn, prefix: None)
+        monkeypatch.setattr(scheduler, "load_log", lambda: [])
+        monkeypatch.setattr(scheduler, "save_log", lambda l: None)
+        monkeypatch.setattr(scheduler, "load_pending", lambda: {})
+        monkeypatch.setattr(scheduler, "save_pending", lambda d: None)
+        monkeypatch.setattr(scheduler, "load_order_signal", _raise_if_called)
+        monkeypatch.setattr(scheduler, "save_order_signal", _raise_if_called)
+
+        import pandas as pd
+
+        def _fake_fetch(ticker):
+            return pd.DataFrame({"close": [6000.0]})
+        monkeypatch.setattr(scheduler, "fetch_intraday", _fake_fetch)
+        # 14:31 CT -- ya paso la apertura RTH (salta esa espera) y ya toca
+        # el flatten obligatorio de fin de sesion (sale del monitor loop en
+        # la primera vuelta, sin dormir de verdad).
+        monkeypatch.setattr(scheduler, "ct_now",
+                             lambda: dt.datetime(2026, 9, 29, 14, 31, tzinfo=scheduler.CT))
+
+        scheduler.run()  # no debe lanzar AssertionError -- confirma que nunca toco ORDER_FILE
+
+
+def _raise_if_called(*a, **k):
+    raise AssertionError("no deberia llamarse en este modo")
+
+
 class TestUnifiedStartupCheck:
     """
     01-sep-2026: mismo motivo y mismo patron que
