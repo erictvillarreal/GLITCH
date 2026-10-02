@@ -17,3 +17,4 @@ glitch/data_cache/*.parquet
 !glitch/data_cache/camino_b_products_final.csv
 !glitch/data_cache/camino_b_grid_results.csv
 !glitch/data_cache/camino_b_direction_check.csv
+venv/
