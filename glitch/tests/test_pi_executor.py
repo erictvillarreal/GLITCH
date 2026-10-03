@@ -51,6 +51,8 @@ class FakeClient:
         self.contracts = [{"id": "CON.MES.Z26", "name": "MESZ6", "expirationDate": "2026-12-01"}]
         self.bars = [{"close": 6000.0}]
         self.flattened = False
+        self.closed_contracts = []
+        self.close_contract_error = None
         self._next_id = 100
 
     def get_accounts(self, only_active=True):
@@ -93,8 +95,15 @@ class FakeClient:
                 pass
 
     def flatten_position(self, account_id, symbol):
+        """El flatten VIEJO (decide el lado con el enum sin verificar) -- el ejecutor ya NO debe llamarlo."""
+        raise AssertionError("pi_executor no debe usar flatten_position() (depende de OrderSide sin verificar y de netPos)")
+
+    def close_contract(self, account_id, contract_id):
+        if self.close_contract_error:
+            raise RuntimeError(self.close_contract_error)
         self.flattened = True
-        return {"flattened_orders": []}
+        self.closed_contracts.append((account_id, contract_id))
+        return {"success": True}
 
     def get_positions(self, account_id):
         return self.positions
@@ -278,6 +287,7 @@ class TestHappyPathPlacesBracketAndLogs:
         assert any("[OPEN]" in m for m in sent)
         assert any("[CLOSE]" in m for m in sent)
         assert client.flattened is True
+        assert client.closed_contracts == [(555, "CON.MES.Z26")]
 
 
 class TestReconcileResumesInterruptedBracket:
@@ -355,3 +365,87 @@ class TestResolveContractId:
         client.contracts = [{"id": "CON.MGC.Z26", "name": "MGCZ6", "expirationDate": "2026-12-01"}]
         with pytest.raises(RuntimeError):
             pi_executor.resolve_contract_id(client, "MES")
+
+
+class TestSessionEndFlattenUsesCloseContract:
+    """03-oct-2026: client.flatten_position() decidia el lado de cierre con brokers.projectx.OrderSide (enum SIN
+    verificar, bloqueante #1) y leia `netPos` (campo tampoco verificado). Con el enum invertido, "cerrar" un LONG
+    compraria MAS; con `netPos` ausente no cerraria nada y aun asi reportaria FLATTEN. El cierre ahora usa
+    closeContract, que no depende del lado."""
+
+    def _poll_at_close(self, client, monkeypatch, sent):
+        monkeypatch.setattr(pi_executor, "ct_now", lambda: dt.datetime(2026, 10, 1, 14, 31, tzinfo=pi_executor.CT))
+        monkeypatch.setattr(pi_executor, "send", lambda m: sent.append(m))
+        return pi_executor.poll_position_until_closed(client, 555, "CON.MES.Z26", 1, 2, 6050.0, 5975.0,
+                                                       poll_interval=0)
+
+    def test_flatten_calls_close_contract_and_cancels_exit_orders(self, monkeypatch):
+        client, sent = FakeClient(), []
+        out = self._poll_at_close(client, monkeypatch, sent)
+        assert out["result"] == "FLATTEN"
+        assert "flatten_failed" not in out
+        assert client.closed_contracts == [(555, "CON.MES.Z26")]
+        assert set(client.cancelled) == {1, 2}
+        assert sent == []
+
+    def test_flatten_failure_alerts_loudly_and_is_flagged(self, monkeypatch):
+        client, sent = FakeClient(), []
+        client.close_contract_error = "closeContract fallo: boom"
+        out = self._poll_at_close(client, monkeypatch, sent)
+        assert out["result"] == "FLATTEN" and out["flatten_failed"] is True
+        assert len(sent) == 1 and "ABIERTA" in sent[0] and "MANUALMENTE" in sent[0]
+
+    def test_flatten_failure_is_recorded_in_the_historic_log(self, fake_gist, monkeypatch):
+        client = FakeClient()
+        state = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 200,
+                 "tp_price": 6050.0, "sl_price": 5975.0, "tp_order_id": 1, "sl_order_id": 2,
+                 "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "2026-10-01 10:00 UTC"}
+        monkeypatch.setattr(pi_executor, "send", lambda m: None)
+        pi_executor._finalize_cycle(client, 555, state, {"result": "FLATTEN", "exit_price": None,
+                                                         "exit_price_estimated": True, "flatten_failed": True})
+        assert fake_gist["geometry_mes_log.json"][0]["flatten_failed"] is True
+
+    def test_normal_close_does_not_add_the_flag_to_the_log(self, fake_gist, monkeypatch):
+        client = FakeClient()
+        state = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 200,
+                 "tp_price": 6050.0, "sl_price": 5975.0, "tp_order_id": 1, "sl_order_id": 2,
+                 "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "2026-10-01 10:00 UTC"}
+        monkeypatch.setattr(pi_executor, "send", lambda m: None)
+        pi_executor._finalize_cycle(client, 555, state, {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True})
+        assert "flatten_failed" not in fake_gist["geometry_mes_log.json"][0]
+
+    def test_executor_source_no_longer_calls_the_unverified_flatten(self):
+        """Ninguna LINEA DE CODIGO (los comentarios que explican el cambio no cuentan) llama flatten_position()."""
+        import inspect
+        code_lines = [l for l in inspect.getsource(pi_executor).splitlines() if not l.lstrip().startswith("#")]
+        assert not any("flatten_position(" in l for l in code_lines)
+
+
+class TestOpenBracketHeartbeat:
+    """Sin heartbeat el log queda mudo durante todo un trade y el watchdog daria falsa alarma."""
+
+    def test_heartbeat_logged_every_n_polls_while_bracket_is_open(self, monkeypatch, caplog):
+        import logging
+        client = FakeClient()
+        client.open_order_ids = {1, 2}            # TP y SL siguen abiertos: la posicion no se resuelve
+        calls = {"n": 0}
+
+        def _clock():
+            calls["n"] += 1
+            hh, mm = (10, 0) if calls["n"] <= 25 else (14, 31)    # 25 polls, luego cierre de sesion
+            return dt.datetime(2026, 10, 1, hh, mm, tzinfo=pi_executor.CT)
+
+        monkeypatch.setattr(pi_executor, "ct_now", _clock)
+        monkeypatch.setattr(pi_executor, "send", lambda m: None)
+        monkeypatch.setattr(pi_executor.time, "sleep", lambda s: None)
+        with caplog.at_level(logging.INFO):
+            out = pi_executor.poll_position_until_closed(client, 555, "CON.MES.Z26", 1, 2, 6050.0, 5975.0,
+                                                          poll_interval=0)
+        beats = [r for r in caplog.records if "heartbeat" in r.getMessage()]
+        assert out["result"] == "FLATTEN"
+        assert len(beats) == 25 // pi_executor.HEARTBEAT_EVERY_POLLS     # polls 10 y 20
+
+    def test_heartbeat_interval_is_well_inside_the_watchdog_threshold(self):
+        import watchdog  # noqa: F401 -- pi/ops en sys.path via test_pi_ops
+        heartbeat_s = pi_executor.HEARTBEAT_EVERY_POLLS * pi_executor.POSITION_POLL_INTERVAL
+        assert heartbeat_s < 10 * 60

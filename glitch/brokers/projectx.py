@@ -420,6 +420,24 @@ class ProjectXClient:
             results.append(oid)
         return {"flattened_orders": results}
 
+    def close_contract(self, account_id: int, contract_id) -> dict:
+        """
+        POST /api/Position/closeContract {accountId, contractId} -- cierra la posicion de ESE
+        contrato en el broker (03-oct-2026). A diferencia de flatten_position(), NO decide un lado
+        de compra/venta: no usa OrderSide (enum sin verificar, bloqueante #1) ni lee `netPos`.
+        Lanza RuntimeError si la respuesta no trae success=True -- fallar ruidosamente es
+        preferible a creer que se cerro una posicion que sigue abierta. El endpoint viene de la
+        documentacion oficial de ProjectX (gateway.docs.projectx.com) y todavia no se ha
+        confirmado contra una cuenta real: pi/verify_orderside_demo.py lo ejercita en la
+        cuenta Practice y deja la respuesta cruda en su log.
+        """
+        self.ensure_auth()
+        resp = self._post("/api/Position/closeContract", {"accountId": account_id, "contractId": contract_id})
+        if not (isinstance(resp, dict) and resp.get("success", False)):
+            err = resp.get("errorMessage") if isinstance(resp, dict) else resp
+            raise RuntimeError(f"closeContract fallo: {err}")
+        return resp
+
     # ── HTTP helpers ──────────────────────────────────────────────────────
 
     def _post(self, path: str, body: dict, auth: bool = True) -> Any:
