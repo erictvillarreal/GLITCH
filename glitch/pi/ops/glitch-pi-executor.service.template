@@ -1,0 +1,43 @@
+# GLITCH -- unidad systemd del Pi Executor (03-oct-2026). PLANTILLA: install_service.sh
+# reemplaza los marcadores entre arrobas y la instala en /etc/systemd/system/. No editar a mano
+# la copia instalada -- cambiar esta plantilla y volver a correr install_service.sh.
+#
+# Por que cada linea:
+#   Restart=always + RestartSec=30   -> sobrevive crashes y reinicios del Pi. 30 s (no 5) porque
+#                                       require_env() manda UN Telegram por cada arranque fallido
+#                                       (env faltante): un loop rapido seria spam.
+#   StartLimitBurst=5 / Interval=900 -> si arranca y muere 5 veces en 15 min (config rota, no una
+#                                       falla pasajera), systemd DEJA de reintentar y la unidad queda
+#                                       "failed" en vez de crash-loopear indefinidamente; el watchdog
+#                                       (log sin lineas nuevas) lo detecta y avisa. Despues de
+#                                       arreglarlo: sudo systemctl reset-failed glitch-pi-executor
+#   python -u                        -> stdout sin buffer: el log (y con el, el watchdog) ve cada
+#                                       linea al instante.
+#   EnvironmentFile                  -> credenciales en un archivo chmod 600 FUERA de git, nunca en la
+#                                       unidad (que es legible por todos los usuarios del Pi).
+#   StandardOutput=append:           -> el log vive en un archivo normal (pi_executor.log) que el
+#                                       watchdog revisa por fecha de modificacion.
+#   After/Wants network-online       -> no arranca antes de tener red (Gist, Telegram, ProjectX).
+#   NoNewPrivileges                  -> el proceso no puede escalar privilegios.
+[Unit]
+Description=GLITCH Pi Executor (ejecucion real de ordenes contra ProjectX)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@PI_USER@
+WorkingDirectory=@GLITCH_DIR@
+EnvironmentFile=@ENV_FILE@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@VENV@/bin/python -u pi/pi_executor.py
+Restart=always
+RestartSec=30
+StandardOutput=append:@LOG_FILE@
+StandardError=append:@LOG_FILE@
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

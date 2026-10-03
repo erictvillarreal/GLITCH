@@ -167,6 +167,9 @@ ORDERSIDE_VERIFIED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)
 
 POLL_SECONDS = 120           # intervalo entre ciclos de main() -- "cada 2 minutos", ver reporte 29-sep-2026
 POSITION_POLL_INTERVAL = 30  # segundos entre checks de TP/SL DENTRO de un ciclo con bracket abierto
+HEARTBEAT_EVERY_POLLS = 10   # una linea de log cada N polls (10 x 30 s = ~5 min) mientras hay un bracket abierto.
+                             # Sin esto el log queda MUDO horas durante un trade y pi/ops/watchdog.py (que vigila que
+                             # el log siga creciendo) daria falsa alarma en cada posicion abierta.
 FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30  # mismo cierre de sesion RTH que geometry_scheduler.py (14:30 CT)
 
 _FILL_PRICE_KEYS = ("filledPrice", "avgFillPrice", "averageFillPrice", "fillPrice", "price")
@@ -383,15 +386,29 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
     precio objetivo (tp_price/sl_price) marcado como estimado, nunca sin
     marcar.
     """
+    polls = 0
     while True:
         now = ct_now()
         if now.hour * 60 + now.minute >= flatten_hour * 60 + flatten_minute:
             client.cancel_exit_orders(tp_order_id, sl_order_id)
+            # closeContract (POST /api/Position/closeContract) NO depende de que lado es compra/venta --
+            # a diferencia de client.flatten_position(), que decide el lado con brokers.projectx.OrderSide
+            # (el enum SIN verificar, bloqueante #1) y lee `netPos` (campo tampoco verificado): con el enum
+            # invertido, "flatten" de un LONG compraria MAS en vez de cerrar. Ver pi/ARCHITECTURE.md.
+            flatten_failed = False
             try:
-                client.flatten_position(account_id, str(contract_id))
+                client.close_contract(account_id, contract_id)
             except Exception as e:
+                flatten_failed = True
                 log.error(f"poll_position_until_closed: flatten de fin de sesion fallo -- {e}")
-            return {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True}
+                send(f"{PREFIX}\nSTATUS: ALERTA\n"
+                     f"El flatten de fin de sesion FALLO ({e}). La posicion en {contract_id} puede seguir "
+                     f"ABIERTA -- cerrarla MANUALMENTE en TopstepX ahora (Topstep exige estar plano antes de "
+                     f"las 3:10 PM CT).\n{utc_now_str()}")
+            outcome = {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True}
+            if flatten_failed:
+                outcome["flatten_failed"] = True
+            return outcome
 
         try:
             open_ids = {o.get("id") or o.get("orderId") for o in client.get_open_orders(account_id)}
@@ -422,6 +439,10 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
             # UNKNOWN, queda en el historico para revision manual.
             return {"result": "UNKNOWN", "exit_price": None, "exit_price_estimated": True}
 
+        polls += 1
+        if polls % HEARTBEAT_EVERY_POLLS == 0:
+            log.info(f"[{now.strftime('%H:%M')} CT] bracket abierto (heartbeat): TP y SL siguen en el libro, "
+                     f"{polls} polls sin resolverse")
         time.sleep(poll_interval)
 
 
@@ -478,6 +499,8 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
         "entry_price_estimated": entry_estimated,
         "exit_price_estimated": outcome.get("exit_price_estimated", False),
     }
+    if outcome.get("flatten_failed"):
+        entry["flatten_failed"] = True   # solo cuando ocurre -- revision manual de la posicion
     append_to_historic_log(signal["product"], entry)
     save_order_signal({})
     save_pi_state({})
