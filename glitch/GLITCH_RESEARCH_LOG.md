@@ -3388,3 +3388,46 @@ está lejos.
 2 commits del 25-sep que habían quedado locales sin pushear -- flatten condicional de feriados y el puntero del
 research log). Suite completa (261/261) verde justo antes del push. Railway debería redesplegar
 `GEOMETRY-MGC` automáticamente con el código nuevo para la sesión de mañana.
+
+
+## 03-oct-2026 — Pi: operación confiable (rama `pi/ops-hardening`, PROPUESTA — pendiente de revisión humana)
+
+Pedido (6 puntos). Estado real del Pi al empezar: `pi/pi_executor.py` YA es código real en `origin/main`
+(588 líneas, merge `9378116`), con el gate de Fase 3 y `_load_verified_side_map()`. Ya no es el pseudocódigo
+descrito el 29-sep. El Pi no respondía desde el Mac (`No route to host`, ping 100% de pérdida) — **no se tocó ni se
+diagnosticó el Pi en vivo; todo lo siguiente está escrito pero NO ejecutado contra el Pi ni contra el broker.**
+
+Entregado en `pi/ops-hardening` (commits `25f7feb` y `29de7e5`, suite completa verde: 273 tests, 0 fallos):
+1. `pi/ops/diagnose_reboot.sh` — diagnóstico de solo lectura; veredicto conservador. Nota: en Raspberry Pi OS el
+   journal suele ser volátil (entonces `journalctl -b -1` no existe) y `Automatic-Reboot` de unattended-upgrades es
+   `false` por default — la hipótesis "fue unattended-upgrades" no está probada, el script la prueba o la descarta.
+2. Servicio systemd (`Restart=always`, `RestartSec=30`, tope de 5 fallos/15 min porque `require_env` manda un
+   Telegram por arranque fallido) + `install_service.sh` (no lee ni imprime credenciales, no abre el gate, no mata
+   procesos).
+3. `pi/ops/watchdog.py` + cron: alerta si `pi_executor.log` no crece en 10 min.
+4. `pi/verify_orderside_demo.py`: una orden MES tamaño 1, `side=0`, en Practice `28197753`; escribe
+   `pi/orderside_verified.json` con exactamente `{BUY_SIDE_INT, SELL_SIDE_INT}`. Gate `GLITCH_PI_PHASE3=si`,
+   `--account-id` explícito, confirmación doble, `--dry-run`. Sin ejecutar.
+5. `pi/ARCHITECTURE.md`: división Railway vs Pi verificada contra el código.
+6. (interactivo, no de código) pendiente con el usuario.
+
+### Hallazgos al leer el código real (los dos primeros son riesgos de dinero real)
+
+* **El flatten de fin de sesión del Pi era peligroso.** `ProjectXClient.flatten_position()` decide el lado de cierre
+  con `OrderSide` (enum sin verificar: `BID=0 # Sell`, la doc oficial dice `0=Buy`) y lee `netPos` (campo tampoco
+  verificado). Con el enum invertido, "cerrar" un LONG compraría más; con `netPos` ausente no cerraría nada y aun así
+  reportaría `FLATTEN`. Propuesta (commit separado `25f7feb`, **requiere revisión humana**, CLAUDE.md regla 4):
+  flatten vía `POST /api/Position/closeContract` (no depende del lado) + alerta si falla.
+* **Sin heartbeat, el watchdog daría falsa alarma en cada trade**: `poll_position_until_closed` no logueaba nada
+  durante el monitoreo (horas). Heartbeat cada ~5 min añadido (mismo commit `25f7feb`).
+* **Suposiciones de API sin verificar**, que el log crudo de la primera corrida del verificador va a confirmar o
+  refutar: endpoint `Position/search` (la doc documenta `Position/searchOpen`) y campo `netPos` (la doc describe
+  `type`+`size`). Si resultan distintos, `_has_untracked_position` (guardia anti-posición-huérfana) no detectaría nada.
+* **Cerebro 2 (MGC XFA) no tiene handoff al Pi**: `geometry_mgc_scheduler.py` no tiene la rama `DRY_RUN=false`
+  (0 menciones de `orden_pendiente`). Hoy el Pi solo puede ejecutar lo que alimenta `geometry_scheduler.py` (MES).
+* **El Pi no maneja cierres anticipados** (flatten fijo 14:30 CT; 27-nov y 24-dic deben ser 11:30 CT). El fix existe
+  para los schedulers de Railway (`execution/session_calendar.py`) pero **no está en `origin/main`**: `main` local y
+  `origin/main` divergieron (local tiene `ba88626`/`bb17392` sin pushear; `origin/main` tiene el merge del Pi
+  `9378116`, `dae1a8f`, `7f6f0bc`). Hay que reconciliar `main` y aplicarlo al Pi **antes del 27-nov**.
+* El watchdog corre en el mismo Pi: si el Pi está apagado o sin red no puede avisar (un chequeo externo desde
+  Railway sobre el Gist no está construido).
