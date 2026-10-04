@@ -122,6 +122,13 @@ def _signal(**overrides):
     return base
 
 
+@pytest.fixture(autouse=True)
+def _fixed_clock(monkeypatch):
+    """Reloj fijo (29-sep-2026 10:00 CT): la guardia de señal vieja compara contra la fecha de hoy, y las señales
+    de prueba traen esa fecha. Los tests que necesitan otra hora la sobreescriben con su propio monkeypatch."""
+    monkeypatch.setattr(pi_executor, "ct_now", lambda: dt.datetime(2026, 9, 29, 10, 0, tzinfo=pi_executor.CT))
+
+
 @pytest.fixture
 def fake_gist(monkeypatch):
     store = {}
@@ -239,7 +246,7 @@ class TestUntrackedPositionGuard:
 
     def test_refuses_new_order_when_broker_shows_untracked_position(self, fake_gist, sent, monkeypatch):
         client = FakeClient()
-        client.positions = [{"contractId": "CON.MES.Z26", "netPos": 3}]
+        client.positions = [{"contractId": "CON.MES.Z26", "type": 1, "size": 3, "averagePrice": 6000.0}]
         monkeypatch.setattr(pi_executor, "authenticate", lambda: client)
         monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", True)
         monkeypatch.setattr(pi_executor, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 1, "SELL_SIDE_INT": 0})
@@ -449,3 +456,167 @@ class TestOpenBracketHeartbeat:
         import watchdog  # noqa: F401 -- pi/ops en sys.path via test_pi_ops
         heartbeat_s = pi_executor.HEARTBEAT_EVERY_POLLS * pi_executor.POSITION_POLL_INTERVAL
         assert heartbeat_s < 10 * 60
+
+
+# ── Arreglos del 4-oct-2026 (hallazgos de la primera corrida real de verify_orderside_demo.py) ──────────────
+from brokers import projectx as px
+
+
+class TestPositionShapeIsTypeAndSize:
+    """La forma REAL de una posicion (4-oct-2026) es type(1=Long,2=Short)+size; `netPos` no existe."""
+
+    def test_position_net_reads_type_and_size(self):
+        assert px.position_net({"type": 1, "size": 2}) == 2
+        assert px.position_net({"type": 2, "size": 3}) == -3
+
+    def test_position_net_still_accepts_netpos_for_compat(self):
+        assert px.position_net({"netPos": -4}) == -4
+
+    def test_position_net_is_zero_when_undeterminable(self):
+        assert px.position_net({}) == 0
+        assert px.position_net({"type": 3, "size": 1}) == 0
+        assert px.position_net({"type": 1, "size": 0}) == 0
+
+    def test_real_open_position_record_counts_as_open(self):
+        real = {"id": 868047983, "accountId": 28197753, "contractId": "CON.F.US.MES.Z26",
+                "contractDisplayName": "MESZ26", "type": 1, "size": 1, "averagePrice": 7788.5}
+        assert px.position_is_open(real) is True
+
+    def test_recognized_zero_size_is_flat(self):
+        assert px.position_is_open({"type": 1, "size": 0}) is False
+        assert px.position_is_open({"netPos": 0}) is False
+
+    def test_unrecognized_shape_in_an_open_listing_is_treated_as_open(self):
+        """Ante la duda, abstenerse: el endpoint solo lista posiciones abiertas."""
+        assert px.position_is_open({"contractId": "X"}) is True
+
+
+class TestUntrackedGuardWithRealShape:
+    def test_detects_real_shaped_position_on_this_contract(self):
+        c = FakeClient()
+        c.positions = [{"contractId": "CON.MES.Z26", "type": 2, "size": 1}]
+        assert pi_executor._has_untracked_position(c, 555, "CON.MES.Z26") is True
+
+    def test_ignores_positions_on_other_contracts(self):
+        c = FakeClient()
+        c.positions = [{"contractId": "CON.F.US.MGC.Z26", "type": 1, "size": 1}]
+        assert pi_executor._has_untracked_position(c, 555, "CON.MES.Z26") is False
+
+    def test_flat_account_is_clean(self):
+        assert pi_executor._has_untracked_position(FakeClient(), 555, "CON.MES.Z26") is False
+
+    def test_broker_error_abstains_for_safety(self):
+        c = FakeClient()
+        c.get_positions = lambda account_id: (_ for _ in ()).throw(RuntimeError("boom"))
+        assert pi_executor._has_untracked_position(c, 555, "CON.MES.Z26") is True
+
+
+class TestClientUsesVerifiedEndpoints:
+    def _client(self, monkeypatch, response):
+        c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+        calls = []
+        monkeypatch.setattr(c, "ensure_auth", lambda: None)
+        monkeypatch.setattr(c, "_post", lambda path, payload: (calls.append((path, payload)), response)[1])
+        return c, calls
+
+    def test_get_positions_hits_searchopen(self, monkeypatch):
+        c, calls = self._client(monkeypatch, {"positions": [{"size": 1, "type": 1}], "success": True})
+        assert c.get_positions(7) == [{"size": 1, "type": 1}]
+        assert calls == [("/api/Position/searchOpen", {"accountId": 7})]
+
+    def test_get_open_orders_hits_searchopen(self, monkeypatch):
+        c, calls = self._client(monkeypatch, {"orders": [], "success": True})
+        assert c.get_open_orders(7) == []
+        assert calls == [("/api/Order/searchOpen", {"accountId": 7})]
+
+    def test_is_flat_uses_real_shape(self, monkeypatch):
+        c, _ = self._client(monkeypatch, {"positions": [{"type": 1, "size": 1}], "success": True})
+        assert c.is_flat(7) is False
+        c2, _ = self._client(monkeypatch, {"positions": [], "success": True})
+        assert c2.is_flat(7) is True
+
+
+class TestResolveAccountId:
+    TWO = [{"id": 28197705}, {"id": 28197753}]
+
+    def test_pinned_account_is_used_even_with_two_active(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "28197753")
+        c = FakeClient(); c.accounts = list(self.TWO)
+        assert pi_executor._resolve_account_id(c) == 28197753
+
+    def test_two_active_without_pin_refuses_to_guess(self, monkeypatch):
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_ID", raising=False)
+        c = FakeClient(); c.accounts = list(self.TWO)
+        with pytest.raises(RuntimeError, match="TOPSTEP_ACCOUNT_ID"):
+            pi_executor._resolve_account_id(c)
+
+    def test_pin_not_among_active_accounts_refuses(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "999")
+        c = FakeClient(); c.accounts = list(self.TWO)
+        with pytest.raises(RuntimeError, match="no esta entre las cuentas activas"):
+            pi_executor._resolve_account_id(c)
+
+    def test_single_active_account_needs_no_pin(self, monkeypatch):
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_ID", raising=False)
+        c = FakeClient(); c.accounts = [{"id": 555}]
+        assert pi_executor._resolve_account_id(c) == 555
+
+    def test_blank_pin_is_ignored(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "  ")
+        c = FakeClient(); c.accounts = [{"id": 555}]
+        assert pi_executor._resolve_account_id(c) == 555
+
+    def test_no_active_accounts_raises(self, monkeypatch):
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_ID", raising=False)
+        c = FakeClient(); c.accounts = []
+        with pytest.raises(RuntimeError, match="Sin cuentas activas"):
+            pi_executor._resolve_account_id(c)
+
+
+class TestStaleSignalIsDiscarded:
+    """El viernes 2-oct quedo una señal LONG 40 sin consumir; con el gate abierto se habria ejecutado dias
+    despues, y ademas el scheduler del lunes se habria negado a escribir la nueva."""
+
+    def test_old_signal_is_cleared_and_announced_without_touching_broker(self, fake_gist, sent, monkeypatch):
+        monkeypatch.setattr(pi_executor, "authenticate", _raise_if_called)
+        monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pi_executor, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+        fake_gist[pi_executor.ORDER_FILE] = _signal(date="2026-09-26")
+
+        pi_executor.run_once()
+
+        assert fake_gist[pi_executor.ORDER_FILE] == {}
+        assert len(sent) == 1 and "VIEJA" in sent[0] and "2026-09-26" in sent[0]
+
+    def test_old_signal_is_cleared_even_while_gate_is_closed(self, fake_gist, sent, monkeypatch):
+        """Si no se limpiara con el gate cerrado, la señal vieja bloquearia al scheduler de Railway."""
+        monkeypatch.setattr(pi_executor, "authenticate", _raise_if_called)
+        monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", False)
+        fake_gist[pi_executor.ORDER_FILE] = _signal(date="2026-09-26")
+
+        pi_executor.run_once()
+
+        assert fake_gist[pi_executor.ORDER_FILE] == {}
+
+    def test_todays_signal_is_not_touched_by_the_guard(self, fake_gist, sent, monkeypatch):
+        monkeypatch.setattr(pi_executor, "authenticate", _raise_if_called)
+        monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", False)
+        fake_gist[pi_executor.ORDER_FILE] = _signal()  # fecha de hoy segun el reloj fijo
+
+        pi_executor.run_once()
+
+        assert fake_gist[pi_executor.ORDER_FILE] == _signal()
+        assert "BLOCKED" in sent[0] and "VIEJA" not in sent[0]
+
+    @pytest.mark.parametrize("bad_date", ["2026-09-30", "", "ayer", None])
+    def test_future_or_garbled_date_is_neither_executed_nor_cleared(self, bad_date, fake_gist, sent, monkeypatch):
+        monkeypatch.setattr(pi_executor, "authenticate", _raise_if_called)
+        monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pi_executor, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+        sig = _signal(date=bad_date)
+        fake_gist[pi_executor.ORDER_FILE] = sig
+
+        pi_executor.run_once()
+
+        assert fake_gist[pi_executor.ORDER_FILE] == sig
+        assert len(sent) == 1 and "BLOCKED" in sent[0]

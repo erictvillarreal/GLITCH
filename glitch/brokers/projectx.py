@@ -38,8 +38,13 @@ class OrderType(IntEnum):
     STOP_LIMIT = 3
 
 class OrderSide(IntEnum):
-    BID = 0   # Sell
-    ASK = 1   # Buy
+    # !!! VERIFICADO EN VIVO el 4-oct-2026 (pi/verify_orderside_demo.py, cuenta Practice): side=0 abrio una
+    # !!! posicion LONG, es decir 0 = COMPRA y 1 = VENTA -- lo CONTRARIO de los comentarios de abajo.
+    # !!! Los NOMBRES y comentarios de este enum estan invertidos. No se corrige aqui para no cambiar en silencio
+    # !!! a los llamadores legados (run_glitch_xfa.py, core/safety.py, flatten_position); pi_executor.py NO usa
+    # !!! este enum: lee el mapeo verificado de pi/orderside_verified.json.
+    BID = 0   # Sell  (en la practica: BUY -- ver arriba)
+    ASK = 1   # Buy   (en la practica: SELL -- ver arriba)
 
 
 # ── Credentials ──────────────────────────────────────────────────────────────
@@ -63,6 +68,31 @@ class ProjectXCredentials:
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
+
+def position_net(p: dict) -> int:
+    """Tamano CON SIGNO de una posicion de ProjectX: +n LONG, -n SHORT, 0 si no se puede determinar o es plana.
+
+    La forma REAL (verificada 4-oct-2026) es `type` (1=Long, 2=Short) + `size`. `netPos` (con signo) se acepta
+    solo por compatibilidad: no existe en la API de ProjectX/TopstepX."""
+    net = p.get("netPos")
+    if isinstance(net, (int, float)) and not isinstance(net, bool) and net != 0:
+        return int(net)
+    ptype, size = p.get("type"), p.get("size")
+    if ptype in (1, 2) and isinstance(size, (int, float)) and not isinstance(size, bool) and size > 0:
+        return int(size) if ptype == 1 else -int(size)
+    return 0
+
+
+def position_is_open(p: dict) -> bool:
+    """True si el registro (de un listado de posiciones ABIERTAS) representa una posicion abierta.
+
+    Conservador: un registro con tamano reconocible y cero es plano; un registro cuya forma no se reconoce
+    (ni netPos ni size) se trata como ABIERTO -- el endpoint solo lista posiciones abiertas, y ante la duda
+    es mejor abstenerse de operar que apilar una orden encima de una posicion que no entendemos."""
+    if position_net(p) != 0:
+        return True
+    return not ("netPos" in p or "size" in p)
+
 
 class ProjectXClient:
     """
@@ -250,11 +280,12 @@ class ProjectXClient:
         return self._post("/api/Order/cancelallorders", {"accountId": account_id})
 
     def get_open_orders(self, account_id: int) -> list[dict]:
-        """POST /api/Order/search"""
+        """POST /api/Order/searchOpen -- ordenes abiertas. Endpoint y clave "orders" VERIFICADOS en vivo el
+        4-oct-2026 (respuesta {"orders": [], "success": true} con la cuenta plana). Antes: /api/Order/search +
+        onlyOpen, nunca verificado."""
         self.ensure_auth()
-        resp = self._post("/api/Order/search", {
+        resp = self._post("/api/Order/searchOpen", {
             "accountId": account_id,
-            "onlyOpen":  True,
         })
         return resp if isinstance(resp, list) else resp.get("orders", [])
 
@@ -279,16 +310,19 @@ class ProjectXClient:
     # ── Positions ─────────────────────────────────────────────────────────
 
     def get_positions(self, account_id: int) -> list[dict]:
-        """POST /api/Position/search"""
+        """POST /api/Position/searchOpen -- posiciones ABIERTAS.
+
+        Endpoint y forma VERIFICADOS en vivo el 4-oct-2026: {"positions": [{"id", "accountId", "contractId",
+        "contractDisplayName", "creationTimestamp", "type", "size", "averagePrice"}], "success": true}.
+        (Antes se llamaba /api/Position/search, que nunca se verifico, y se leia `netPos`, que NO existe.)"""
         self.ensure_auth()
-        resp = self._post("/api/Position/search", {
+        resp = self._post("/api/Position/searchOpen", {
             "accountId": account_id
         })
         return resp if isinstance(resp, list) else resp.get("positions", [])
 
     def is_flat(self, account_id: int) -> bool:
-        positions = self.get_positions(account_id)
-        return all(p.get("netPos", 0) == 0 for p in positions)
+        return not any(position_is_open(p) for p in self.get_positions(account_id))
 
     # ── Market data ───────────────────────────────────────────────────────
 

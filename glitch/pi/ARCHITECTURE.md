@@ -58,8 +58,10 @@ En el Pi viven en `~/.glitch_pi.env` (`chmod 600`, fuera de git) y los lee syste
 
 1. **Gate de Fase 3 (22-sep).** `pi_executor` no coloca ninguna orden real sin `GLITCH_PI_PHASE3=si` **y**
    `pi/orderside_verified.json`. Sin ambos, solo avisa BLOCKED (una vez al día) y no toca la red del broker.
-2. **El lado compra/venta nunca sale de `brokers.projectx.OrderSide`** (enum sin verificar: la doc oficial dice
-   `0=Buy`, el comentario del código dice `0=Sell`). Sale únicamente de `orderside_verified.json`, que escribe
+2. **El lado compra/venta nunca sale de `brokers.projectx.OrderSide`.** Verificado en vivo el 4-oct-2026: `side=0`
+   abre una posición LONG, o sea `0=Buy` (la doc oficial tenía razón; los nombres/comentarios del enum están
+   invertidos y siguen así a propósito para no cambiar en silencio a los llamadores legados). El lado sale
+   únicamente de `orderside_verified.json` (`{"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1}`), que escribió
    `pi/verify_orderside_demo.py` tras una orden real de prueba en la cuenta Practice.
 3. **Entrada y protección siempre juntas:** nunca hay una entrada sin su SL ya colocado.
 4. **Una sola instancia del ejecutor.** Nunca `nohup` y systemd a la vez. `install_service.sh` se niega a arrancar
@@ -85,11 +87,18 @@ Detalle y comandos: `pi/ops/README.md`.
   (cierre 12:00 CT) el flatten debe ser 11:30 CT — ya existe para los schedulers de Railway
   (`execution/session_calendar.py`, commits locales `ba88626`/`d0d06ce`) pero **no está en `origin/main`** (la rama
   `main` local y `origin/main` divergieron) y `pi_executor` no lo usa. Hay que resolverlo antes del 27-nov.
-* **Suposiciones de la API sin verificar** que la primera corrida de `verify_orderside_demo.py` deja registradas en
-  su log (respuesta cruda): el endpoint `Position/search` que usa `ProjectXClient.get_positions` (la doc documenta
-  `Position/searchOpen`), y el campo `netPos` que asumen `get_positions`/`_has_untracked_position` (la doc describe
-  `type` + `size`). Si resultan distintos, `_has_untracked_position` no detectaría una posición huérfana.
-* **`closeContract`** (el nuevo flatten) viene de la documentación oficial y tampoco se ha probado contra una cuenta
-  real; el verificador lo ejercita en la cuenta Practice.
+* **Resuelto el 4-oct-2026 con la primera corrida real de `verify_orderside_demo.py` (Practice):** la forma real de
+  una posición es `type` (1=Long, 2=Short) + `size` — **`netPos` no existe**; el endpoint que funciona es
+  `Position/searchOpen` (y `Order/searchOpen` para órdenes abiertas); `closeContract` cerró la posición y la cuenta
+  quedó plana. `get_positions`/`get_open_orders`/`_has_untracked_position` se corrigieron (`position_net`,
+  `position_is_open` en `brokers/projectx.py`). Antes de esto la guardia de posición huérfana era ciega.
+* **Todavía sin verificar contra la API real:** la colocación del *bracket* completo (entrada + TP límite + SL stop
+  con el mapeo verificado), la forma de las órdenes en `Order/search` usada solo para leer el fill price
+  (best-effort), y el flujo completo de `poll_position_until_closed`. La primera señal real en Practice es la prueba.
+* **Cuenta del Pi:** desde el 1-oct hay DOS cuentas activas (Combine `28197705` y Practice `28197753`).
+  `TOPSTEP_ACCOUNT_ID` en `~/.glitch_pi.env` fija la cuenta y se valida contra las cuentas activas; sin ella y con
+  más de una cuenta activa el ciclo se detiene (no adivina). Para el Demo Pi debe ser `28197753`.
+* **Señales viejas:** una señal sin consumir de un día anterior (CT) se descarta con aviso y se limpia
+  (`_signal_is_current`), porque el scheduler de Railway no escribe una señal nueva mientras haya una sin consumir.
 * **Riesgo residual documentado en `pi_executor.py`:** si el proceso muere entre colocar las 3 órdenes y guardar
   `pi_position_*.json`, queda una posición real sin registro; la guardia lo detecta pero no lo resuelve solo.

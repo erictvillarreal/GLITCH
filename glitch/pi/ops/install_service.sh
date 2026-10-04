@@ -51,6 +51,8 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "# Formato: NOMBRE=valor, sin 'export' y sin espacios alrededor del '='. chmod 600. NUNCA en git."
     echo "# Llena los valores TU, a mano, en el Pi."
     for v in $REQUIRED_VARS; do echo "$v="; done
+    echo "# Cuenta sobre la que opera el Pi (OBLIGATORIA si hay mas de una cuenta activa). Demo Pi = Practice."
+    echo "TOPSTEP_ACCOUNT_ID="
     echo
     echo "# Gate de Fase 3 (22-sep-2026). Descomentar SOLO cuando se llegue a Fase 3 y exista pi/orderside_verified.json:"
     echo "# GLITCH_PI_PHASE3=si"
