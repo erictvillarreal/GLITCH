@@ -133,7 +133,7 @@ require_env(
     f"PI-EXECUTOR-{_PRODUCT_KEY_FOR_STARTUP_CHECK}",
 )
 
-from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials
+from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open
 from execution.ct_logging import setup_ct_logging
 from execution.gist_store import load_log as _gist_load_log
 from execution.gist_store import load_state as _gist_load_state
@@ -220,17 +220,31 @@ def ensure_fresh_token(client: ProjectXClient) -> None:
 
 
 def _resolve_account_id(client: ProjectXClient) -> int:
-    """Unica cuenta activa esperada durante el paper/Phase-3 del Pi -- si
-    hay mas de una, no se adivina por posicion en la lista (instruccion
-    explicita, ver GLITCH_HANDOFF): se detiene y pide resolucion manual."""
+    """Cuenta sobre la que opera el Pi.
+
+    TOPSTEP_ACCOUNT_ID (opcional) la FIJA explicitamente -- obligatoria en cuanto hay mas de una cuenta activa
+    (Combine + Practice, desde el 1-oct-2026). Siempre se valida contra las cuentas activas que ve la API: un id
+    mal escrito o de una cuenta inactiva detiene el ciclo en vez de operar donde no se debe. Sin variable y con
+    una sola cuenta activa se usa esa. Con varias y sin variable NO se adivina por posicion en la lista."""
     accounts = client.get_accounts(only_active=True)
     if not accounts:
         raise RuntimeError("Sin cuentas activas en ProjectX -- verificar TOPSTEP_USERNAME/API_KEY.")
-    if len(accounts) > 1:
-        ids = [a.get("id") for a in accounts]
+    ids = [a.get("id") for a in accounts]
+
+    pinned = os.getenv("TOPSTEP_ACCOUNT_ID", "").strip()
+    if pinned:
+        for a in accounts:
+            if str(a.get("id")) == pinned:
+                return a["id"]
         raise RuntimeError(
-            f"Se encontraron {len(accounts)} cuentas activas ({ids}) -- no se adivina cual usar. "
-            f"Fijar TOPSTEP_ACCOUNT_ID explicitamente y ajustar este modulo para leerla."
+            f"TOPSTEP_ACCOUNT_ID={pinned!r} no esta entre las cuentas activas ({ids}) -- no se opera en "
+            f"ninguna otra cuenta. Corregir la variable en ~/.glitch_pi.env."
+        )
+
+    if len(accounts) > 1:
+        raise RuntimeError(
+            f"Se encontraron {len(accounts)} cuentas activas ({ids}) y TOPSTEP_ACCOUNT_ID no esta definida -- "
+            f"no se adivina cual usar. Definir TOPSTEP_ACCOUNT_ID en ~/.glitch_pi.env."
         )
     return accounts[0]["id"]
 
@@ -334,7 +348,7 @@ def _has_untracked_position(client: ProjectXClient, account_id: int, contract_id
     se coloca una orden nueva encima."""
     try:
         for p in client.get_positions(account_id):
-            if p.get("contractId") == contract_id and p.get("netPos", 0) != 0:
+            if p.get("contractId") == contract_id and position_is_open(p):
                 return True
     except Exception as e:
         log.error(f"_has_untracked_position: get_positions fallo -- {e} -- "
@@ -532,6 +546,41 @@ def append_to_historic_log(product_key: str, entry: dict) -> None:
 
 
 # ── 8. run_once / main ───────────────────────────────────────────────────
+def _signal_is_current(signal: dict) -> bool:
+    """Una señal solo se ejecuta el MISMO dia (CT) en que se genero: la estrategia es intradia y se aplana a las
+    14:30 CT, asi que una señal de un dia anterior ya no describe nada operable.
+
+    * Señal de un dia ANTERIOR: se DESCARTA (se limpia ORDER_FILE y se avisa por Telegram). Si no se limpiara,
+      el scheduler de Railway se niega a escribir la señal nueva mientras haya una sin consumir -- una señal
+      vieja atascada bloquearia todos los dias siguientes.
+    * Fecha ausente, ilegible o FUTURA: no se ejecuta ni se limpia -- algo esta mal y requiere ojos humanos
+      (aviso limitado a uno por dia).
+    Devuelve True solo si la señal es de hoy."""
+    today = ct_now().date().isoformat()
+    sig_date = str(signal.get("date", ""))
+    if sig_date == today:
+        return True
+    try:
+        date.fromisoformat(sig_date)
+        parsable = True
+    except ValueError:
+        parsable = False
+    if parsable and sig_date < today:
+        msg = (f"{PREFIX}\nSTATUS: SEÑAL VIEJA DESCARTADA\n"
+               f"Habia una señal sin consumir del {sig_date} ({signal.get('direction', '?')}, "
+               f"{signal.get('nc', '?')} contratos); hoy es {today} (CT). No se ejecuta -- la estrategia es "
+               f"intradia -- y se limpia para no bloquear al scheduler.\n{utc_now_str()}")
+        send(msg)
+        log.warning(msg.replace("\n", " | "))
+        save_order_signal({})
+        return False
+    _notify_blocked_once_per_day(
+        f"La señal pendiente trae una fecha que no es valida ni anterior a hoy ({sig_date!r}, hoy es {today} CT) "
+        f"-- no se ejecuta ni se limpia. Requiere revision manual."
+    )
+    return False
+
+
 def run_once():
     try:
         reconcile_if_needed()
@@ -539,6 +588,9 @@ def run_once():
         signal = load_order_signal()
         if not signal:
             log.info("Sin señal pendiente -- nada que hacer.")
+            return
+
+        if not _signal_is_current(signal):
             return
 
         if not _orderside_verified():
