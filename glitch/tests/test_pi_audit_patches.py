@@ -73,6 +73,7 @@ class TpFillsEachCycle(FakeClient):
         if self.tp_pending is not None:
             self.open_order_ids.discard(self.tp_pending)
             self.tp_pending = None
+            self.positions = []          # el TP cerro la posicion
         return super().get_open_orders(account_id)
 
 
@@ -871,3 +872,106 @@ class TestFlattenFillIsConservative:
         pe._finalize_cycle(c, 555, self._state(), {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True})
         e = fake_gist["geometry_mes_log.json"][-1]
         assert e["exit_price_estimated"] is True and abs(e["pnl"]) < 1000
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# M1 -- tras colocar entrada+TP+SL se CONFIRMA que la posicion existe; si la entrada no se ejecuto, se cancela todo
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class TestEntryFillIsConfirmed:
+    def _run(self, client, fake_gist, monkeypatch, sent):
+        _arm(monkeypatch, client)
+        monkeypatch.setattr(pe, "poll_position_until_closed",
+                            lambda *a, **k: {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": True})
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+
+    def test_a_normal_fill_sends_no_extra_alert_and_opens(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        self._run(client, fake_gist, monkeypatch, sent)
+        assert any("[OPEN]" in m for m in sent) and not any("ALERTA" in m for m in sent)
+
+    def test_entry_that_never_fills_cancels_everything_and_discards_the_signal(self, fake_gist, sent, monkeypatch):
+        """R7 invertido: antes los exits se quedaban colocados sin posicion (el TP habria abierto un SHORT)."""
+        client = FakeClient()
+        client.auto_fill_market = False                              # la entrada se "acepta" pero NUNCA se ejecuta
+        _arm(monkeypatch, client)
+        monkeypatch.setattr(pe, "poll_position_until_closed",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe monitorear un bracket sin posicion")))
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        entry_id, tp_id, sl_id = [o["id"] for o in client.placed_orders]
+        assert {entry_id, tp_id, sl_id} <= set(client.cancelled)
+        assert client.open_order_ids == set()
+        assert fake_gist[pe.ORDER_FILE] == {} and fake_gist[pe.PI_STATE_FILE] == {}
+        assert not any("[OPEN]" in m for m in sent)
+        assert any("no aparecio como posicion" in m and "no se reintenta" in m for m in sent)
+
+    def test_aborted_entry_is_not_retried_next_cycle(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        client.auto_fill_market = False
+        _arm(monkeypatch, client)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        n = len(client.placed_orders)
+        fake_gist[pe.ORDER_FILE] = _signal()                           # aunque la señal reapareciera (limpieza fallida)
+        pe.run_once()
+        assert len(client.placed_orders) == n                          # el marcador (A1) impide el segundo intento
+
+    def test_a_late_fill_within_the_wait_is_accepted_quietly(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        client.auto_fill_market = False
+        calls = {"n": 0}
+        orig = client.get_positions
+
+        def late(account_id):
+            calls["n"] += 1
+            if calls["n"] == 4:         # 1 = guard pre-orden; 2,3 = confirmacion sin posicion; 4 = ya aparece
+                client.positions = [{"id": 1, "accountId": 555, "contractId": MES, "type": 1, "size": 40, "averagePrice": 6000.0}]
+            return orig(account_id)
+        client.get_positions = late
+        self._run(client, fake_gist, monkeypatch, sent)
+        assert any("[OPEN]" in m for m in sent) and not any("ALERTA" in m for m in sent)
+
+    def test_partial_fill_alerts_but_keeps_monitoring(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        client.auto_fill_market = False
+        orig = client.get_positions
+
+        def partial(account_id):
+            if len(client.placed_orders) >= 3:
+                client.positions = [{"id": 1, "accountId": 555, "contractId": MES, "type": 1, "size": 25, "averagePrice": 6000.0}]
+            return orig(account_id)
+        client.get_positions = partial
+        self._run(client, fake_gist, monkeypatch, sent)
+        assert any("PARCIAL" in m and "25 de 40" in m for m in sent) and any("[OPEN]" in m for m in sent)
+
+    def test_unreadable_positions_do_not_abort_a_possibly_valid_position(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        orig = client.get_positions
+
+        def flaky(account_id):
+            if len(client.placed_orders) >= 3:
+                raise RuntimeError("API caida")
+            return orig(account_id)
+        client.get_positions = flaky
+        self._run(client, fake_gist, monkeypatch, sent)
+        assert client.cancelled == [] and any("[OPEN]" in m for m in sent)
+        assert any("No se pudo leer la posicion" in m for m in sent)
+
+    def test_if_the_fill_lands_right_at_abort_and_close_fails_it_says_close_manually(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        client.auto_fill_market = False
+        state = {"after_abort": False}
+        orig = client.get_positions
+
+        def sneaky(account_id):
+            if state["after_abort"] or len(client.cancelled) >= 3:       # tras cancelar, aparece una posicion
+                state["after_abort"] = True
+                return [{"id": 1, "accountId": 555, "contractId": MES, "type": 1, "size": 40, "averagePrice": 6000.0}]
+            return orig(account_id)
+        client.get_positions = sneaky
+        client.close_contract_error = "boom"
+        _arm(monkeypatch, client)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        assert any("MANUALMENTE" in m for m in sent)

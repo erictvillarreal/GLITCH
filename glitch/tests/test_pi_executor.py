@@ -55,6 +55,7 @@ class FakeClient:
         self.closed_contracts = []
         self.close_contract_error = None
         self.fail_order_type = None
+        self.auto_fill_market = True
         self._next_id = 100
 
     def get_accounts(self, only_active=True):
@@ -78,6 +79,10 @@ class FakeClient:
         })
         self.open_order_ids.add(oid)
         self.order_records[oid] = {"id": oid, "side": side}
+        if order_type == pi_executor.OrderType.MARKET and self.auto_fill_market:
+            # En vivo la entrada de mercado se llena al instante y aparece en Position/searchOpen (type 1=long, size)
+            self.positions.append({"id": oid, "accountId": account_id, "contractId": contract_id,
+                                   "type": 1, "size": size, "averagePrice": 6000.0})
         return oid
 
     def get_open_orders(self, account_id):

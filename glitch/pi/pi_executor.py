@@ -133,7 +133,7 @@ require_env(
     f"PI-EXECUTOR-{_PRODUCT_KEY_FOR_STARTUP_CHECK}",
 )
 
-from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open
+from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
 from execution.ct_logging import setup_ct_logging
 from execution.gist_store import load_log as _gist_load_log
 from execution.gist_store import load_log_strict as _gist_load_log_strict
@@ -581,6 +581,63 @@ def _verify_resolution(client: ProjectXClient, account_id: int, contract_id, out
         send(f"{PREFIX}\nSTATUS: ALERTA\nSe resolvio el bracket ({outcome['result']}) pero no se pudo confirmar que "
              f"la cuenta quedo plana en {contract_id} -- verificalo en TopstepX.\n{utc_now_str()}")
     return outcome
+
+
+# ── Confirmacion del fill de la entrada (auditoria 04-oct-2026, hallazgo M1) ─────────────────────────────────
+# place_bracket_order coloca entrada + TP + SL SIN esperar el fill (a proposito: nunca hay una ventana desnuda). Si la
+# entrada queda SIN ejecutarse (halt, rechazo posterior), los exits quedan sin posicion y el TP/SL, al tocarse, abririan
+# una posicion CONTRARIA. Despues de colocarlos se comprueba, contra el broker, que la posicion existe.
+ENTRY_CONFIRM_ATTEMPTS = 5
+ENTRY_CONFIRM_SLEEP = 3   # segundos -> ~12 s de espera maxima
+
+
+def _observed_size(client: ProjectXClient, account_id: int, contract_id) -> Optional[int]:
+    """Tamano absoluto de la posicion abierta en el contrato; 0 = plana; None = no se pudo leer."""
+    try:
+        total = 0
+        for p in client.get_positions(account_id):
+            if p.get("contractId") == contract_id and position_is_open(p):
+                total += abs(position_net(p)) or 1    # forma no reconocida pero listada como abierta: cuenta como presente
+        return total
+    except Exception as e:
+        log.warning(f"_observed_size: get_positions fallo -- {e}")
+        return None
+
+
+def _confirm_entry_filled(client: ProjectXClient, account_id: int, contract_id, size: int) -> tuple:
+    """(tamano_observado, se_pudo_leer). Reintenta hasta ENTRY_CONFIRM_ATTEMPTS veces; sale en cuanto ve `size`."""
+    seen, readable = 0, False
+    for i in range(ENTRY_CONFIRM_ATTEMPTS):
+        obs = _observed_size(client, account_id, contract_id)
+        if obs is not None:
+            readable, seen = True, obs
+            if seen >= size:
+                return seen, True
+        if i < ENTRY_CONFIRM_ATTEMPTS - 1:
+            time.sleep(ENTRY_CONFIRM_SLEEP)
+    return seen, readable
+
+
+def _abort_unfilled_entry(client: ProjectXClient, account_id: int, contract_id, bracket: dict) -> None:
+    """La entrada NO aparecio como posicion: cancela entrada/TP/SL, cierra por si el fill llego justo ahora, limpia
+    estado y señal (ya reclamada, no se reintenta) y avisa."""
+    ids = [bracket["entry_order_id"], bracket["tp_order_id"], bracket["sl_order_id"]]
+    leftover = _cancel_orders_verified(client, account_id, ids)
+    try:
+        client.close_contract(account_id, contract_id)       # si no hay posicion devuelve success=false: se ignora
+    except Exception as e:
+        log.info(f"_abort_unfilled_entry: closeContract respondio error ({e}) -- esperado si la cuenta esta plana")
+    still_open = _position_still_open(client, account_id, contract_id)
+    save_pi_state({})
+    save_order_signal({})
+    tail = ""
+    if leftover:
+        tail += f" Siguen ABIERTAS las ordenes {leftover}: cancelarlas MANUALMENTE en TopstepX."
+    if still_open:
+        tail += " Hay una posicion abierta que el Pi NO pudo cerrar: CERRARLA MANUALMENTE en TopstepX AHORA."
+    send(f"{PREFIX}\nSTATUS: ALERTA\nLa orden de entrada no aparecio como posicion en "
+         f"{ENTRY_CONFIRM_ATTEMPTS * ENTRY_CONFIRM_SLEEP} s (no se ejecuto). Se cancelaron entrada/TP/SL y se descarto la "
+         f"señal (no se reintenta).{tail}\n{utc_now_str()}")
 
 
 # ── 4. place_bracket_order ───────────────────────────────────────────────
@@ -1078,6 +1135,19 @@ def run_once():
             "contract_id": contract_id, "account_id": account_id, "opened_at": utc_now_str(),
         }
         save_pi_state(state)
+
+        seen, readable = _confirm_entry_filled(client, account_id, contract_id, signal["nc"])
+        if readable and seen == 0:
+            _abort_unfilled_entry(client, account_id, contract_id, bracket)
+            return
+        if not readable:
+            send(f"{PREFIX}\nSTATUS: ALERTA\nNo se pudo leer la posicion para confirmar el fill de la entrada "
+                 f"({signal['nc']} contratos en {contract_id}); se sigue monitoreando el bracket. Verificalo en "
+                 f"TopstepX.\n{utc_now_str()}")
+        elif seen < signal["nc"]:
+            send(f"{PREFIX}\nSTATUS: ALERTA\nFill PARCIAL de la entrada: {seen} de {signal['nc']} contratos en "
+                 f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
+                 f"invertido.\n{utc_now_str()}")
 
         msg = (f"{PREFIX}\n[OPEN]\n"
                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
