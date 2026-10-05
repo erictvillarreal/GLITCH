@@ -200,6 +200,56 @@ def save_pi_state(d: dict):
     _gist_save_state(PI_STATE_FILE, d)
 
 
+# ── Idempotencia LOCAL: una señal real se ejecuta A LO MAS UNA VEZ (auditoria 04-oct-2026, hallazgo A1) ──────────
+# gist_store._write_file TRAGA cualquier error de escritura (solo loguea). Si falla el PATCH que limpia la señal
+# (`save_order_signal({})`), la señal sigue vigente, la cuenta ya esta plana y el siguiente ciclo (120 s) entraria
+# OTRA VEZ: un segundo trade completo, o -con TP rechazado- un bucle abrir/aplanar cada ciclo. La unica defensa
+# fiable es estado en el DISCO del Pi (no en el Gist): se escribe ANTES de la orden de entrada (semantica
+# at-most-once: si el proceso muere entre el marcador y la orden, ese dia simplemente no se opera -- falla segura).
+def _state_dir() -> str:
+    return os.environ.get("GLITCH_PI_STATE_DIR") or os.path.expanduser("~")
+
+
+def _executed_marker_path() -> str:
+    return os.path.join(_state_dir(), f".glitch_pi_executed_{PRODUCT_KEY.lower()}.json")
+
+
+def _is_test_signal(signal: dict) -> bool:
+    """Señal de ENSAYO: `product` distinto del producto real del servicio (p. ej. "MEStest"). Escribe a su propio
+    historial (geometry_mestest_log.json) y asi no contamina el real. Las de ensayo se exentan del marcador y de la
+    ventana horaria (para poder repetir ensayos, tambien despues de las 14:30), pero _validate_signal las limita
+    a <= TEST_SIGNAL_MAX_NC contratos."""
+    return str(signal.get("product")) != PRODUCT_KEY
+
+
+def _signal_already_claimed(signal: dict) -> bool:
+    try:
+        with open(_executed_marker_path()) as f:
+            return json.load(f).get("date") == str(signal.get("date"))
+    except FileNotFoundError:
+        return False
+    except ValueError as e:
+        # Contenido corrupto (el marcador se escribe atomico, asi que no deberia pasar): ante la duda NO se opera
+        # (mejor perder un dia que duplicar una entrada).
+        log.error(f"marcador de ejecucion corrupto ({e}) -- se trata como YA EJECUTADA por seguridad")
+        return True
+    # Cualquier otro error de E/S (disco, permisos, directorio ilegible) se PROPAGA: run_once lo avisa como falla real
+    # y la señal se conserva para reintentar, en vez de descartarla como si ya se hubiera ejecutado.
+
+
+def _claim_signal(signal: dict) -> None:
+    """Escribe (atomico + fsync) el marcador de que ESTA señal esta a punto de ejecutarse. Lanza si no puede
+    escribirlo: sin marcador no se opera."""
+    path = _executed_marker_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"date": str(signal.get("date")), "intento": signal.get("intento"), "claimed_at": utc_now_str()}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 # ── 1. authenticate ──────────────────────────────────────────────────────
 def authenticate() -> ProjectXClient:
     """Autentica contra ProjectX usando TOPSTEP_USERNAME/TOPSTEP_API_KEY del
@@ -693,6 +743,18 @@ def run_once():
         if not _signal_is_current(signal):
             return
 
+        if not _is_test_signal(signal) and _signal_already_claimed(signal):
+            # Esta señal YA se ejecuto (o se intento) hoy y por alguna razon sigue en el Gist (p. ej. fallo en
+            # silencio el PATCH que la limpia). Re-ejecutarla duplicaria la entrada: se descarta y se limpia.
+            # Aviso limitado a uno por dia: si la limpieza SIGUE fallando, esto se repetiria cada ciclo.
+            _notify_blocked_once_per_day(
+                f"La señal del {signal.get('date')} ({signal.get('direction', '?')}) ya se ejecuto o se intento "
+                f"hoy y sigue en el Gist (¿fallo la limpieza?). NO se vuelve a ejecutar; se intenta limpiarla."
+            )
+            log.warning("señal ya reclamada hoy -- descartada y limpiada (no se re-ejecuta)")
+            save_order_signal({})
+            return
+
         if not _orderside_verified():
             _notify_blocked_once_per_day(
                 "Hay una señal pendiente pero el gate de Fase 3 no esta satisfecho "
@@ -719,6 +781,12 @@ def run_once():
         reference_price = _reference_price(client, contract_id)
         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
         sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
+
+        # Reclamar la señal ANTES de la orden de entrada (at-most-once, ver _claim_signal). Lo mas tarde posible
+        # -- despues de todos los chequeos que pueden abortar sin operar (precio de referencia, guard de posicion)
+        # -- y estrictamente antes de tocar el broker con una orden. Si no se puede escribir, no se opera.
+        if not _is_test_signal(signal):
+            _claim_signal(signal)
 
         try:
             bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
