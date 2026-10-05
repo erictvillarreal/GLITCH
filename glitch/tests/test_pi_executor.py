@@ -61,7 +61,7 @@ class FakeClient:
     def get_contracts(self, live=False):
         return self.contracts
 
-    def get_bars(self, contract_id, bar_type=1, bar_size=1, count=1, live=False):
+    def get_recent_bars(self, contract_id, minutes_back=15, live=False, unit_number=1, limit=50):
         return self.bars
 
     def place_order(self, account_id, contract_id, order_type, side, size, price=None, stop_price=None):
@@ -534,6 +534,39 @@ class TestClientUsesVerifiedEndpoints:
         assert c.is_flat(7) is False
         c2, _ = self._client(monkeypatch, {"positions": [], "success": True})
         assert c2.is_flat(7) is True
+
+
+class TestRecentBarsRequestFormat:
+    def _client(self, monkeypatch, response):
+        c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+        calls = []
+        monkeypatch.setattr(c, "ensure_auth", lambda: None)
+        monkeypatch.setattr(c, "_post", lambda path, payload: (calls.append((path, payload)), response)[1])
+        return c, calls
+
+    def test_request_uses_real_api_fields(self, monkeypatch):
+        c, calls = self._client(monkeypatch, {"bars": [], "success": True})
+        c.get_recent_bars("CON.F.US.MES.Z26", minutes_back=15)
+        path, body = calls[0]
+        assert path == "/api/History/retrieveBars"
+        assert set(body) == {"contractId", "live", "startTime", "endTime", "unit", "unitNumber", "limit",
+                             "includePartialBar"}
+        assert body["unit"] == 2 and body["unitNumber"] == 1 and body["live"] is False
+        assert body["startTime"] < body["endTime"] and body["endTime"].endswith("Z")
+
+    def test_bars_sorted_oldest_to_newest_whatever_the_api_order(self, monkeypatch):
+        newest_first = [{"t": "2026-10-04T23:59:00+00:00", "c": 6100.0}, {"t": "2026-10-04T23:58:00+00:00", "c": 6099.0}]
+        c, _ = self._client(monkeypatch, {"bars": newest_first, "success": True})
+        assert c.get_recent_bars("X")[-1]["c"] == 6100.0
+
+    def test_reference_price_reads_c_from_last_bar(self):
+        cl = FakeClient(); cl.bars = [{"t": "1", "c": 6099.0}, {"t": "2", "c": 6100.25}]
+        assert pi_executor._reference_price(cl, "X") == 6100.25
+
+    def test_reference_price_refuses_without_bars(self):
+        cl = FakeClient(); cl.bars = []
+        with pytest.raises(RuntimeError, match="no se coloca la orden"):
+            pi_executor._reference_price(cl, "X")
 
 
 class TestResolveAccountId:

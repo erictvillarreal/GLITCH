@@ -42,7 +42,7 @@ un primer borrador de este modulo (autocritica durante la escritura, no
 desplegado en ningun momento) que esperaba a confirmar el fill de la
 entrada ANTES de colocar TP/SL, esta version coloca las 3 ordenes en el
 MISMO ciclo (place_bracket_order), usando como referencia de precio el
-ultimo dato real de mercado de ProjectX (client.get_bars(), NO yfinance).
+ultimo dato real de mercado de ProjectX (client.get_recent_bars(), NO yfinance).
 Esperar la confirmacion del fill antes de proteger la posicion deja una
 ventana de exposicion sin SL -- inaceptable para dinero real, aunque sea
 breve. El precio de entrada EXACTO (para el PnL final) se reconstruye al
@@ -266,10 +266,11 @@ def _reference_price(client: ProjectXClient, contract_id) -> float:
     """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
     ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
     y proteccion siempre juntas, sin ventana desnuda)."""
-    bars = client.get_bars(contract_id, bar_type=1, bar_size=1, count=1, live=False)
+    bars = client.get_recent_bars(contract_id, minutes_back=15, live=False)
     if not bars:
-        raise RuntimeError(f"Sin datos de mercado de ProjectX para contract_id={contract_id!r} -- "
-                            f"no se puede fijar un precio de referencia, no se coloca la orden.")
+        raise RuntimeError(f"Sin barras de los ultimos 15 min en ProjectX para contract_id={contract_id!r} "
+                            f"(mercado cerrado o sin datos) -- no se puede fijar un precio de referencia, "
+                            f"no se coloca la orden.")
     last = bars[-1]
     for k in ("close", "c", "last", "lastPrice"):
         if k in last and last[k] is not None:

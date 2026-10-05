@@ -19,6 +19,7 @@ CONTACTO: dashboardapi@topstep.com
 
 from __future__ import annotations
 import os, json, time, requests
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Optional, Any
 from enum import IntEnum
@@ -337,6 +338,9 @@ class ProjectXClient:
         """
         POST /api/History/retrieveBars
         Rate limit: 50 req / 30 sec
+
+        !!! LEGADO / NO VERIFICADO: el cuerpo de esta peticion NO coincide con la API real (responde 400, visto
+        !!! en vivo el 4-oct-2026). Para precios recientes usar get_recent_bars().
         """
         self.ensure_auth()
         resp = self._post("/api/History/retrieveBars", {
@@ -347,6 +351,34 @@ class ProjectXClient:
             "unit":       count,
         })
         return resp if isinstance(resp, list) else resp.get("bars", [])
+
+    def get_recent_bars(self, contract_id: str, minutes_back: int = 15, live: bool = False,
+                        unit_number: int = 1, limit: int = 50) -> list[dict]:
+        """
+        Barras de 1 minuto de los ultimos `minutes_back` minutos, ordenadas de la MAS VIEJA a la MAS NUEVA
+        (por `t`), de modo que bars[-1] es siempre la ultima.
+
+        POST /api/History/retrieveBars con el formato de la API de ProjectX: contractId, live, startTime,
+        endTime (ISO UTC), unit (2 = minuto), unitNumber, limit, includePartialBar. `get_bars()` (arriba) manda
+        campos que la API NO acepta (barType/barTypeSize, y `unit` como conteo) y responde 400 -- el 4-oct-2026
+        el ensayo general del Pi fallo ahi, ANTES de colocar ninguna orden. Lista vacia = mercado cerrado o sin
+        datos recientes (el ejecutor se abstiene de operar)."""
+        self.ensure_auth()
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(minutes=minutes_back)
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        resp = self._post("/api/History/retrieveBars", {
+            "contractId":        contract_id,
+            "live":              live,
+            "startTime":         start.strftime(fmt),
+            "endTime":           end.strftime(fmt),
+            "unit":              2,
+            "unitNumber":        unit_number,
+            "limit":             limit,
+            "includePartialBar": True,
+        })
+        bars = resp if isinstance(resp, list) else resp.get("bars", [])
+        return sorted(bars, key=lambda b: str(b.get("t", "")))
 
     # ── Glitch-specific helpers ───────────────────────────────────────────
 
