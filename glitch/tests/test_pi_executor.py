@@ -678,6 +678,35 @@ class TestFinalizeSurvivesOrderLookupFailure:
         assert fake_gist["geometry_mes_log.json"][0]["entry_price_estimated"] is True
 
 
+class TestFlattenUsesRealClosingFill:
+    def _state(self):
+        return {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 200,
+                "tp_price": 6010.0, "sl_price": 5990.0, "tp_order_id": 201, "sl_order_id": 202,
+                "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "x"}
+
+    def test_flatten_pnl_uses_the_closing_orders_real_fill(self, fake_gist, sent):
+        client = FakeClient()
+        client.order_records = {
+            200: {"id": 200, "contractId": "CON.MES.Z26", "filledPrice": 6000.0},
+            201: {"id": 201, "contractId": "CON.MES.Z26", "limitPrice": 6010.0, "filledPrice": None},
+            202: {"id": 202, "contractId": "CON.MES.Z26", "stopPrice": 5990.0, "filledPrice": None},
+            203: {"id": 203, "contractId": "CON.MES.Z26", "filledPrice": 6002.5},   # el cierre por closeContract
+            150: {"id": 150, "contractId": "CON.MES.Z26", "filledPrice": 1.0},       # orden vieja, se ignora
+        }
+        pi_executor._finalize_cycle(client, 555, self._state(), {"result": "FLATTEN", "exit_price": None,
+                                                                  "exit_price_estimated": True})
+        e = fake_gist["geometry_mes_log.json"][0]
+        assert e["exit"] == 6002.5 and e["exit_price_estimated"] is False and e["pnl"] > 0
+
+    def test_without_a_closing_fill_stays_estimated_and_flagged(self, fake_gist, sent):
+        client = FakeClient()
+        client.order_records = {200: {"id": 200, "contractId": "CON.MES.Z26", "filledPrice": 6000.0}}
+        pi_executor._finalize_cycle(client, 555, self._state(), {"result": "FLATTEN", "exit_price": None,
+                                                                  "exit_price_estimated": True})
+        e = fake_gist["geometry_mes_log.json"][0]
+        assert e["exit"] == 6000.0 and e["exit_price_estimated"] is True
+
+
 class TestResolveAccountId:
     TWO = [{"id": 28197705}, {"id": 28197753}]
 

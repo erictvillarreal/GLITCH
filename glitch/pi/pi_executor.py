@@ -374,6 +374,24 @@ def _position_still_open(client: ProjectXClient, account_id: int, contract_id) -
         return True   # sin poder confirmar, se asume abierta
 
 
+def _find_flatten_fill(client: ProjectXClient, account_id: int, state: dict) -> Optional[float]:
+    """Precio REAL del cierre por closeContract: la orden de mercado mas reciente de este contrato que no es la
+    entrada ni el TP/SL del bracket (los ids de orden crecen con el tiempo). None si no se puede determinar --
+    el llamador cae al precio estimado, marcado como tal. Mejor esfuerzo: nunca lanza."""
+    try:
+        exclude = {state["entry_order_id"], state["tp_order_id"], state["sl_order_id"]}
+        cands = [o for o in client.get_orders(account_id, only_open=False)
+                 if o.get("contractId") == state["contract_id"]
+                 and isinstance(o.get("id"), int) and o["id"] > state["entry_order_id"]
+                 and o["id"] not in exclude and _extract_fill_price(o) is not None]
+        if not cands:
+            return None
+        return _extract_fill_price(max(cands, key=lambda o: o["id"]))
+    except Exception as e:
+        log.warning(f"_find_flatten_fill fallo -- {e} -- se usara precio estimado")
+        return None
+
+
 def _has_untracked_position(client: ProjectXClient, account_id: int, contract_id) -> bool:
     """Guardia contra el riesgo residual documentado arriba (crash entre
     colocar el bracket y guardar PI_STATE_FILE): si el broker ya muestra
@@ -577,6 +595,12 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
     fill = _extract_fill_price(rec) if rec else None
     if fill is not None:
         entry_price, entry_estimated = fill, False
+
+    outcome = dict(outcome)
+    if outcome["result"] == "FLATTEN" and outcome["exit_price"] is None and not outcome.get("flatten_failed"):
+        flat_fill = _find_flatten_fill(client, account_id, state)
+        if flat_fill is not None:
+            outcome["exit_price"], outcome["exit_price_estimated"] = flat_fill, False
 
     exit_price = outcome["exit_price"] if outcome["exit_price"] is not None else entry_price
     pnl = _compute_pnl(signal["side"], entry_price, exit_price, signal["nc"])
