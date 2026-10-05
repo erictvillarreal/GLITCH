@@ -48,6 +48,10 @@ def gist(monkeypatch):
     monkeypatch.setattr(pe, "_gist_save_state", save_state)
     monkeypatch.setattr(pe, "_gist_load_log", lambda f: store.get(f, []))
     monkeypatch.setattr(pe, "_gist_save_log", lambda f, d: store.__setitem__(f, d))
+    # Tras el parche A4 el historial usa las variantes ESTRICTAS: sin parchearlas, estas reproducciones harian una
+    # llamada de red real a api.github.com (con un token falso) y fallarian por eso, no por el defecto que miden.
+    monkeypatch.setattr(pe, "_gist_load_log_strict", lambda f: list(store.get(f, [])))
+    monkeypatch.setattr(pe, "_gist_save_log_strict", lambda f, d: store.__setitem__(f, d))
     store["__drops__"] = drops
     return store
 

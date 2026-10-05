@@ -216,8 +216,8 @@ def _poll(client, monkeypatch, sent=None, max_polls=40):
         return dt.datetime(2026, 9, 29, hh, mm, tzinfo=pe.CT)
     monkeypatch.setattr(pe, "ct_now", clk)
     monkeypatch.setattr(pe.time, "sleep", lambda s: None)
-    if sent is not None:
-        monkeypatch.setattr(pe, "send", lambda m: sent.append(m))
+    sink = sent if sent is not None else []            # SIEMPRE se parcha send: ningun test debe llamar a Telegram de verdad
+    monkeypatch.setattr(pe, "send", lambda m: sink.append(m))
     return pe.poll_position_until_closed(client, 555, MES, TP_ID, SL_ID, 6010.0, 5975.0, poll_interval=0)
 
 

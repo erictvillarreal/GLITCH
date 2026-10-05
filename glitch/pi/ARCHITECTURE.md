@@ -51,6 +51,10 @@ El historial mixto paper+real funciona sin cambios en Railway porque el Pi escri
 | `GLITCH_PRODUCT` | ✅ (`MES`, …) | ✅ (debe coincidir con el scheduler que alimenta) |
 | `DRY_RUN` | ✅ (`true` por default) | — |
 | `GLITCH_PI_PHASE3` | — | ✅ gate de Fase 3 (ver abajo) |
+| `TOPSTEP_ACCOUNT_ID` | — | ✅ **obligatoria**: la cuenta fijada (Demo Pi = Practice `28197753`) |
+| `TOPSTEP_ACCOUNT_DENY` | — | opcional: cuentas vetadas (default `28197705`, la Combine; vacía = sin lista) |
+| `GLITCH_PI_ENTRY_DEADLINE_CT` | — | opcional: hora límite de entrada `HH:MM` CT (default `10:00`) |
+| `GLITCH_PI_STATE_DIR` | — | opcional: dónde guarda el Pi su estado local (default: el HOME del servicio) |
 
 En el Pi viven en `~/.glitch_pi.env` (`chmod 600`, fuera de git) y los lee systemd (`EnvironmentFile`).
 
@@ -72,6 +76,24 @@ En el Pi viven en `~/.glitch_pi.env` (`chmod 600`, fuera de git) y los lee syste
 6. **Límites duros de riesgo en código determinista, nunca en un LLM** (`CLAUDE.md`, regla 1). El Pi no tiene
    ninguna llamada a un LLM en el camino crítico.
 7. **Todo cambio a este código requiere revisión humana antes de merge** (`CLAUDE.md`, regla 4).
+
+## Salvaguardas de ejecución (auditoría del 04-oct-2026; detalle en `AUDIT_2026-10-04.md`)
+
+Orden real de `run_once()` para una señal: reconcile → señal vacía → `_signal_is_current` (fecha CT) → **`_validate_signal`**
+(cota superior contra `CFG`: nc ≤ 40, ticks ≤ 4× lo configurado, producto, lado) → **ventana de entrada** (default hasta 10:00 CT)
+→ **marcador local at-most-once** → gate Fase 3 → cuenta fijada + denylist → guard de posición huérfana → precio de referencia →
+**reclamar la señal (marcador en disco, ANTES de la orden)** → entrada + TP + SL → **confirmar que la posición existe** → poll →
+**verificar cuenta plana y sin órdenes huérfanas** antes de dar el ciclo por cerrado → historial (lectura estricta, spool si falla).
+
+* **Una señal real se ejecuta a lo más una vez**, aunque el PATCH que la limpia falle en silencio (`gist_store._write_file` traga
+  errores). El marcador vive en el disco del Pi (`.glitch_pi_executed_<producto>.json`), no en el Gist.
+* **Un ciclo no se cierra a ciegas.** TP y SL son dos órdenes sueltas, no un OCO: "una pata desapareció ⇒ se llenó" es una inferencia.
+  Se re-lee y se comprueba contra el broker; una posición abierta (invertida, parcial) se cierra y se avisa.
+* **El historial compartido no se sobrescribe a ciegas.** Si falla la lectura o la escritura, la entrada queda en un spool local
+  (`.glitch_pi_unsynced_log_<producto>.jsonl`) y se avisa con la entrada completa.
+* **Señales de ensayo** (`product != GLITCH_PRODUCT`, p. ej. `MEStest`, ≤ 2 contratos) escriben a su propio historial y están
+  exentas del marcador y de la ventana horaria para poder repetir ensayos después de las 14:30.
+* Los `200` con `success:false` de la API ya no se leen como "lista vacía" (`brokers/projectx._items` lanza).
 
 ## Operación en el Pi (`pi/ops/`)
 
