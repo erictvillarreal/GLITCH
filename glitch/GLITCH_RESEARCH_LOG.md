@@ -3431,3 +3431,41 @@ Entregado en `pi/ops-hardening` (commits `25f7feb` y `29de7e5`, suite completa v
   `9378116`, `dae1a8f`, `7f6f0bc`). Hay que reconciliar `main` y aplicarlo al Pi **antes del 27-nov**.
 * El watchdog corre en el mismo Pi: si el Pi está apagado o sin red no puede avisar (un chequeo externo desde
   Railway sobre el Gist no está construido).
+
+
+## 04-oct-2026 — Verificación de la afirmación "tamaño G2 (nc=40) vs. límite de la Practice" (Pi, lunes 05-oct)
+
+Afirmación recibida (otro asistente): G2 manda 40 MES con stop 100 → pierde $5,000; la Practice muestra balance
+$149,973.90 y MLL $145,500 (margen ~$4,474); el stop pesa ~29% de los días; "un día de stop sería un dato válido
+del Combine"; "no sé si una Practice se puede reiniciar". Verificado contra el motor real (515 sesiones MES,
+`g2_real_rules_scan.py`, liquidación MLL en tiempo real) y la fuente oficial:
+
+| Afirmación | Resultado |
+|---|---|
+| Stop completo = $5,000; margen = $4,473.90 | ✅ aritmética exacta (100×$1.25×40; 149,973.90−145,500). Comisión ida y vuelta ≈ $48.80 extra. |
+| "La pérdida supera el límite" | ⚠️ **matiz:** el MLL se toca a **89.5 ticks adversos**, antes del stop de 100 → la cuenta se liquida con pérdida ≈ el margen (~$4,474), no $5,000. |
+| El stop pesa ~29% de los días | ❌ **no coincide:** 23.7% (stop nominal) / 25.8% (con el stop efectivo de ~90 ticks). 29% podría incluir días de flatten en negativo — no verificado. |
+| "Un día de stop sería un dato válido" | ⚠️ **incompleto, ver abajo.** |
+| "No sé si una Practice se puede reiniciar" | ✅ resuelto, fuente oficial (`help.topstep.com/en/articles/8284134-practice-account`, verbatim): *"Hit the Maximum Loss Limit (MLL)? Reset for free, anytime."*; *"You can Reset a Practice Account up to 10 times per day. All Practice Account Resets are free"*; reinicio = *"unsubscribe then reactivate"* (cuenta nueva); *"Account size: 150K, regardless of Trading Combine size"*; *"Max accounts at once: 1"*; acceso *"as long as you have an active Trading Combine subscription"*. |
+
+**Por qué "un día de stop sería un dato válido" no se sostiene tal cual:**
+1. **Supervivencia (mismo motor, MLL $4,500, nc=40):** P(romper la Practice) = 26% el día 1, 46% a los 2 días, 71% a los 5,
+   82% a los 10, **86% a los 15** (sobrevive 14%). La validación de ~15 días casi seguro NO se completa con nc=40.
+2. **La Practice no representa al Combine de 50K:** es de 150K sin importar el Combine → MLL $4,500, se rompe a 89 ticks;
+   el Combine real de 50K (MLL $2,000) se rompe a **40** ticks con nc=40. Un día de stop aquí NO muestra lo que pasaría allá.
+3. **Un día de liquidación se perdería del registro:** si el MLL liquida la cuenta, TP y SL dejan de estar abiertos →
+   `poll_position_until_closed` devuelve `UNKNOWN` (exit=None → PnL 0.00), y `geometry_scheduler._attempt_entries` solo cuenta
+   `TP/SL/FLATTEN` → ese día queda fuera del WR y del PnL del intento. El PnL real habría que leerlo de TopstepX a mano.
+4. **Efecto lateral del reinicio:** crear la cuenta nueva cambia el `accountId`. El Pi lo resuelve dinámicamente
+   (`_resolve_account_id`) pero se niega a adivinar con >1 cuenta activa → hay que desuscribir la anterior (máx. 1 Practice).
+   `orderside_verified.json` sigue siendo válido (el mapeo compra/venta es de la API, no de la cuenta).
+
+**Tamaño vs. P(romper la Practice en 15 días)** (mismo motor): nc=40 → 86% · 30 → 82% · 20 → 70% · 16 → 57% · **10 → 24%** ·
+**5 → 1%**. Los resultados en TICKS no dependen de nc; solo cambian los dólares. No existe hoy un override de `nc` en el Pi
+(viene en la señal de Railway, `CANDIDATES["MES"].nc=40`): reducirlo exige un cambio de código revisable (p. ej. un tope
+`GLITCH_PI_NC_MAX` solo en el Pi). **No se hizo ningún cambio; es decisión del usuario.**
+
+**Divergencia de timing a confirmar (no verificada):** con `DRY_RUN=false`, `geometry_scheduler` escribe la señal justo
+después del kickoff, sin esperar la hora de entrada del paper (~9:35–9:45 CT); el Pi la consume en su siguiente poll de 120 s
+y coloca una orden de MERCADO. Si el cron de GEOMETRY arranca ~8:30 CT (inferido de un "Next in 22 hours", no confirmado),
+el Pi entraría ~70 min antes que el paper/backtest → el Pi no replicaría el paper en hora de entrada. Verificar el cron.
