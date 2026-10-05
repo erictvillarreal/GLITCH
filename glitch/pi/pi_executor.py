@@ -128,7 +128,7 @@ from execution.env_check import require_env
 
 _PRODUCT_KEY_FOR_STARTUP_CHECK = os.getenv("GLITCH_PRODUCT", "MES")
 require_env(
-    ["TOPSTEP_USERNAME", "TOPSTEP_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    ["TOPSTEP_USERNAME", "TOPSTEP_API_KEY", "TOPSTEP_ACCOUNT_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
      "GITHUB_GIST_TOKEN", "GIST_ID"],
     f"PI-EXECUTOR-{_PRODUCT_KEY_FOR_STARTUP_CHECK}",
 )
@@ -269,34 +269,45 @@ def ensure_fresh_token(client: ProjectXClient) -> None:
     client.ensure_auth()
 
 
+# Cuentas en las que el Pi NUNCA opera salvo que se permita explicitamente (auditoria 04-oct-2026, hallazgo A5).
+# Default: la Combine 28197705 (dinero real: una ruptura la pierde). TOPSTEP_ACCOUNT_DENY="" (vacia) desactiva la lista;
+# TOPSTEP_ACCOUNT_DENY="id1,id2" la reemplaza. Se necesita para la Fase 3 real, cuando SI se quiera operar la Combine.
+DEFAULT_ACCOUNT_DENYLIST = "28197705"
+
+
+def _account_denylist() -> set:
+    raw = os.environ.get("TOPSTEP_ACCOUNT_DENY")
+    raw = DEFAULT_ACCOUNT_DENYLIST if raw is None else raw
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
 def _resolve_account_id(client: ProjectXClient) -> int:
-    """Cuenta sobre la que opera el Pi.
-
-    TOPSTEP_ACCOUNT_ID (opcional) la FIJA explicitamente -- obligatoria en cuanto hay mas de una cuenta activa
-    (Combine + Practice, desde el 1-oct-2026). Siempre se valida contra las cuentas activas que ve la API: un id
-    mal escrito o de una cuenta inactiva detiene el ciclo en vez de operar donde no se debe. Sin variable y con
-    una sola cuenta activa se usa esa. Con varias y sin variable NO se adivina por posicion en la lista."""
-    accounts = client.get_accounts(only_active=True)
-    if not accounts:
-        raise RuntimeError("Sin cuentas activas en ProjectX -- verificar TOPSTEP_USERNAME/API_KEY.")
-    ids = [a.get("id") for a in accounts]
-
+    """Cuenta sobre la que opera el Pi: SIEMPRE la fijada explicitamente en TOPSTEP_ACCOUNT_ID (obligatoria, tambien
+    la exige require_env al arrancar). Antes la variable era opcional: vacia/ausente con UNA sola cuenta activa operaba
+    esa cuenta -- y si la Practice se liquida/reinicia deja de estar activa, esa cuenta unica seria la Combine.
+    Se valida ademas contra las cuentas activas que ve la API (un id mal escrito o de una cuenta inactiva detiene el
+    ciclo) y contra la lista de denegacion. Nunca se adivina por posicion ni por ser "la unica"."""
     pinned = os.getenv("TOPSTEP_ACCOUNT_ID", "").strip()
-    if pinned:
-        for a in accounts:
-            if str(a.get("id")) == pinned:
-                return a["id"]
+    if not pinned:
         raise RuntimeError(
-            f"TOPSTEP_ACCOUNT_ID={pinned!r} no esta entre las cuentas activas ({ids}) -- no se opera en "
-            f"ninguna otra cuenta. Corregir la variable en ~/.glitch_pi.env."
+            "TOPSTEP_ACCOUNT_ID esta vacia o no definida -- el Pi no opera sin una cuenta fijada explicitamente "
+            "(nunca se adivina). Definirla en ~/.glitch_pi.env."
         )
-
-    if len(accounts) > 1:
+    if pinned in _account_denylist():
         raise RuntimeError(
-            f"Se encontraron {len(accounts)} cuentas activas ({ids}) y TOPSTEP_ACCOUNT_ID no esta definida -- "
-            f"no se adivina cual usar. Definir TOPSTEP_ACCOUNT_ID en ~/.glitch_pi.env."
+            f"TOPSTEP_ACCOUNT_ID={pinned!r} esta en la lista de denegacion (TOPSTEP_ACCOUNT_DENY) -- el Pi no opera "
+            f"en esa cuenta. Si es intencional (Fase 3 real), definir TOPSTEP_ACCOUNT_DENY sin ese id."
         )
-    return accounts[0]["id"]
+    accounts = client.get_accounts(only_active=True)
+    ids = [a.get("id") for a in accounts]
+    for a in accounts:
+        if str(a.get("id")) == pinned:
+            return a["id"]
+    raise RuntimeError(
+        f"TOPSTEP_ACCOUNT_ID={pinned!r} no esta entre las cuentas activas ({ids}) -- no se opera en ninguna otra "
+        f"cuenta. Si la Practice se liquido o se reinicio, la cuenta nueva tiene OTRO id: actualizar la variable en "
+        f"~/.glitch_pi.env y reiniciar el servicio."
+    )
 
 
 # ── 3. resolve_contract_id ───────────────────────────────────────────────

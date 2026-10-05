@@ -25,6 +25,7 @@ import sys
 
 os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
 os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
+os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
 os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
@@ -728,20 +729,23 @@ class TestResolveAccountId:
         with pytest.raises(RuntimeError, match="no esta entre las cuentas activas"):
             pi_executor._resolve_account_id(c)
 
-    def test_single_active_account_needs_no_pin(self, monkeypatch):
+    def test_single_active_account_still_needs_a_pin(self, monkeypatch):
+        """Auditoria 04-oct (A5): antes bastaba con UNA cuenta activa; si esa era la Combine, el Pi la operaba."""
         monkeypatch.delenv("TOPSTEP_ACCOUNT_ID", raising=False)
         c = FakeClient(); c.accounts = [{"id": 555}]
-        assert pi_executor._resolve_account_id(c) == 555
+        with pytest.raises(RuntimeError, match="TOPSTEP_ACCOUNT_ID"):
+            pi_executor._resolve_account_id(c)
 
-    def test_blank_pin_is_ignored(self, monkeypatch):
+    def test_blank_pin_refuses(self, monkeypatch):
         monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "  ")
         c = FakeClient(); c.accounts = [{"id": 555}]
-        assert pi_executor._resolve_account_id(c) == 555
+        with pytest.raises(RuntimeError, match="TOPSTEP_ACCOUNT_ID"):
+            pi_executor._resolve_account_id(c)
 
     def test_no_active_accounts_raises(self, monkeypatch):
-        monkeypatch.delenv("TOPSTEP_ACCOUNT_ID", raising=False)
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "555")
         c = FakeClient(); c.accounts = []
-        with pytest.raises(RuntimeError, match="Sin cuentas activas"):
+        with pytest.raises(RuntimeError, match="no esta entre las cuentas activas"):
             pi_executor._resolve_account_id(c)
 
 

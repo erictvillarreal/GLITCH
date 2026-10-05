@@ -379,3 +379,79 @@ class TestUnknownDayIsLoudAndFlagged:
                            {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
         e = fake_gist["geometry_mes_log.json"][-1]
         assert not ({"needs_review", "position_forced_flat", "orphan_orders", "flat_unverified", "flatten_failed"} & set(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A5 -- el Pi NUNCA opera en una cuenta que no se fijo explicitamente; la Combine esta denegada por defecto
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+import subprocess
+
+COMBINE = 28197705
+PRACTICE = 28197753
+
+
+class TestAccountPinIsMandatoryAndCombineIsDenied:
+    def _accounts(self, *ids):
+        c = FakeClient()
+        c.accounts = [{"id": i} for i in ids]
+        return c
+
+    def test_blank_pin_with_only_the_combine_active_places_no_orders(self, fake_gist, sent, monkeypatch):
+        """R6 invertido: Practice liquidada/reiniciada => la Combine queda como unica cuenta activa; ya NO se opera."""
+        client = self._accounts(COMBINE)
+        _arm(monkeypatch, client)
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", "")
+        _set_clock(monkeypatch, 14, 31)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        assert client.placed_orders == [] and client.closed_contracts == []
+        assert any("TOPSTEP_ACCOUNT_ID" in m for m in sent)
+
+    @pytest.mark.parametrize("pin", ["28197705", " 28197705 ", "28197705\n"])
+    def test_pinning_the_combine_is_refused_even_though_it_is_active(self, monkeypatch, pin):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", pin)
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_DENY", raising=False)
+        with pytest.raises(RuntimeError, match="denegacion"):
+            pe._resolve_account_id(self._accounts(COMBINE, PRACTICE))
+
+    def test_denylist_can_be_disabled_explicitly_for_phase3(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", str(COMBINE))
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_DENY", "")                    # vacia = sin lista (decision consciente)
+        assert pe._resolve_account_id(self._accounts(COMBINE, PRACTICE)) == COMBINE
+
+    def test_denylist_can_be_replaced(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", str(PRACTICE))
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_DENY", f"{PRACTICE}, 111")
+        with pytest.raises(RuntimeError, match="denegacion"):
+            pe._resolve_account_id(self._accounts(COMBINE, PRACTICE))
+
+    @pytest.mark.parametrize("pin", ["28197705.0", "0x1ACCD99", "abc", "2819770", "281977053"])
+    def test_a_mistyped_pin_never_matches_another_account(self, monkeypatch, pin):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", pin)
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_DENY", raising=False)
+        with pytest.raises(RuntimeError):
+            pe._resolve_account_id(self._accounts(COMBINE, PRACTICE))
+
+    def test_numeric_vs_string_ids_match_only_when_equal(self, monkeypatch):
+        monkeypatch.setenv("TOPSTEP_ACCOUNT_ID", str(PRACTICE))
+        monkeypatch.delenv("TOPSTEP_ACCOUNT_DENY", raising=False)
+        c = FakeClient(); c.accounts = [{"id": str(COMBINE)}, {"id": PRACTICE}]
+        assert pe._resolve_account_id(c) == PRACTICE
+
+    def test_service_refuses_to_start_without_the_variable(self):
+        """require_env al importar el modulo: sin TOPSTEP_ACCOUNT_ID el proceso termina (systemd lo reportara)."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("TOPSTEP_", "TELEGRAM_"))}  # sin Telegram: no toca la red
+        env.update({"TOPSTEP_USERNAME": "u", "TOPSTEP_API_KEY": "k", "GITHUB_GIST_TOKEN": "g", "GIST_ID": "i",
+                    "GLITCH_PRODUCT": "MES", "PYTHONPATH": root})
+        r = subprocess.run([sys.executable, "-c", "import pi.pi_executor"], env=env, capture_output=True, text=True,
+                           timeout=60, cwd=root)
+        assert r.returncode != 0
+        assert "TOPSTEP_ACCOUNT_ID" in r.stderr
+
+    def test_installer_requires_a_value_for_the_account(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "pi", "ops", "install_service.sh")) as f:
+            src = f.read()
+        line = next(l for l in src.splitlines() if l.startswith("REQUIRED_VARS="))
+        assert "TOPSTEP_ACCOUNT_ID" in line

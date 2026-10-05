@@ -66,7 +66,9 @@ En el Pi viven en `~/.glitch_pi.env` (`chmod 600`, fuera de git) y los lee syste
 3. **Entrada y protección siempre juntas:** nunca hay una entrada sin su SL ya colocado.
 4. **Una sola instancia del ejecutor.** Nunca `nohup` y systemd a la vez. `install_service.sh` se niega a arrancar
    el servicio si encuentra un `pi_executor.py` suelto.
-5. **Una sola cuenta activa:** `_resolve_account_id` se niega a adivinar si hay más de una.
+5. **Cuenta fijada, siempre:** `TOPSTEP_ACCOUNT_ID` es **obligatoria** (`require_env` impide arrancar sin ella) y se valida
+   contra las cuentas activas; nunca se adivina ni se toma "la única activa". Además, la Combine `28197705` está en una
+   lista de denegación por defecto (`TOPSTEP_ACCOUNT_DENY`; vacía la desactiva para la Fase 3 real).
 6. **Límites duros de riesgo en código determinista, nunca en un LLM** (`CLAUDE.md`, regla 1). El Pi no tiene
    ninguna llamada a un LLM en el camino crítico.
 7. **Todo cambio a este código requiere revisión humana antes de merge** (`CLAUDE.md`, regla 4).
@@ -96,8 +98,9 @@ Detalle y comandos: `pi/ops/README.md`.
   con el mapeo verificado), la forma de las órdenes en `Order/search` usada solo para leer el fill price
   (best-effort), y el flujo completo de `poll_position_until_closed`. La primera señal real en Practice es la prueba.
 * **Cuenta del Pi:** desde el 1-oct hay DOS cuentas activas (Combine `28197705` y Practice `28197753`).
-  `TOPSTEP_ACCOUNT_ID` en `~/.glitch_pi.env` fija la cuenta y se valida contra las cuentas activas; sin ella y con
-  más de una cuenta activa el ciclo se detiene (no adivina). Para el Demo Pi debe ser `28197753`.
+  `TOPSTEP_ACCOUNT_ID` en `~/.glitch_pi.env` fija la cuenta (obligatoria desde la auditoría del 4-oct) y se valida contra
+  las cuentas activas y la lista de denegación. Para el Demo Pi debe ser `28197753`. Si la Practice se liquida o se
+  reinicia, la cuenta nueva trae OTRO id: hay que actualizar la variable y reiniciar el servicio.
 * **Señales viejas:** una señal sin consumir de un día anterior (CT) se descarta con aviso y se limpia
   (`_signal_is_current`), porque el scheduler de Railway no escribe una señal nueva mientras haya una sin consumir.
 * **Riesgo residual documentado en `pi_executor.py`:** si el proceso muere entre colocar las 3 órdenes y guardar

@@ -43,7 +43,7 @@ command -v systemctl >/dev/null || die "systemctl no existe -- este script es so
 mkdir -p "$LOG_DIR"
 
 # --- Archivo de entorno: crear plantilla vacia si no existe; nunca tocar uno existente ---
-REQUIRED_VARS="TOPSTEP_USERNAME TOPSTEP_API_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GITHUB_GIST_TOKEN GIST_ID GLITCH_PRODUCT"
+REQUIRED_VARS="TOPSTEP_USERNAME TOPSTEP_API_KEY TOPSTEP_ACCOUNT_ID TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GITHUB_GIST_TOKEN GIST_ID GLITCH_PRODUCT"
 if [ ! -f "$ENV_FILE" ]; then
   umask 077
   {
@@ -51,8 +51,7 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "# Formato: NOMBRE=valor, sin 'export' y sin espacios alrededor del '='. chmod 600. NUNCA en git."
     echo "# Llena los valores TU, a mano, en el Pi."
     for v in $REQUIRED_VARS; do echo "$v="; done
-    echo "# Cuenta sobre la que opera el Pi (OBLIGATORIA si hay mas de una cuenta activa). Demo Pi = Practice."
-    echo "TOPSTEP_ACCOUNT_ID="
+    echo "# TOPSTEP_ACCOUNT_ID es OBLIGATORIA: la cuenta sobre la que opera el Pi (Demo Pi = Practice). Nunca la Combine."
     echo
     echo "# Gate de Fase 3 (22-sep-2026). Descomentar SOLO cuando se llegue a Fase 3 y exista pi/orderside_verified.json:"
     echo "# GLITCH_PI_PHASE3=si"

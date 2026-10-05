@@ -10,7 +10,8 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # .../glitch
 for k, v in {"TOPSTEP_USERNAME": "u", "TOPSTEP_API_KEY": "k", "TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c",
-             "GITHUB_GIST_TOKEN": "g", "GIST_ID": "id", "GLITCH_PRODUCT": "MES", "MASSIVE_API_KEY": "m"}.items():
+             "GITHUB_GIST_TOKEN": "g", "GIST_ID": "id", "GLITCH_PRODUCT": "MES", "MASSIVE_API_KEY": "m",
+             "TOPSTEP_ACCOUNT_ID": "555"}.items():
     os.environ.setdefault(k, v)
 sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "tests"))

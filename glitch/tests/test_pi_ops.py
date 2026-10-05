@@ -15,6 +15,7 @@ import sys
 
 os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
 os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
+os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
 os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
