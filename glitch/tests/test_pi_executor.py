@@ -128,6 +128,13 @@ def _signal(**overrides):
 
 
 @pytest.fixture(autouse=True)
+def _entry_deadline_off(monkeypatch):
+    """La ventana horaria de entrada (auditoria A3) se desactiva en los tests heredados: varios fijan el reloj en
+    14:31 para que el poll corte de inmediato. tests/test_pi_audit_patches.py::TestEntryDeadline la activa."""
+    monkeypatch.setattr(pi_executor, "ENTRY_DEADLINE_MINUTES", 24 * 60)
+
+
+@pytest.fixture(autouse=True)
 def _fixed_clock(monkeypatch):
     """Reloj fijo (29-sep-2026 10:00 CT): la guardia de señal vieja compara contra la fecha de hoy, y las señales
     de prueba traen esa fecha. Los tests que necesitan otra hora la sobreescriben con su propio monkeypatch."""

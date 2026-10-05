@@ -27,7 +27,7 @@ import pytest
 
 import pi.pi_executor as pe
 # Reutiliza el FakeClient/fixtures de la suite del ejecutor (mismos supuestos, un solo lugar donde mantenerlos)
-from tests.test_pi_executor import FakeClient, _signal, fake_gist, sent, _fixed_clock  # noqa: F401
+from tests.test_pi_executor import FakeClient, _signal, fake_gist, sent, _fixed_clock, _entry_deadline_off  # noqa: F401
 
 MES = "CON.MES.Z26"
 
@@ -455,3 +455,70 @@ class TestAccountPinIsMandatoryAndCombineIsDenied:
             src = f.read()
         line = next(l for l in src.splitlines() if l.startswith("REQUIRED_VARS="))
         assert "TOPSTEP_ACCOUNT_ID" in line
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A3 -- una señal real solo se ejecuta dentro de la ventana de entrada; fuera, se descarta con aviso
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class TestEntryDeadline:
+    @pytest.fixture(autouse=True)
+    def _deadline_on(self, monkeypatch):
+        monkeypatch.setattr(pe, "ENTRY_DEADLINE_MINUTES", 10 * 60)      # el default real: 10:00 CT
+
+    @pytest.mark.parametrize("hh,mm", [(9, 36), (9, 50), (9, 59)])
+    def test_signal_inside_the_window_is_executed(self, fake_gist, sent, monkeypatch, hh, mm):
+        client = FakeClient()
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, hh, mm)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        monkeypatch.setattr(pe, "poll_position_until_closed",
+                            lambda *a, **k: {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": True})
+        pe.run_once()
+        assert len(client.placed_orders) == 3
+
+    @pytest.mark.parametrize("hh,mm", [(10, 0), (13, 0), (15, 30), (17, 5), (23, 50)])
+    def test_late_signal_is_discarded_cleared_and_alerted_without_touching_the_broker(self, fake_gist, sent, monkeypatch, hh, mm):
+        """R3 invertido: antes entraba a cualquier hora del mismo dia CT."""
+        client = FakeClient()
+        monkeypatch.setattr(pe, "authenticate", lambda: (_ for _ in ()).throw(AssertionError("no debe tocar el broker")))
+        monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+        _set_clock(monkeypatch, hh, mm)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        assert client.placed_orders == []
+        assert fake_gist[pe.ORDER_FILE] == {}
+        assert "geometry_mes_log.json" not in fake_gist                       # no entra al historial como trade
+        assert len(sent) == 1 and "hora limite" in sent[0]
+
+    def test_alert_is_not_repeated_every_cycle_if_clearing_keeps_failing(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, 15, 30)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        _drop_signal_clear(monkeypatch, fake_gist)
+        for _ in range(5):
+            pe.run_once()
+        assert client.placed_orders == [] and len(sent) == 1
+
+    def test_test_signals_are_exempt_so_after_hours_trials_still_work(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, 15, 30)
+        fake_gist[pe.ORDER_FILE] = _signal(product="MEStest", nc=1)
+        pe.run_once()
+        assert len([o for o in client.placed_orders if o["order_type"] == pe.OrderType.MARKET]) == 1
+
+    def test_default_deadline_is_inside_what_paper_can_do(self):
+        """El paper se rinde ~9:50 como tarde (compuerta 9:35 + 20 reintentos x 30 s): el limite no debe ser anterior a
+        la entrada normal ni mucho mas tarde que lo que el paper podria hacer."""
+        default_deadline = pe._parse_hhmm("10:00", 0)
+        assert 9 * 60 + 50 <= default_deadline <= 11 * 60
+
+    @pytest.mark.parametrize("value,expected", [("10:30", 630), (" 9:45 ", 585), ("00:00", 0), ("23:59", 1439)])
+    def test_parse_hhmm_valid(self, value, expected):
+        assert pe._parse_hhmm(value, -1) == expected
+
+    @pytest.mark.parametrize("value", ["", "10", "24:00", "10:60", "abc", "10:xx", "-1:30"])
+    def test_parse_hhmm_invalid_falls_back_to_default(self, value):
+        assert pe._parse_hhmm(value, 600) == 600

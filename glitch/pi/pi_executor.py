@@ -172,6 +172,27 @@ HEARTBEAT_EVERY_POLLS = 10   # una linea de log cada N polls (10 x 30 s = ~5 min
                              # el log siga creciendo) daria falsa alarma en cada posicion abierta.
 FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30  # mismo cierre de sesion RTH que geometry_scheduler.py (14:30 CT)
 
+
+def _parse_hhmm(value: str, default_minutes: int) -> int:
+    """'HH:MM' -> minutos desde medianoche; si no es valido, el default (nunca falla el arranque por esto)."""
+    try:
+        hh, mm = str(value).strip().split(":")
+        h, m = int(hh), int(mm)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h * 60 + m
+    except Exception:
+        pass
+    log.error(f"GLITCH_PI_ENTRY_DEADLINE_CT={value!r} no es HH:MM valido -- se usa el default")
+    return default_minutes
+
+
+# Hora limite (CT) para ENTRAR a mercado con una señal real (auditoria 04-oct-2026, hallazgo A3). Railway escribe la señal a
+# las ~9:35 CT y el paper entra ~9:40; su reintento de entrada se rinde ~9:45-9:50, asi que el paper NUNCA entra mas tarde.
+# Sin limite, un Pi que vuelve tarde (ya tuvo un reinicio inesperado) entraria a cualquier hora del mismo dia CT --
+# a las 15:30 abre 40 contratos y los aplana al instante, a las 17:05 (reapertura Globex) igual. Fuera de la ventana la
+# señal se descarta con aviso. Configurable (HH:MM CT) con GLITCH_PI_ENTRY_DEADLINE_CT.
+ENTRY_DEADLINE_MINUTES = _parse_hhmm(os.getenv("GLITCH_PI_ENTRY_DEADLINE_CT", "10:00"), 10 * 60)
+
 _FILL_PRICE_KEYS = ("filledPrice", "avgFillPrice", "averageFillPrice", "fillPrice", "price")
 
 
@@ -846,6 +867,18 @@ def run_once():
 
         if not _signal_is_current(signal):
             return
+
+        if not _is_test_signal(signal):
+            _now = ct_now()
+            if _now.hour * 60 + _now.minute >= ENTRY_DEADLINE_MINUTES:
+                _notify_blocked_once_per_day(
+                    f"La señal del {signal.get('date')} ({signal.get('direction', '?')}) se vio a las "
+                    f"{_now.strftime('%H:%M')} CT, DESPUES de la hora limite de entrada "
+                    f"({ENTRY_DEADLINE_MINUTES // 60:02d}:{ENTRY_DEADLINE_MINUTES % 60:02d} CT). NO se ejecuta: el paper "
+                    f"entra ~9:40 CT y entrar tarde no replica lo que se mide. Se descarta."
+                )
+                save_order_signal({})
+                return
 
         if not _is_test_signal(signal) and _signal_already_claimed(signal):
             # Esta señal YA se ejecuto (o se intento) hoy y por alguna razon sigue en el Gist (p. ej. fallo en
