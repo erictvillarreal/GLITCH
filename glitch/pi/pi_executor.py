@@ -136,6 +136,8 @@ require_env(
 from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open
 from execution.ct_logging import setup_ct_logging
 from execution.gist_store import load_log as _gist_load_log
+from execution.gist_store import load_log_strict as _gist_load_log_strict
+from execution.gist_store import save_log_strict as _gist_save_log_strict
 from execution.gist_store import load_state as _gist_load_state
 from execution.gist_store import save_log as _gist_save_log
 from execution.gist_store import save_state as _gist_save_state
@@ -806,18 +808,83 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
 
 
 # ── 7. append_to_historic_log ────────────────────────────────────────────
+HISTORY_WRITE_ATTEMPTS = 3
+HISTORY_RETRY_SLEEP = 2   # segundos entre intentos
+
+
+def _spool_path(product_key: str) -> str:
+    return os.path.join(_state_dir(), f".glitch_pi_unsynced_log_{product_key.lower()}.jsonl")
+
+
+def _spool_read(path: str) -> list:
+    try:
+        with open(path) as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        log.error(f"spool del historial ilegible ({e}) -- se ignora y se conserva el archivo para revision manual")
+        return []
+
+
+def _spool_append(path: str, entry: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _entry_present(paper_log: list, entry: dict) -> bool:
+    """Evita duplicar una entrada si un intento anterior SI escribio (p. ej. el PATCH llego pero la respuesta no)."""
+    keys = ("date", "result", "entry", "exit", "intento", "nc", "side")
+    return any(all(e.get(k) == entry.get(k) for k in keys) and e.get("dry_run") is False for e in paper_log)
+
+
 def append_to_historic_log(product_key: str, entry: dict) -> None:
     """
-    Escribe al MISMO archivo (geometry_{producto}_log.json) que
-    geometry_scheduler.py -- misma forma de entrada que ese scheduler ya
-    produce en modo paper, para que _current_intento()/_attempt_pnl()/etc.
-    (definidas ahi) sigan funcionando sin cambios sobre un historico mixto
-    paper+real.
+    Escribe al MISMO archivo (geometry_{producto}_log.json) que geometry_scheduler.py -- misma forma de entrada que ese
+    scheduler ya produce en modo paper, para que _current_intento()/_attempt_pnl()/etc. (definidas ahi) sigan funcionando
+    sin cambios sobre un historico mixto paper+real.
+
+    NUNCA sobrescribe el historial a ciegas (auditoria 04-oct-2026, A4): antes, si la LECTURA fallaba, load_log devolvia []
+    y el PATCH reemplazaba TODO el historial por esta sola entrada. Ahora: lectura estricta, 3 intentos, sin duplicar;
+    si no se logra, la entrada se guarda en un spool LOCAL (se fusiona en el siguiente cierre exitoso) y se avisa por
+    Telegram con la entrada completa. El historial del Gist queda intacto.
     """
     filename = f"geometry_{product_key.lower()}_log.json"
-    paper_log = _gist_load_log(filename)
-    paper_log.append(entry)
-    _gist_save_log(filename, paper_log)
+    spool = _spool_path(product_key)
+    last_err = None
+    for attempt in range(HISTORY_WRITE_ATTEMPTS):
+        try:
+            paper_log = _gist_load_log_strict(filename)
+            changed = False
+            for e in _spool_read(spool) + [entry]:
+                if not _entry_present(paper_log, e):
+                    paper_log.append(e)
+                    changed = True
+            if changed:
+                _gist_save_log_strict(filename, paper_log)
+            if os.path.exists(spool):
+                os.remove(spool)
+            return
+        except Exception as e:
+            last_err = e
+            log.warning(f"append_to_historic_log intento {attempt + 1}/{HISTORY_WRITE_ATTEMPTS} fallo -- {e}")
+            if attempt < HISTORY_WRITE_ATTEMPTS - 1:
+                time.sleep(HISTORY_RETRY_SLEEP)
+
+    spooled = True
+    try:
+        _spool_append(spool, entry)
+    except Exception as e:
+        spooled = False
+        log.error(f"append_to_historic_log: tampoco se pudo escribir el spool local -- {e}")
+    send(f"{PREFIX}\nSTATUS: ALERTA\nNo se pudo escribir el historial en el Gist tras {HISTORY_WRITE_ATTEMPTS} intentos "
+         f"({last_err}). El historial NO se sobrescribio. "
+         + ("La entrada quedo en el spool local del Pi y se fusionara en el siguiente cierre exitoso. "
+            if spooled else "TAMPOCO se pudo guardar en el Pi: copiar esta entrada a mano. ")
+         + f"Entrada: {json.dumps(entry, default=str)}\n{utc_now_str()}")
 
 
 # ── 8. run_once / main ───────────────────────────────────────────────────

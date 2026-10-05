@@ -161,6 +161,8 @@ def fake_gist(monkeypatch):
     monkeypatch.setattr(pi_executor, "_gist_save_state", _save_state)
     monkeypatch.setattr(pi_executor, "_gist_load_log", _load_log)
     monkeypatch.setattr(pi_executor, "_gist_save_log", _save_log)
+    monkeypatch.setattr(pi_executor, "_gist_load_log_strict", _load_log)
+    monkeypatch.setattr(pi_executor, "_gist_save_log_strict", _save_log)
     return store
 
 

@@ -140,3 +140,53 @@ def save_state(filename: str, data: dict) -> None:
     """Escribe el dict de ESTADO VOLATIL completo (reemplaza el anterior).
     Pasar {} para marcar explicitamente 'sin posicion pendiente'."""
     _write_file(filename, data)
+
+
+# ── Variantes ESTRICTAS (auditoria 04-oct-2026, hallazgo A4) ───────────────────────────────────────────────────
+# load_log()/save_log() devuelven [] ante CUALQUIER fallo de lectura y tragan los fallos de escritura: correcto para
+# no tumbar un scheduler de paper, pero un LEER-AGREGAR-REEMPLAZAR sobre eso borra todo el historial cuando falla la
+# lectura (se reemplaza por una lista con una sola entrada). Estas variantes distinguen "no existe todavia" (vacio
+# legitimo) de "fallo" (excepcion). Las usa pi/pi_executor.py; Railway sigue con las no estrictas, sin cambios.
+class GistError(RuntimeError):
+    pass
+
+
+def _read_file_strict(filename: str):
+    """None solo si el gist/archivo no tiene contenido (vacio legitimo). Cualquier fallo de red/API/JSON lanza GistError."""
+    _require_config()
+    try:
+        r = requests.get(f"{_API}/gists/{GIST_ID}", headers=_headers(), timeout=15)
+        r.raise_for_status()
+        gist = r.json()
+    except Exception as e:
+        raise GistError(f"lectura de {filename} fallo: {e}") from e
+    file_obj = gist.get("files", {}).get(filename)
+    if not file_obj:
+        return None
+    content = file_obj.get("content", "")
+    if not content.strip():
+        return None
+    try:
+        return json.loads(content)
+    except Exception as e:
+        raise GistError(f"{filename} no es JSON valido: {e}") from e
+
+
+def load_log_strict(filename: str) -> list:
+    data = _read_file_strict(filename)
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        raise GistError(f"{filename} no contiene una lista (tipo {type(data).__name__})")
+    return data
+
+
+def save_log_strict(filename: str, data: list) -> None:
+    """Como save_log pero LANZA GistError si el PATCH falla (el llamador decide: reintentar, spool, alertar)."""
+    _require_config()
+    try:
+        payload = {"files": {filename: {"content": json.dumps(data, indent=2, default=str)}}}
+        r = requests.patch(f"{_API}/gists/{GIST_ID}", headers=_headers(), json=payload, timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        raise GistError(f"escritura de {filename} fallo: {e}") from e

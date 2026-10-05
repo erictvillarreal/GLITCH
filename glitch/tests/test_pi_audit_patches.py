@@ -599,3 +599,207 @@ class TestSignalIsValidatedAgainstLocalConfig:
         pe.run_once()
         assert len([o for o in client.placed_orders if o["order_type"] == pe.OrderType.MARKET]) == 1
         assert client.placed_orders[0]["size"] == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A4 -- el historial compartido NUNCA se sobrescribe a ciegas: lectura estricta, reintentos, spool local, alerta
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+import execution.gist_store as gs
+
+HIST = "geometry_mes_log.json"
+
+
+def _entry(**kw):
+    e = {"date": "2026-09-29", "signal": True, "side": 1, "direction": "LONG", "entry": 6000.0, "exit": 6010.0,
+         "result": "TP", "pnl": 2000.0, "sl_ticks": 100, "tp_ticks": 40, "nc": 40, "dry_run": False,
+         "product": "MES", "intento": 1}
+    e.update(kw)
+    return e
+
+
+def _old_history():
+    return [{"date": f"2026-09-{d:02d}", "result": "TP", "pnl": 100.0, "intento": 1, "dry_run": True} for d in range(10, 20)]
+
+
+@pytest.fixture
+def strict_gist(monkeypatch):
+    """Historial en memoria con fallos programables de lectura/escritura (estrictos: lanzan, como las nuevas gist_store)."""
+    state = {"log": _old_history(), "read_fail": 0, "write_fail": 0, "write_lands_but_raises": False, "writes": 0}
+
+    def load(filename):
+        if state["read_fail"] > 0:
+            state["read_fail"] -= 1
+            raise gs.GistError("lectura fallo: timeout")
+        return list(state["log"])
+
+    def save(filename, data):
+        state["writes"] += 1
+        if state["write_fail"] > 0:
+            state["write_fail"] -= 1
+            if state["write_lands_but_raises"]:
+                state["log"] = list(data)          # el PATCH SI llego, pero la respuesta no
+            raise gs.GistError("escritura fallo: 502")
+        state["log"] = list(data)
+    monkeypatch.setattr(pe, "_gist_load_log_strict", load)
+    monkeypatch.setattr(pe, "_gist_save_log_strict", save)
+    monkeypatch.setattr(pe.time, "sleep", lambda s: None)
+    return state
+
+
+class TestHistoryIsNeverOverwrittenBlindly:
+    def test_normal_append_keeps_all_previous_entries(self, strict_gist, sent):
+        pe.append_to_historic_log("MES", _entry())
+        assert len(strict_gist["log"]) == 11 and strict_gist["log"][-1]["result"] == "TP" and sent == []
+
+    def test_empty_history_is_a_legitimate_first_write(self, strict_gist, sent):
+        strict_gist["log"] = []
+        pe.append_to_historic_log("MES", _entry())
+        assert len(strict_gist["log"]) == 1
+
+    def test_read_failure_never_overwrites_the_history_and_spools_and_alerts(self, strict_gist, sent):
+        """R4 invertido: antes, 1 lectura fallida => el historial de 10 dias se reemplazaba por 1 entrada."""
+        strict_gist["read_fail"] = 99
+        pe.append_to_historic_log("MES", _entry())
+        assert strict_gist["writes"] == 0                                   # NO hubo ningun PATCH
+        assert len(strict_gist["log"]) == 10                                # historial intacto
+        assert len(pe._spool_read(pe._spool_path("MES"))) == 1              # la entrada quedo guardada en el Pi
+        assert len(sent) == 1 and "NO se sobrescribio" in sent[0] and '"pnl": 2000.0' in sent[0]
+
+    def test_write_failure_spools_and_leaves_history_untouched(self, strict_gist, sent):
+        strict_gist["write_fail"] = 99
+        pe.append_to_historic_log("MES", _entry())
+        assert len(strict_gist["log"]) == 10 and len(pe._spool_read(pe._spool_path("MES"))) == 1
+        assert strict_gist["writes"] == pe.HISTORY_WRITE_ATTEMPTS
+
+    def test_transient_failure_is_retried_and_succeeds_without_spool_or_alert(self, strict_gist, sent):
+        strict_gist["read_fail"] = 1
+        pe.append_to_historic_log("MES", _entry())
+        assert len(strict_gist["log"]) == 11 and sent == []
+        assert not os.path.exists(pe._spool_path("MES"))
+
+    def test_a_write_that_landed_but_raised_is_not_duplicated_on_retry(self, strict_gist, sent):
+        strict_gist["write_fail"] = 1
+        strict_gist["write_lands_but_raises"] = True
+        pe.append_to_historic_log("MES", _entry())
+        assert len([e for e in strict_gist["log"] if e.get("dry_run") is False]) == 1
+
+    def test_spooled_entries_are_merged_on_the_next_successful_close(self, strict_gist, sent):
+        strict_gist["read_fail"] = 99
+        pe.append_to_historic_log("MES", _entry(date="2026-09-29", entry=6000.0))
+        strict_gist["read_fail"] = 0
+        pe.append_to_historic_log("MES", _entry(date="2026-09-30", entry=6100.0, exit=6110.0))
+        real = [e for e in strict_gist["log"] if e.get("dry_run") is False]
+        assert [e["date"] for e in real] == ["2026-09-29", "2026-09-30"]    # primero la pendiente, luego la nueva
+        assert len(strict_gist["log"]) == 12 and not os.path.exists(pe._spool_path("MES"))
+
+    def test_if_even_the_spool_cannot_be_written_the_alert_carries_the_entry(self, strict_gist, sent, monkeypatch, tmp_path):
+        strict_gist["read_fail"] = 99
+        blocker = tmp_path / "es_un_archivo"
+        blocker.write_text("x")
+        monkeypatch.setenv("GLITCH_PI_STATE_DIR", str(blocker))
+        pe.append_to_historic_log("MES", _entry())                          # no debe lanzar
+        assert len(sent) == 1 and "copiar esta entrada a mano" in sent[0] and '"pnl": 2000.0' in sent[0]
+
+    def test_finalize_still_completes_and_clears_state_when_history_is_spooled(self, fake_gist, strict_gist, sent, monkeypatch):
+        """Un fallo del Gist no debe dejar el ciclo a medias (el bracket ya se cerro): se limpia estado y señal."""
+        strict_gist["read_fail"] = 99
+        state = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 100,
+                 "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
+                 "contract_id": MES, "account_id": 555, "opened_at": "x"}
+        fake_gist[pe.PI_STATE_FILE] = state
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe._finalize_cycle(FakeClient(), 555, state, {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
+        assert fake_gist[pe.PI_STATE_FILE] == {} and fake_gist[pe.ORDER_FILE] == {}
+        assert any("[CLOSE] [TP]" in m for m in sent)
+
+    def test_with_the_real_gist_store_a_read_failure_sends_no_patch(self, sent, monkeypatch):
+        """El escenario EXACTO de R4, con gist_store real: GET falla -> ningun PATCH (antes: PATCH con 1 entrada)."""
+        patches = []
+
+        def bad_get(*a, **k):
+            raise ConnectionError("timeout")
+
+        class R:
+            def raise_for_status(self): pass
+
+        def fake_patch(url, headers=None, json=None, timeout=None):
+            patches.append(json)
+            return R()
+        monkeypatch.setattr(gs.requests, "get", bad_get)
+        monkeypatch.setattr(gs.requests, "patch", fake_patch)
+        monkeypatch.setattr(gs, "GITHUB_GIST_TOKEN", "x"); monkeypatch.setattr(gs, "GIST_ID", "y")
+        monkeypatch.setattr(pe, "_gist_load_log_strict", gs.load_log_strict)
+        monkeypatch.setattr(pe, "_gist_save_log_strict", gs.save_log_strict)
+        monkeypatch.setattr(pe.time, "sleep", lambda s: None)
+        pe.append_to_historic_log("MES", _entry())
+        assert patches == []
+
+
+class TestStrictGistStore:
+    @pytest.fixture(autouse=True)
+    def _cfg(self, monkeypatch):
+        monkeypatch.setattr(gs, "GITHUB_GIST_TOKEN", "x")
+        monkeypatch.setattr(gs, "GIST_ID", "y")
+
+    class _Resp:
+        def __init__(self, payload=None, status_ok=True):
+            self._p, self._ok = payload, status_ok
+
+        def raise_for_status(self):
+            if not self._ok:
+                raise RuntimeError("HTTP 502")
+
+        def json(self):
+            return self._p
+
+    def _get(self, monkeypatch, payload=None, ok=True, exc=None):
+        def get(*a, **k):
+            if exc:
+                raise exc
+            return self._Resp(payload, ok)
+        monkeypatch.setattr(gs.requests, "get", get)
+
+    def test_network_error_raises_instead_of_returning_empty(self, monkeypatch):
+        self._get(monkeypatch, exc=ConnectionError("x"))
+        with pytest.raises(gs.GistError):
+            gs.load_log_strict("f.json")
+
+    def test_http_error_raises(self, monkeypatch):
+        self._get(monkeypatch, {"files": {}}, ok=False)
+        with pytest.raises(gs.GistError):
+            gs.load_log_strict("f.json")
+
+    def test_missing_or_empty_file_is_a_legitimate_empty_list(self, monkeypatch):
+        self._get(monkeypatch, {"files": {}})
+        assert gs.load_log_strict("f.json") == []
+        self._get(monkeypatch, {"files": {"f.json": {"content": "   "}}})
+        assert gs.load_log_strict("f.json") == []
+
+    def test_corrupt_json_or_wrong_type_raises(self, monkeypatch):
+        self._get(monkeypatch, {"files": {"f.json": {"content": "{{{"}}})
+        with pytest.raises(gs.GistError):
+            gs.load_log_strict("f.json")
+        self._get(monkeypatch, {"files": {"f.json": {"content": '{"a": 1}'}}})
+        with pytest.raises(gs.GistError):
+            gs.load_log_strict("f.json")
+
+    def test_valid_list_is_returned(self, monkeypatch):
+        self._get(monkeypatch, {"files": {"f.json": {"content": '[{"a": 1}]'}}})
+        assert gs.load_log_strict("f.json") == [{"a": 1}]
+
+    def test_write_failure_raises(self, monkeypatch):
+        def patch(*a, **k):
+            return self._Resp(None, status_ok=False)
+        monkeypatch.setattr(gs.requests, "patch", patch)
+        with pytest.raises(gs.GistError):
+            gs.save_log_strict("f.json", [])
+
+    def test_the_original_non_strict_functions_are_unchanged(self, monkeypatch):
+        """Railway sigue con load_log/save_log: lectura fallida => [] y escritura fallida => sin excepcion."""
+        self._get(monkeypatch, exc=ConnectionError("x"))
+        assert gs.load_log("f.json") == []
+
+        def patch(*a, **k):
+            raise ConnectionError("x")
+        monkeypatch.setattr(gs.requests, "patch", patch)
+        gs.save_log("f.json", [])          # no debe lanzar
