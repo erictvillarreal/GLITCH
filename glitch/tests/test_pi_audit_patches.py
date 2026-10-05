@@ -975,3 +975,75 @@ class TestEntryFillIsConfirmed:
         fake_gist[pe.ORDER_FILE] = _signal()
         pe.run_once()
         assert any("MANUALMENTE" in m for m in sent)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# M6 -- el servicio arranca DESPUES de sincronizar la hora (el Pi no tiene RTC)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class TestServiceWaitsForTimeSync:
+    def _unit(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "pi", "ops", "glitch-pi-executor.service.template")) as f:
+            return f.read()
+
+    def test_unit_orders_after_time_sync(self):
+        """Sin RTC, tras un corte el Pi arranca con la hora vieja: _signal_is_current podria clasificar como 'futura' una
+        señal buena, y el flatten de las 14:30 se evaluaria contra un reloj equivocado."""
+        unit = self._unit()
+        after = next(l for l in unit.splitlines() if l.startswith("After="))
+        wants = next(l for l in unit.splitlines() if l.startswith("Wants="))
+        assert "time-sync.target" in after and "time-sync.target" in wants
+        assert "network-online.target" in after and "network-online.target" in wants
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# M7 -- el modo PAPER (DRY_RUN=true) sigue esperando la compuerta de 9:35 CT antes de entrar
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
+import scheduler.geometry_scheduler as sched
+
+
+class TestPaperModeStillWaitsForTheEntryGate:
+    """El test heredado de paper (test_dry_run_true_never_touches_order_signal) fija el reloj en 14:31, asi que PASA
+    aunque el paper dejara de esperar la compuerta. Este arranca a las 7:30 y comprueba CUANDO se pide el primer precio."""
+
+    def test_paper_does_not_fetch_the_entry_price_before_the_gate(self, monkeypatch):
+        import pandas as pd
+        monkeypatch.setattr(sched, "DRY_RUN", True)
+        clock = {"t": dt.datetime(2026, 9, 29, 7, 30, tzinfo=sched.CT)}
+        monkeypatch.setattr(sched, "ct_now", lambda: clock["t"])
+
+        def _sleep(seconds):                      # cada espera avanza 5 min de reloj simulado
+            clock["t"] += dt.timedelta(minutes=5)
+        monkeypatch.setattr(sched.time, "sleep", _sleep)
+
+        fetched_at = []
+
+        def _fetch(ticker):
+            fetched_at.append(clock["t"])
+            return pd.DataFrame({"close": [6000.0]})
+        monkeypatch.setattr(sched, "fetch_intraday", _fetch)
+        monkeypatch.setattr(sched, "is_trading_day", lambda: True)
+        monkeypatch.setattr(sched, "send", lambda msg: None)
+        monkeypatch.setattr(sched, "get_front_month", lambda code, cache: "MESZ6")
+        monkeypatch.setattr(sched, "check_expiry_alerts", lambda cache, send_fn, prefix: None)
+        monkeypatch.setattr(sched, "load_log", lambda: [])
+        monkeypatch.setattr(sched, "save_log", lambda l: None)
+        monkeypatch.setattr(sched, "load_pending", lambda: {})
+        monkeypatch.setattr(sched, "save_pending", lambda d: None)
+        monkeypatch.setattr(sched, "load_order_signal", lambda: (_ for _ in ()).throw(AssertionError("paper no toca ORDER_FILE")))
+        monkeypatch.setattr(sched, "save_order_signal", lambda d: (_ for _ in ()).throw(AssertionError("paper no toca ORDER_FILE")))
+
+        sched.run()
+
+        assert fetched_at, "el paper debio pedir el precio de entrada"
+        first = fetched_at[0]
+        assert first.hour * 60 + first.minute >= sched.ENTRY_GATE_MINUTES      # nunca antes de 9:35 CT
+
+    def test_the_gate_helper_is_shared_by_paper_and_real_and_blocks_until_9_35(self, monkeypatch):
+        clock = {"t": dt.datetime(2026, 9, 29, 8, 0, tzinfo=sched.CT)}
+        monkeypatch.setattr(sched, "ct_now", lambda: clock["t"])
+        monkeypatch.setattr(sched.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + dt.timedelta(minutes=5)))
+        sched._wait_for_entry_gate()
+        assert clock["t"].hour * 60 + clock["t"].minute >= 9 * 60 + 35
+        assert sched.ENTRY_GATE_MINUTES == 9 * 60 + 35

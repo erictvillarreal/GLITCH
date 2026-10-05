@@ -18,11 +18,14 @@
 #   StandardOutput=append:           -> el log vive en un archivo normal (pi_executor.log) que el
 #                                       watchdog revisa por fecha de modificacion.
 #   After/Wants network-online       -> no arranca antes de tener red (Gist, Telegram, ProjectX).
+#   + time-sync.target                -> ni antes de sincronizar la hora: el Pi no tiene RTC y tras un corte arranca
+#                                       con la hora vieja; con ella el chequeo de señal vieja/futura y el flatten de
+#                                       las 14:30 se evaluarian contra un reloj equivocado.
 #   NoNewPrivileges                  -> el proceso no puede escalar privilegios.
 [Unit]
 Description=GLITCH Pi Executor (ejecucion real de ordenes contra ProjectX)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 StartLimitIntervalSec=900
 StartLimitBurst=5
 
