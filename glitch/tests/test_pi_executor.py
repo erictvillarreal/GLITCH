@@ -106,6 +106,7 @@ class FakeClient:
             raise RuntimeError(self.close_contract_error)
         self.flattened = True
         self.closed_contracts.append((account_id, contract_id))
+        self.positions = [p for p in self.positions if p.get("contractId") != contract_id]   # closeContract deja plano
         return {"success": True}
 
     def get_positions(self, account_id):

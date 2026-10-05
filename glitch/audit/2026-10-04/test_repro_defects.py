@@ -24,6 +24,13 @@ CT = pe.CT
 MES = "CON.F.US.MES.Z26"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_local_state(tmp_path, monkeypatch):
+    """Estas reproducciones corren FUERA de tests/ (no heredan tests/conftest.py): sin esto, tras el parche A1 escribirian
+    el marcador de ejecucion en el HOME real y los tests se contaminarian entre si."""
+    monkeypatch.setenv("GLITCH_PI_STATE_DIR", str(tmp_path / "pi_state"))
+
+
 def clock(monkeypatch, hh, mm, day=(2026, 10, 5)):
     monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(*day, hh, mm, tzinfo=CT))
 

@@ -458,6 +458,76 @@ def _has_untracked_position(client: ProjectXClient, account_id: int, contract_id
     return False
 
 
+# ── Verificacion post-resolucion (auditoria 04-oct-2026, hallazgo A2) ───────────────────────────────────────────
+# TP y SL son DOS ordenes sueltas (no un OCO del broker). Detectar "una pata desaparecio => se lleno" es una
+# INFERENCIA: tambien desaparecen por cancelacion manual, liquidacion por MLL, un error de lectura de la API, o
+# porque se llenaron AMBAS casi a la vez (posicion invertida). Antes de dar un ciclo por cerrado (lo que borra el
+# estado y la señal y deja de monitorear) se comprueba contra el broker que la cuenta quedo plana y sin ordenes
+# huerfanas -- y si no, se cierra y se avisa en vez de seguir como si nada.
+CONFIRM_GONE_READS = 2     # lecturas ADICIONALES a la del poll que deben seguir viendo ambas patas ausentes
+CONFIRM_GONE_SLEEP = 3     # segundos entre esas lecturas
+
+
+def _orders_really_gone(client: ProjectXClient, account_id: int, tp_id, sl_id) -> bool:
+    """True solo si TP y SL siguen AUSENTES en CONFIRM_GONE_READS lecturas consecutivas mas. Una lectura que los
+    muestre abiertos, o que falle, devuelve False: no se dan por perdidas."""
+    for _ in range(CONFIRM_GONE_READS):
+        time.sleep(CONFIRM_GONE_SLEEP)
+        try:
+            ids = {o.get("id") or o.get("orderId") for o in client.get_open_orders(account_id)}
+        except Exception as e:
+            log.warning(f"_orders_really_gone: lectura fallo ({e}) -- no se dan por perdidas las ordenes")
+            return False
+        if tp_id in ids or sl_id in ids:
+            return False
+    return True
+
+
+def _confirm_flat(client: ProjectXClient, account_id: int, contract_id) -> Optional[bool]:
+    """True = plana en este contrato, False = hay posicion abierta, None = no se pudo leer."""
+    try:
+        return not any(p.get("contractId") == contract_id and position_is_open(p)
+                       for p in client.get_positions(account_id))
+    except Exception as e:
+        log.warning(f"_confirm_flat: get_positions fallo -- {e}")
+        return None
+
+
+def _verify_resolution(client: ProjectXClient, account_id: int, contract_id, outcome: dict, leftover=None) -> dict:
+    """Se llama cuando el bracket parece resuelto (TP / SL / ambas patas ausentes). Devuelve `outcome` con banderas:
+      orphan_orders       -- ids de ordenes de salida que SIGUEN abiertas (un stop huerfano abriria una posicion nueva)
+      position_forced_flat-- la cuenta NO estaba plana al resolverse (reversion/parcial/cancelacion manual) y se cerro
+      flatten_failed      -- no estaba plana y NO se pudo cerrar: puede haber una posicion abierta sin proteccion
+      flat_unverified     -- no se pudo leer la posicion para confirmar"""
+    outcome = dict(outcome)
+    if leftover:
+        outcome["orphan_orders"] = list(leftover)
+        send(f"{PREFIX}\nSTATUS: ALERTA\nTras resolverse el bracket ({outcome['result']}) siguen ABIERTAS las ordenes "
+             f"{list(leftover)} en {contract_id} -- cancelarlas MANUALMENTE en TopstepX (un stop/limite huerfano "
+             f"abriria una posicion nueva al tocarse).\n{utc_now_str()}")
+    flat = _confirm_flat(client, account_id, contract_id)
+    if flat is False:
+        try:
+            client.close_contract(account_id, contract_id)
+        except Exception as e:
+            log.error(f"_verify_resolution: closeContract fallo -- {e}")
+        if _confirm_flat(client, account_id, contract_id) is True:
+            outcome["position_forced_flat"] = True
+            send(f"{PREFIX}\nSTATUS: ALERTA\nAl resolverse el bracket ({outcome['result']}) la cuenta NO estaba plana en "
+                 f"{contract_id} (posicion invertida, parcial o cancelacion manual). El Pi la CERRO automaticamente. "
+                 f"Revisa el historial en TopstepX: el P&L del registro es el del bracket, no incluye ese cierre.\n"
+                 f"{utc_now_str()}")
+        else:
+            outcome["flatten_failed"] = True
+            send(f"{PREFIX}\nSTATUS: ALERTA\nAl resolverse el bracket ({outcome['result']}) la cuenta NO esta plana en "
+                 f"{contract_id} y el Pi NO pudo cerrarla -- CERRARLA MANUALMENTE en TopstepX AHORA.\n{utc_now_str()}")
+    elif flat is None:
+        outcome["flat_unverified"] = True
+        send(f"{PREFIX}\nSTATUS: ALERTA\nSe resolvio el bracket ({outcome['result']}) pero no se pudo confirmar que "
+             f"la cuenta quedo plana en {contract_id} -- verificalo en TopstepX.\n{utc_now_str()}")
+    return outcome
+
+
 # ── 4. place_bracket_order ───────────────────────────────────────────────
 class BracketPlacementFailed(Exception):
     """La entrada se ejecuto pero TP o SL no se pudieron colocar. Ya se intento aplanar; `flatten_error` es
@@ -578,24 +648,38 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
         tp_open, sl_open = tp_order_id in open_ids, sl_order_id in open_ids
 
         if not tp_open and sl_open:
-            _cancel_orders_verified(client, account_id, [sl_order_id])
+            leftover = _cancel_orders_verified(client, account_id, [sl_order_id])
             rec = _lookup_order(client, account_id, tp_order_id)
             price = _extract_fill_price(rec) if rec else None
-            return {"result": "TP", "exit_price": price if price is not None else tp_price,
-                    "exit_price_estimated": price is None}
+            return _verify_resolution(
+                client, account_id, contract_id,
+                {"result": "TP", "exit_price": price if price is not None else tp_price,
+                 "exit_price_estimated": price is None}, leftover)
 
         if tp_open and not sl_open:
-            _cancel_orders_verified(client, account_id, [tp_order_id])
+            leftover = _cancel_orders_verified(client, account_id, [tp_order_id])
             rec = _lookup_order(client, account_id, sl_order_id)
             price = _extract_fill_price(rec) if rec else None
-            return {"result": "SL", "exit_price": price if price is not None else sl_price,
-                    "exit_price_estimated": price is None}
+            return _verify_resolution(
+                client, account_id, contract_id,
+                {"result": "SL", "exit_price": price if price is not None else sl_price,
+                 "exit_price_estimated": price is None}, leftover)
 
         if not tp_open and not sl_open:
-            # Caso raro: ambos ya cerrados (ej. cancelados manualmente fuera
-            # de este proceso). No se puede saber cual fue real -- se marca
-            # UNKNOWN, queda en el historico para revision manual.
-            return {"result": "UNKNOWN", "exit_price": None, "exit_price_estimated": True}
+            # Ambas patas ausentes. Puede ser: cierre manual, liquidacion por MLL, ambas ejecutadas casi a la vez
+            # (posicion INVERTIDA), o un error de lectura. NO se puede dar el ciclo por cerrado sin comprobarlo
+            # contra el broker (auditoria 04-oct-2026, A2): primero se re-lee para descartar un glitch transitorio,
+            # luego se verifica que la cuenta este plana.
+            if not _orders_really_gone(client, account_id, tp_order_id, sl_order_id):
+                time.sleep(poll_interval)
+                continue
+            if _confirm_flat(client, account_id, contract_id) is None:
+                log.warning("poll_position_until_closed: ambas patas ausentes pero no se pudo leer la posicion -- "
+                            "se sigue monitoreando (no se finaliza a ciegas)")
+                time.sleep(poll_interval)
+                continue
+            return _verify_resolution(client, account_id, contract_id,
+                                       {"result": "UNKNOWN", "exit_price": None, "exit_price_estimated": True}, None)
 
         polls += 1
         if polls % HEARTBEAT_EVERY_POLLS == 0:
@@ -663,8 +747,14 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
         "entry_price_estimated": entry_estimated,
         "exit_price_estimated": outcome.get("exit_price_estimated", False),
     }
-    if outcome.get("flatten_failed"):
-        entry["flatten_failed"] = True   # solo cuando ocurre -- revision manual de la posicion
+    # Banderas que SOLO aparecen cuando ocurren -- cada una pide revision manual de ese dia
+    for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
+        if outcome.get(flag):
+            entry[flag] = True
+    if outcome.get("orphan_orders"):
+        entry["orphan_orders"] = outcome["orphan_orders"]
+    if outcome["result"] == "UNKNOWN":
+        entry["needs_review"] = True
     append_to_historic_log(signal["product"], entry)
     save_order_signal({})
     save_pi_state({})
@@ -673,6 +763,9 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
            f"{signal['direction']}: {entry_price:,.4f} → {exit_price:,.4f}\n"
            f"PnL: ${pnl:+,.2f}  |  Contracts: {signal['nc']}\n"
            f"Intento #{signal['intento']}\n"
+           + ("ATENCION: resultado NO determinado -- ambas patas desaparecieron (cierre manual, liquidacion por MLL "
+              "o error de lectura). El PnL $0.00 de arriba NO es real: revisar el P&L en TopstepX. "
+              "Este dia queda marcado needs_review y fuera del WR.\n" if outcome["result"] == "UNKNOWN" else "")
            + ("(precio de entrada estimado -- no confirmado por el broker)\n" if entry_estimated else "")
            + ("(precio de salida estimado -- no confirmado por el broker)\n" if entry["exit_price_estimated"] else "")
            + utc_now_str())

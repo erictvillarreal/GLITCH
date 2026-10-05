@@ -95,6 +95,20 @@ def position_is_open(p: dict) -> bool:
     return not ("netPos" in p or "size" in p)
 
 
+def _items(resp, key: str, endpoint: str) -> list:
+    """Extrae la lista `key` de una respuesta de ProjectX. Una respuesta `success:false` LANZA en vez de devolver
+    `[]` (auditoria 04-oct-2026, hallazgo A2): la API contesta HTTP 200 con `success:false` ante errores de negocio
+    (asi llego "Invalid limit price" en place_order), y leerlo como "lista vacia" hacia que el ejecutor creyera que
+    ya no habia ordenes/posiciones. Una respuesta valida y vacia ({"orders": [], "success": true}) sigue siendo []."""
+    if isinstance(resp, list):
+        return resp
+    if isinstance(resp, dict):
+        if resp.get("success") is False:
+            raise RuntimeError(f"{endpoint} fallo: {resp.get('errorMessage') or resp.get('errorCode')}")
+        return resp.get(key, [])
+    raise RuntimeError(f"{endpoint}: respuesta inesperada ({type(resp).__name__})")
+
+
 class ProjectXClient:
     """
     ProjectX / TopstepX REST client.
@@ -297,7 +311,7 @@ class ProjectXClient:
         resp = self._post("/api/Order/searchOpen", {
             "accountId": account_id,
         })
-        return resp if isinstance(resp, list) else resp.get("orders", [])
+        return _items(resp, "orders", "Order/searchOpen")
 
     def get_orders(self, account_id: int, only_open: bool = False, hours_back: int = 36) -> list[dict]:
         """
@@ -315,7 +329,7 @@ class ProjectXClient:
             "accountId":      account_id,
             "startTimestamp": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
-        return resp if isinstance(resp, list) else resp.get("orders", [])
+        return _items(resp, "orders", "Order/search")
 
     # ── Positions ─────────────────────────────────────────────────────────
 
@@ -329,7 +343,7 @@ class ProjectXClient:
         resp = self._post("/api/Position/searchOpen", {
             "accountId": account_id
         })
-        return resp if isinstance(resp, list) else resp.get("positions", [])
+        return _items(resp, "positions", "Position/searchOpen")
 
     def is_flat(self, account_id: int) -> bool:
         return not any(position_is_open(p) for p in self.get_positions(account_id))

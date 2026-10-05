@@ -194,3 +194,188 @@ class TestSignalIsExecutedAtMostOnce:
             pe.run_once()
         assert len([o for o in client.placed_orders if o["order_type"] == pe.OrderType.MARKET]) == 2
         assert "geometry_mestest_log.json" in fake_gist and "geometry_mes_log.json" not in fake_gist
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A2 -- un ciclo NO se da por cerrado sin comprobar que la cuenta quedo plana y sin ordenes huerfanas
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+import brokers.projectx as px
+
+TP_ID, SL_ID = 101, 102
+
+
+def _poll(client, monkeypatch, sent=None, max_polls=40):
+    """Corre poll_position_until_closed con reloj de 10:00 que SALTA a 14:31 tras `max_polls` lecturas de reloj
+    (red de seguridad: si algo entrara en bucle, el flatten de fin de sesion corta el poll en vez de colgar la suite)."""
+    n = {"c": 0}
+
+    def clk():
+        n["c"] += 1
+        hh, mm = (10, 0) if n["c"] <= max_polls else (14, 31)
+        return dt.datetime(2026, 9, 29, hh, mm, tzinfo=pe.CT)
+    monkeypatch.setattr(pe, "ct_now", clk)
+    monkeypatch.setattr(pe.time, "sleep", lambda s: None)
+    if sent is not None:
+        monkeypatch.setattr(pe, "send", lambda m: sent.append(m))
+    return pe.poll_position_until_closed(client, 555, MES, TP_ID, SL_ID, 6010.0, 5975.0, poll_interval=0)
+
+
+def _open_position(size=40, type_=1):
+    return {"id": 9, "accountId": 555, "contractId": MES, "type": type_, "size": size, "averagePrice": 6000.0}
+
+
+class SeqOpenOrders(FakeClient):
+    """get_open_orders devuelve, en orden, los conjuntos de `seq` (el ultimo se repite). Un elemento Exception se lanza."""
+    def __init__(self, seq):
+        super().__init__()
+        self.seq, self.i = list(seq), 0
+
+    def get_open_orders(self, account_id):
+        item = self.seq[min(self.i, len(self.seq) - 1)]
+        self.i += 1
+        if isinstance(item, Exception):
+            raise item
+        return [{"id": x} for x in item]
+
+
+class TestStrictBrokerReaders:
+    def _client(self, monkeypatch, resp):
+        c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+        monkeypatch.setattr(c, "ensure_auth", lambda: None)
+        monkeypatch.setattr(c, "_post", lambda path, body, auth=True: resp)
+        return c
+
+    @pytest.mark.parametrize("reader,args", [("get_open_orders", (555,)), ("get_positions", (555,)), ("get_orders", (555,))])
+    def test_success_false_raises_instead_of_looking_empty(self, monkeypatch, reader, args):
+        c = self._client(monkeypatch, {"success": False, "errorCode": 9, "errorMessage": "transient"})
+        with pytest.raises(RuntimeError, match="transient"):
+            getattr(c, reader)(*args)
+
+    def test_valid_empty_response_is_still_an_empty_list(self, monkeypatch):
+        assert self._client(monkeypatch, {"orders": [], "success": True}).get_open_orders(555) == []
+        assert self._client(monkeypatch, {"positions": [], "success": True}).get_positions(555) == []
+
+    def test_plain_list_and_missing_success_flag_keep_working(self, monkeypatch):
+        assert self._client(monkeypatch, [{"id": 1}]).get_open_orders(555) == [{"id": 1}]
+        assert self._client(monkeypatch, {"orders": [{"id": 2}]}).get_open_orders(555) == [{"id": 2}]
+
+    def test_unexpected_shape_raises(self, monkeypatch):
+        with pytest.raises(RuntimeError):
+            self._client(monkeypatch, "boom").get_open_orders(555)
+
+
+class TestAmbiguousDisappearanceIsVerifiedNotAssumed:
+    def test_api_error_on_open_orders_never_finalizes_a_live_position(self, monkeypatch):
+        """R1 invertido: el error de lectura reintenta; el bracket sigue vivo y luego se resuelve como TP real."""
+        client = SeqOpenOrders([RuntimeError("Order/searchOpen fallo: transient")] * 3 + [{SL_ID}])   # luego TP ausente, SL vivo
+        out = _poll(client, monkeypatch)
+        assert out["result"] == "TP"
+
+    def test_both_legs_gone_but_position_still_open_is_closed_and_alerted(self, monkeypatch):
+        """Posicion INVERTIDA / parcial: ambas patas ausentes pero la cuenta NO esta plana."""
+        client = SeqOpenOrders([set()])
+        client.positions = [_open_position(40, type_=2)]
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["result"] == "UNKNOWN" and out["position_forced_flat"] is True
+        assert client.closed_contracts == [(555, MES)]
+        assert any("NO estaba plana" in m and "CERRO" in m for m in sent)
+
+    def test_if_the_forced_close_also_fails_it_says_close_manually(self, monkeypatch):
+        client = SeqOpenOrders([set()])
+        client.positions = [_open_position(40, type_=2)]
+        client.close_contract_error = "boom"
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["flatten_failed"] is True and "position_forced_flat" not in out
+        assert any("MANUALMENTE" in m for m in sent)
+
+    def test_both_legs_gone_and_account_flat_is_unknown_without_forcing_anything(self, monkeypatch):
+        """Cierre manual (Flatten All) o liquidacion: se respeta, sin tocar la cuenta."""
+        client = SeqOpenOrders([set()])
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["result"] == "UNKNOWN"
+        assert not out.get("position_forced_flat") and client.closed_contracts == []
+        assert sent == []
+
+    def test_a_one_off_empty_read_is_not_taken_as_both_legs_gone(self, monkeypatch):
+        """Glitch transitorio: una lectura vacia y las siguientes muestran el bracket vivo -> no es UNKNOWN."""
+        client = SeqOpenOrders([set(), {TP_ID, SL_ID}, {TP_ID, SL_ID}, {SL_ID}])
+        assert _poll(client, monkeypatch)["result"] == "TP"
+
+    def test_if_position_cannot_be_read_it_keeps_polling_instead_of_finalizing(self, monkeypatch):
+        client = SeqOpenOrders([set()])
+        client.get_positions = lambda account_id: (_ for _ in ()).throw(RuntimeError("API caida"))
+        out = _poll(client, monkeypatch, max_polls=6)
+        assert out["result"] == "FLATTEN"            # no UNKNOWN: siguio hasta el flatten de fin de sesion
+
+
+class TestNaturalResolutionVerifiesCleanup:
+    def test_orphan_stop_after_tp_is_reported(self, monkeypatch):
+        """R5 invertido: si cancelar la pata sobrante falla, hay aviso y queda registrado."""
+        client = SeqOpenOrders([{SL_ID}])
+        client.cancel_order = lambda oid, account_id=None: False          # la API no cancela
+        client.open_order_ids = {SL_ID}
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["result"] == "TP" and out["orphan_orders"] == [SL_ID]
+        assert any("ABIERTAS" in m and str(SL_ID) in m for m in sent)
+
+    def test_clean_natural_tp_sends_no_alert_and_adds_no_flags(self, monkeypatch):
+        client = SeqOpenOrders([{SL_ID}, set()])        # tras cancelar el SL, searchOpen ya no lo lista
+        client.open_order_ids = {SL_ID}
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["result"] == "TP" and sent == []
+        assert not ({"orphan_orders", "position_forced_flat", "flatten_failed", "flat_unverified"} & set(out))
+
+    def test_tp_with_position_still_open_closes_it(self, monkeypatch):
+        """TP detectado pero quedan contratos abiertos (fill parcial del bracket): se cierran y se avisa."""
+        client = SeqOpenOrders([{SL_ID}, set()])
+        client.open_order_ids = {SL_ID}
+        client.positions = [_open_position(15, type_=1)]
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["result"] == "TP" and out["position_forced_flat"] is True
+        assert client.closed_contracts == [(555, MES)]
+
+    def test_unreadable_position_after_resolution_is_flagged_unverified(self, monkeypatch):
+        client = SeqOpenOrders([{SL_ID}, set()])
+        client.open_order_ids = {SL_ID}
+        client.get_positions = lambda account_id: (_ for _ in ()).throw(RuntimeError("API caida"))
+        sent = []
+        out = _poll(client, monkeypatch, sent)
+        assert out["flat_unverified"] is True and any("no se pudo confirmar" in m for m in sent)
+
+
+class TestUnknownDayIsLoudAndFlagged:
+    def _state(self):
+        return {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 100,
+                "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": TP_ID, "sl_order_id": SL_ID,
+                "contract_id": MES, "account_id": 555, "opened_at": "x"}
+
+    def test_unknown_message_says_pnl_is_not_real_and_entry_needs_review(self, fake_gist, monkeypatch):
+        sent = []
+        monkeypatch.setattr(pe, "send", lambda m: sent.append(m))
+        pe._finalize_cycle(FakeClient(), 555, self._state(),
+                           {"result": "UNKNOWN", "exit_price": None, "exit_price_estimated": True})
+        assert any("[UNKNOWN]" in m and "NO es real" in m for m in sent)
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert e["needs_review"] is True and e["result"] == "UNKNOWN"
+
+    def test_flags_from_verification_reach_the_historic_log(self, fake_gist, monkeypatch):
+        monkeypatch.setattr(pe, "send", lambda m: None)
+        pe._finalize_cycle(FakeClient(), 555, self._state(),
+                           {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False,
+                            "position_forced_flat": True, "orphan_orders": [SL_ID], "flat_unverified": True})
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert e["position_forced_flat"] is True and e["orphan_orders"] == [SL_ID] and e["flat_unverified"] is True
+        assert "needs_review" not in e
+
+    def test_a_normal_close_adds_no_flags(self, fake_gist, monkeypatch):
+        monkeypatch.setattr(pe, "send", lambda m: None)
+        pe._finalize_cycle(FakeClient(), 555, self._state(),
+                           {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert not ({"needs_review", "position_forced_flat", "orphan_orders", "flat_unverified", "flatten_failed"} & set(e))
