@@ -522,3 +522,80 @@ class TestEntryDeadline:
     @pytest.mark.parametrize("value", ["", "10", "24:00", "10:60", "abc", "10:xx", "-1:30"])
     def test_parse_hhmm_invalid_falls_back_to_default(self, value):
         assert pe._parse_hhmm(value, 600) == 600
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A7 -- el Pi no ejecuta lo que diga el Gist sin validarlo contra su config local (cota superior, no igualdad)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class TestSignalIsValidatedAgainstLocalConfig:
+    def test_the_normal_railway_signal_is_valid(self):
+        assert pe._validate_signal(_signal()) is None
+
+    @pytest.mark.parametrize("nc", [41, 100, 400, 0, -1, True, "40", 40.0, None])
+    def test_nc_must_be_an_int_between_1_and_the_configured_size(self, nc):
+        assert pe._validate_signal(_signal(nc=nc)) is not None
+
+    @pytest.mark.parametrize("nc", [1, 10, 39, 40])
+    def test_smaller_or_equal_sizes_are_allowed(self, nc):
+        assert pe._validate_signal(_signal(nc=nc)) is None
+
+    @pytest.mark.parametrize("side", [0, 2, "1", None, True, 1.0])
+    def test_side_must_be_plus_or_minus_one(self, side):
+        assert pe._validate_signal(_signal(side=side)) is not None
+
+    @pytest.mark.parametrize("key,val", [("sl_ticks", 0), ("sl_ticks", 401), ("sl_ticks", True), ("sl_ticks", "100"),
+                                         ("tp_ticks", 0), ("tp_ticks", 161), ("tp_ticks", None)])
+    def test_ticks_must_be_sane(self, key, val):
+        assert pe._validate_signal(_signal(**{key: val})) is not None
+
+    def test_ticks_up_to_4x_config_are_allowed(self):
+        assert pe._validate_signal(_signal(sl_ticks=400, tp_ticks=160)) is None
+        assert pe._validate_signal(_signal(sl_ticks=4, tp_ticks=4)) is None            # ensayos con TP/SL a ~4 ticks
+
+    def test_product_code_must_match_the_service_product(self):
+        assert pe._validate_signal(_signal(product_code="MNQ")) is not None
+        assert pe._validate_signal({k: v for k, v in _signal().items() if k != "product_code"}) is not None
+
+    def test_direction_if_present_must_agree_with_side(self):
+        assert pe._validate_signal(_signal(side=1, direction="SHORT")) is not None
+        assert pe._validate_signal(_signal(side=-1, direction="LONG")) is not None
+        assert pe._validate_signal(_signal(side=-1, direction="SHORT")) is None
+
+    def test_missing_fields_are_invalid_not_a_crash(self):
+        for key in ("side", "nc", "sl_ticks", "tp_ticks"):
+            assert pe._validate_signal({k: v for k, v in _signal().items() if k != key}) is not None
+
+    def test_test_signals_are_capped_at_two_contracts(self):
+        assert pe._validate_signal(_signal(product="MEStest", nc=1)) is None
+        assert pe._validate_signal(_signal(product="MEStest", nc=2)) is None
+        assert pe._validate_signal(_signal(product="MEStest", nc=3)) is not None
+        assert pe._validate_signal(_signal(product="MEStest", nc=40)) is not None
+
+    def test_invalid_signal_never_touches_the_broker_is_cleared_and_alerted_once(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        monkeypatch.setattr(pe, "authenticate", lambda: (_ for _ in ()).throw(AssertionError("no debe tocar el broker")))
+        monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+        fake_gist[pe.ORDER_FILE] = _signal(nc=400)
+        _drop_signal_clear(monkeypatch, fake_gist)                 # aun si la limpieza falla, el aviso no se repite
+        for _ in range(3):
+            pe.run_once()
+        assert client.placed_orders == []
+        assert len(sent) == 1 and "NO es valida" in sent[0] and "400" in sent[0]
+
+    def test_invalid_signal_is_cleared(self, fake_gist, sent, monkeypatch):
+        monkeypatch.setattr(pe, "authenticate", lambda: (_ for _ in ()).throw(AssertionError("no debe tocar el broker")))
+        monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+        fake_gist[pe.ORDER_FILE] = _signal(nc=400)
+        pe.run_once()
+        assert fake_gist[pe.ORDER_FILE] == {}
+
+    def test_a_valid_small_test_signal_still_executes(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, 14, 31)
+        fake_gist[pe.ORDER_FILE] = _signal(product="MEStest", nc=1, sl_ticks=4, tp_ticks=4)
+        pe.run_once()
+        assert len([o for o in client.placed_orders if o["order_type"] == pe.OrderType.MARKET]) == 1
+        assert client.placed_orders[0]["size"] == 1

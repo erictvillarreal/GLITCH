@@ -856,6 +856,37 @@ def _signal_is_current(signal: dict) -> bool:
     return False
 
 
+# Una señal es DATOS que llegan por el Gist (cualquiera con el token del Gist, o un bug de Railway, podria escribir
+# `nc=400`). El Pi ejecutaba `signal["nc"]` crudo (auditoria 04-oct-2026, hallazgo A7). Se valida contra la config LOCAL
+# como COTA SUPERIOR -- no igualdad -- para no romper las señales de ensayo (mas chicas) ni futuros ajustes a la baja.
+TEST_SIGNAL_MAX_NC = 2     # las señales de ensayo (product != GLITCH_PRODUCT) no pueden pasar de 2 contratos
+SIGNAL_TICKS_MAX_FACTOR = 4  # sl/tp en ticks: 1 .. 4x lo configurado
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _validate_signal(signal: dict) -> Optional[str]:
+    """None si la señal es operable; si no, la razon. No toca la red."""
+    side = signal.get("side")
+    if not _is_int(side) or side not in (1, -1):
+        return f"side invalido ({side!r}; debe ser 1 o -1)"
+    max_nc = TEST_SIGNAL_MAX_NC if _is_test_signal(signal) else CFG.nc
+    nc = signal.get("nc")
+    if not _is_int(nc) or not (1 <= nc <= max_nc):
+        return f"nc invalido ({nc!r}; debe ser un entero entre 1 y {max_nc})"
+    for key, ref in (("sl_ticks", CFG.sl_ticks), ("tp_ticks", CFG.tp_ticks)):
+        v = signal.get(key)
+        if not _is_int(v) or not (1 <= v <= SIGNAL_TICKS_MAX_FACTOR * ref):
+            return f"{key} invalido ({v!r}; debe ser un entero entre 1 y {SIGNAL_TICKS_MAX_FACTOR * ref})"
+    if str(signal.get("product_code")) != CFG.spec.product_code:
+        return f"product_code {signal.get('product_code')!r} no coincide con {CFG.spec.product_code!r}"
+    if "direction" in signal and signal["direction"] != ("LONG" if side == 1 else "SHORT"):
+        return f"direction {signal['direction']!r} no coincide con side {side}"
+    return None
+
+
 def run_once():
     try:
         reconcile_if_needed()
@@ -866,6 +897,15 @@ def run_once():
             return
 
         if not _signal_is_current(signal):
+            return
+
+        invalid = _validate_signal(signal)
+        if invalid:
+            _notify_blocked_once_per_day(
+                f"La señal pendiente del {signal.get('date')} NO es valida: {invalid}. No se ejecuta y se descarta "
+                f"(el Pi solo opera señales dentro de los limites de su config local)."
+            )
+            save_order_signal({})
             return
 
         if not _is_test_signal(signal):
