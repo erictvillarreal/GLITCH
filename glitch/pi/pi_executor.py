@@ -458,19 +458,40 @@ def _position_still_open(client: ProjectXClient, account_id: int, contract_id) -
         return True   # sin poder confirmar, se asume abierta
 
 
+FLATTEN_FILL_TOLERANCE_TICKS = 10   # holgura (slippage del cierre a mercado) fuera del rango [SL, TP] del bracket
+
+
 def _find_flatten_fill(client: ProjectXClient, account_id: int, state: dict) -> Optional[float]:
-    """Precio REAL del cierre por closeContract: la orden de mercado mas reciente de este contrato que no es la
-    entrada ni el TP/SL del bracket (los ids de orden crecen con el tiempo). None si no se puede determinar --
-    el llamador cae al precio estimado, marcado como tal. Mejor esfuerzo: nunca lanza."""
+    """Precio REAL del cierre por closeContract, o None si no se puede determinar con certeza (entonces el llamador cae
+    al precio estimado, MARCADO como tal). Deliberadamente conservadora (auditoria 04-oct-2026, hallazgo A6): es mejor un
+    estimado marcado que un precio "real" equivocado en el historial compartido.
+
+    Candidato = orden de este contrato, posterior a la entrada (ids crecientes), que no es la entrada ni el TP/SL del
+    bracket, con precio de fill. Se acepta SOLO si:
+      * hay EXACTAMENTE un candidato (con varios -- p. ej. una orden manual posterior -- no se adivina cual cerro), y
+      * su precio cae dentro del rango del bracket +- FLATTEN_FILL_TOLERANCE_TICKS (como ni el TP ni el SL se
+        ejecutaron, el cierre de las 14:30 ocurre entre ellos; un precio muy fuera de rango es otra operacion).
+    Mejor esfuerzo: nunca lanza."""
     try:
         exclude = {state["entry_order_id"], state["tp_order_id"], state["sl_order_id"]}
         cands = [o for o in client.get_orders(account_id, only_open=False)
                  if o.get("contractId") == state["contract_id"]
-                 and isinstance(o.get("id"), int) and o["id"] > state["entry_order_id"]
+                 and isinstance(o.get("id"), int) and not isinstance(o.get("id"), bool)
+                 and o["id"] > state["entry_order_id"]
                  and o["id"] not in exclude and _extract_fill_price(o) is not None]
-        if not cands:
+        if len(cands) != 1:
+            if cands:
+                log.warning(f"_find_flatten_fill: {len(cands)} ordenes candidatas -- ambiguo, se usara precio estimado")
             return None
-        return _extract_fill_price(max(cands, key=lambda o: o["id"]))
+        price = _extract_fill_price(cands[0])
+        slack = FLATTEN_FILL_TOLERANCE_TICKS * CFG.spec.tick_size
+        lo = min(state["tp_price"], state["sl_price"]) - slack
+        hi = max(state["tp_price"], state["sl_price"]) + slack
+        if not (lo <= price <= hi):
+            log.warning(f"_find_flatten_fill: fill {price} fuera del rango del bracket [{lo}, {hi}] -- "
+                        f"no parece el cierre de este ciclo, se usara precio estimado")
+            return None
+        return price
     except Exception as e:
         log.warning(f"_find_flatten_fill fallo -- {e} -- se usara precio estimado")
         return None

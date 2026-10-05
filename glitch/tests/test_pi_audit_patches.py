@@ -803,3 +803,71 @@ class TestStrictGistStore:
             raise ConnectionError("x")
         monkeypatch.setattr(gs.requests, "patch", patch)
         gs.save_log("f.json", [])          # no debe lanzar
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# A6 -- el precio de cierre "real" del flatten solo se acepta si es inequivoco y plausible; si no, estimado y marcado
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class TestFlattenFillIsConservative:
+    STATE = {"phase": "bracket_open", "signal": None, "entry_price": 6000.0, "entry_order_id": 100,
+             "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
+             "contract_id": MES, "account_id": 555, "opened_at": "x"}
+
+    def _state(self):
+        s = dict(self.STATE)
+        s["signal"] = _signal()
+        return s
+
+    def _client(self, extra=None):
+        c = FakeClient()
+        c.order_records = {
+            100: {"id": 100, "contractId": MES, "filledPrice": 6000.0},     # entrada
+            101: {"id": 101, "contractId": MES}, 102: {"id": 102, "contractId": MES},   # TP/SL cancelados, sin fill
+        }
+        c.order_records.update(extra or {})
+        return c
+
+    def test_single_plausible_closing_fill_is_used_and_marked_real(self):
+        c = self._client({105: {"id": 105, "contractId": MES, "filledPrice": 6004.25}})
+        assert pe._find_flatten_fill(c, 555, self._state()) == 6004.25
+
+    def test_a_price_far_outside_the_bracket_is_rejected(self):
+        """R8 invertido: 7123 con bracket 5975-6010 es otra operacion, no el cierre de este ciclo."""
+        c = self._client({117: {"id": 117, "contractId": MES, "filledPrice": 7123.0}})
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_slippage_slightly_beyond_the_bracket_is_tolerated(self):
+        tol = pe.FLATTEN_FILL_TOLERANCE_TICKS * pe.CFG.spec.tick_size
+        c = self._client({105: {"id": 105, "contractId": MES, "filledPrice": 5975.0 - tol}})
+        assert pe._find_flatten_fill(c, 555, self._state()) == 5975.0 - tol
+        c = self._client({105: {"id": 105, "contractId": MES, "filledPrice": 5975.0 - tol - 0.25}})
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_two_candidates_is_ambiguous_so_none(self):
+        c = self._client({105: {"id": 105, "contractId": MES, "filledPrice": 6004.0},
+                          106: {"id": 106, "contractId": MES, "filledPrice": 6003.0}})
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_orders_of_other_contracts_or_older_than_the_entry_are_ignored(self):
+        c = self._client({90: {"id": 90, "contractId": MES, "filledPrice": 6001.0},            # anterior a la entrada
+                          105: {"id": 105, "contractId": "CON.NQ", "filledPrice": 6002.0}})    # otro contrato
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_non_integer_ids_degrade_to_none_never_to_a_wrong_price(self):
+        c = self._client({"105": {"id": "105", "contractId": MES, "filledPrice": 6004.0}})
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+        c = self._client({105: {"id": True, "contractId": MES, "filledPrice": 6004.0}})
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_api_failure_degrades_to_none(self):
+        c = self._client()
+        c.get_orders = lambda account_id, only_open=False: (_ for _ in ()).throw(RuntimeError("boom"))
+        assert pe._find_flatten_fill(c, 555, self._state()) is None
+
+    def test_a_rejected_fill_leaves_the_close_estimated_and_flagged_not_a_fake_pnl(self, fake_gist, monkeypatch):
+        """R8 invertido de punta a punta: sin el parche, pnl = $224,600 con exit_price_estimated=False."""
+        monkeypatch.setattr(pe, "send", lambda m: None)
+        c = self._client({117: {"id": 117, "contractId": MES, "filledPrice": 7123.0}})
+        pe._finalize_cycle(c, 555, self._state(), {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True})
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert e["exit_price_estimated"] is True and abs(e["pnl"]) < 1000
