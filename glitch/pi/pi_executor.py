@@ -869,6 +869,8 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
         if outcome.get(flag):
             entry[flag] = True
+    if signal.get("nc_signal") is not None:
+        entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
     if outcome.get("orphan_orders"):
         entry["orphan_orders"] = outcome["orphan_orders"]
     if outcome["result"] == "UNKNOWN":
@@ -879,7 +881,7 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
 
     msg = (f"{PREFIX}\n[CLOSE] [{outcome['result']}]\n"
            f"{signal['direction']}: {entry_price:,.4f} → {exit_price:,.4f}\n"
-           f"PnL: ${pnl:+,.2f}  |  Contracts: {signal['nc']}\n"
+           f"PnL: ${pnl:+,.2f}  |  Contracts: {_nc_label(signal)}\n"
            f"Intento #{signal['intento']}\n"
            + ("ATENCION: resultado NO determinado -- ambas patas desaparecieron (cierre manual, liquidacion por MLL "
               "o error de lectura). El PnL $0.00 de arriba NO es real: revisar el P&L en TopstepX. "
@@ -1014,6 +1016,44 @@ TEST_SIGNAL_MAX_NC = 2     # las señales de ensayo (product != GLITCH_PRODUCT) 
 SIGNAL_TICKS_MAX_FACTOR = 4  # sl/tp en ticks: 1 .. 4x lo configurado
 
 
+# Tope LOCAL de contratos (GLITCH_PI_NC_MAX). Motivo: la cuenta Practice (150K) tiene margen de MLL de ~$4,474 y un stop
+# de 40 contratos cuesta -$5,000 (la liquida, y ese dia se pierde del historial). El tope solo REDUCE el tamaño: la
+# señal (lado, hora, SL/TP en ticks) no cambia, asi que el resultado por trade en TICKS es identico al de paper.
+# Sin la variable: sin tope (comportamiento anterior). Valor invalido: se usa 1 contrato (falla chico, con log fuerte).
+def _parse_nc_cap(raw: Optional[str]) -> Optional[int]:
+    if raw is None or not raw.strip():
+        return None
+    try:
+        v = int(raw.strip())
+    except ValueError:
+        v = 0
+    if v < 1:
+        log.error(f"GLITCH_PI_NC_MAX={raw!r} no es un entero >= 1 -- se usa 1 contrato por seguridad. Corregir el env.")
+        return 1
+    return v
+
+
+NC_MAX = _parse_nc_cap(os.getenv("GLITCH_PI_NC_MAX"))
+
+
+def _apply_nc_cap(signal: dict) -> dict:
+    """Devuelve la señal con nc = min(nc, tope). Se aplica ANTES de operar, asi TODO lo que sigue (ordenes, confirmacion
+    del fill, P&L, historial, estado del Pi) usa los contratos realmente operados. Conserva el original en nc_signal."""
+    nc = signal["nc"]
+    if NC_MAX is None or nc <= NC_MAX:
+        return signal
+    capped = dict(signal)
+    capped["nc"] = NC_MAX
+    capped["nc_signal"] = nc
+    return capped
+
+
+def _nc_label(signal: dict) -> str:
+    if signal.get("nc_signal") is not None:
+        return f"{signal['nc']} (señal: {signal['nc_signal']}, tope local)"
+    return str(signal["nc"])
+
+
 def _is_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
@@ -1058,6 +1098,8 @@ def run_once():
             )
             save_order_signal({})
             return
+
+        signal = _apply_nc_cap(signal)
 
         if not _is_test_signal(signal):
             _now = ct_now()
@@ -1158,7 +1200,7 @@ def run_once():
         msg = (f"{PREFIX}\n[OPEN]\n"
                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
                f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
-               f"Contracts: {signal['nc']}  |  Intento #{signal['intento']}\n"
+               f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
                + utc_now_str())
         send(msg)
         log.info(msg.replace("\n", " | "))
@@ -1177,6 +1219,7 @@ def main():
     log.info("=" * 60)
     log.info(f"GLITCH — Pi Executor ({CFG.spec.label})")
     log.info(f"PHASE3_ENABLED={PHASE3_ENABLED}  orderside_verified={_load_verified_side_map() is not None}")
+    log.info(f"NC_MAX (tope local de contratos)={NC_MAX if NC_MAX is not None else 'sin tope'}")
     log.info("=" * 60)
     while True:
         run_once()
