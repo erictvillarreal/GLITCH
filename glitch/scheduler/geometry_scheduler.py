@@ -121,6 +121,20 @@ PENDING_FILE = f"geometry_{PRODUCT_KEY.lower()}_pending.json"
 ORDER_FILE = f"orden_pendiente_{PRODUCT_KEY.lower()}.json"
 POLL_INTERVAL = 60  # segundos entre polls
 
+# Hora (minutos desde medianoche, CT) a partir de la cual se entra al mercado. Es la MISMA compuerta que usa el
+# modo paper (paso 3 de run(): 9:35 CT, la entrada real del paper ocurre ~9:40 CT cuando Yahoo ya tiene datos) y
+# tambien el modo real (DRY_RUN=false): sin esto el Pi entraba en cuanto Railway escribia la señal -- horas antes
+# que el paper -- y la validacion del Demo Pi no replicaba lo que mide el paper (4-oct-2026).
+ENTRY_GATE_MINUTES = 9 * 60 + 35
+SESSION_FLATTEN_MINUTES = 14 * 60 + 30
+
+
+def _wait_for_entry_gate():
+    """Bloquea hasta ENTRY_GATE_MINUTES (CT). Compartido por paper y real."""
+    while ct_now().hour * 60 + ct_now().minute < ENTRY_GATE_MINUTES:
+        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura RTH...")
+        time.sleep(15)
+
 # Benchmark teorico para el reporte diario de pass_rate -- ver
 # GLITCH_RESEARCH_LOG.md, "Duracion recomendada del periodo de paper
 # trading": G2 (SL=100/TP=40, alternar, nc=40) da pass_rate_15d=0.8144
@@ -615,6 +629,16 @@ def run():
     #         mercado real de ProjectX en el momento en que el Pi coloca la
     #         orden (ver pi_executor.py::_reference_price).
     if not DRY_RUN:
+        # Misma hora de entrada que el paper (ver ENTRY_GATE_MINUTES): se espera ANTES de escribir la señal.
+        _wait_for_entry_gate()
+        _now = ct_now()
+        if _now.hour * 60 + _now.minute >= SESSION_FLATTEN_MINUTES:
+            msg = (f"{PREFIX}\nSTATUS: ERROR\n"
+                   f"ERROR: el scheduler llego despues del cierre de sesion ({_now.strftime('%H:%M')} CT >= 14:30) "
+                   f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
         existing_signal = load_order_signal()
         if existing_signal:
             msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
@@ -654,9 +678,7 @@ def run():
     #        era una ventana ya conocida como insuficiente que nunca se
     #        habia ampliado en el codigo pese a la evidencia. Ver
     #        GLITCH_RESEARCH_LOG.md para el detalle completo. ──
-    while ct_now().hour * 60 + ct_now().minute < 9 * 60 + 35:
-        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura RTH...")
-        time.sleep(15)
+    _wait_for_entry_gate()
 
     # CAMBIO (03-sep-2026): 12 -> 20 reintentos (6min -> 10min de
     # presupuesto). Desde el gate de 9:35, 20x30s cubre comodamente hasta

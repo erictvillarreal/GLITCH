@@ -216,7 +216,12 @@ class TestDryRunFalseDelegatesToPi:
     fetch_intraday explote si se llega a invocar.
     """
 
-    def _patch_common(self, monkeypatch, sent):
+    def _patch_common(self, monkeypatch, sent, ct_hour=9, ct_minute=36):
+        # Reloj fijo: DRY_RUN=false ahora espera la compuerta de entrada (9:35 CT) antes de escribir la señal.
+        monkeypatch.setattr(scheduler, "ct_now",
+                            lambda: dt.datetime(2026, 9, 29, ct_hour, ct_minute, tzinfo=scheduler.CT))
+        monkeypatch.setattr(scheduler.time, "sleep", lambda s: (_ for _ in ()).throw(
+            AssertionError("no deberia dormir con el reloj ya pasada la compuerta")))
         monkeypatch.setattr(scheduler, "is_trading_day", lambda: True)
         monkeypatch.setattr(scheduler, "send", lambda msg: sent.append(msg))
         monkeypatch.setattr(scheduler, "get_front_month", lambda code, cache: "MESZ6")
@@ -249,6 +254,52 @@ class TestDryRunFalseDelegatesToPi:
         assert captured["tp_ticks"] == scheduler.CFG.tp_ticks
         assert "intento" in captured and "date" in captured
         assert any("SEÑAL ENVIADA AL PI" in m for m in sent)
+
+    def test_real_mode_waits_for_the_same_entry_gate_as_paper(self, monkeypatch):
+        """Antes de 9:35 CT NO se escribe señal: el Pi entra a la misma hora que el paper."""
+        monkeypatch.setattr(scheduler, "DRY_RUN", False)
+        sent, clock = [], {"t": dt.datetime(2026, 9, 29, 7, 30, tzinfo=scheduler.CT)}
+        self._patch_common(monkeypatch, sent)
+        monkeypatch.setattr(scheduler, "ct_now", lambda: clock["t"])
+        sleeps = []
+        def _sleep(s):
+            sleeps.append(s)
+            clock["t"] += dt.timedelta(minutes=5)
+        monkeypatch.setattr(scheduler.time, "sleep", _sleep)
+        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+        writes = []
+        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: writes.append((clock["t"], d)))
+        scheduler.run()
+        assert sleeps, "debio esperar la compuerta"
+        assert len(writes) == 1
+        t_written = writes[0][0]
+        assert t_written.hour * 60 + t_written.minute >= scheduler.ENTRY_GATE_MINUTES
+
+    def test_real_mode_refuses_to_send_a_signal_after_session_close(self, monkeypatch):
+        monkeypatch.setattr(scheduler, "DRY_RUN", False)
+        sent = []
+        self._patch_common(monkeypatch, sent, ct_hour=14, ct_minute=40)
+        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+        writes = []
+        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: writes.append(d))
+        scheduler.run()
+        assert writes == []
+        assert any("despues del cierre de sesion" in m for m in sent)
+
+    def test_real_signal_matches_what_paper_would_decide(self, monkeypatch):
+        """Misma funcion de señal y misma config (decide_side + CANDIDATES) que el paper."""
+        from strategies.geometry_pure import decide_side, trading_day_index
+        monkeypatch.setattr(scheduler, "DRY_RUN", False)
+        sent = []
+        self._patch_common(monkeypatch, sent)
+        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+        captured = {}
+        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: captured.update(d))
+        scheduler.run()
+        expected = decide_side(trading_day_index(dt.date.today()), scheduler.CFG.direction)
+        assert captured["side"] == expected
+        assert (captured["nc"], captured["sl_ticks"], captured["tp_ticks"]) == (
+            scheduler.CFG.nc, scheduler.CFG.sl_ticks, scheduler.CFG.tp_ticks)
 
     def test_does_not_overwrite_an_unconsumed_signal(self, monkeypatch):
         monkeypatch.setattr(scheduler, "DRY_RUN", False)
