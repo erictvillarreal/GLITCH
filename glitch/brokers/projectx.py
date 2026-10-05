@@ -226,7 +226,9 @@ class ProjectXClient:
             "size":       size,
         }
         if price is not None:
-            payload["price"] = price
+            # La API de ProjectX espera `limitPrice` (VERIFICADO en vivo el 4-oct-2026: con la clave `price` la
+            # orden LIMIT se rechaza con "Invalid limit price. Limit price not set.").
+            payload["limitPrice"] = price
         if stop_price is not None:
             payload["stopPrice"] = stop_price
 

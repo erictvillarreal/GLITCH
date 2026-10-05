@@ -359,6 +359,21 @@ def _has_untracked_position(client: ProjectXClient, account_id: int, contract_id
 
 
 # ── 4. place_bracket_order ───────────────────────────────────────────────
+class BracketPlacementFailed(Exception):
+    """La entrada se ejecuto pero TP o SL no se pudieron colocar. Ya se intento aplanar; `flatten_error` es
+    None si el flatten funciono."""
+
+    def __init__(self, reason: str, flatten_error=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.flatten_error = flatten_error
+
+
+def _round_to_tick(price: float) -> float:
+    tick = CFG.spec.tick_size
+    return round(round(price / tick) * tick, 10)
+
+
 def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
                          direction: int, size: int, tp_price: float, sl_price: float,
                          verified_map: dict) -> dict:
@@ -376,8 +391,28 @@ def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
     exit_side = _resolve_side(-direction, verified_map)
 
     entry_id = client.place_order(account_id, contract_id, OrderType.MARKET, entry_side, size)
-    tp_id = client.place_order(account_id, contract_id, OrderType.LIMIT, exit_side, size, price=tp_price)
-    sl_id = client.place_order(account_id, contract_id, OrderType.STOP, exit_side, size, stop_price=sl_price)
+    placed_exits = []
+    try:
+        tp_id = client.place_order(account_id, contract_id, OrderType.LIMIT, exit_side, size, price=tp_price)
+        placed_exits.append(tp_id)
+        sl_id = client.place_order(account_id, contract_id, OrderType.STOP, exit_side, size, stop_price=sl_price)
+    except Exception as e:
+        # La entrada de mercado YA se ejecuto: si una de las dos salidas falla, hay una posicion SIN
+        # proteccion. Nunca se deja asi -- se cancela lo que haya quedado y se aplana con closeContract
+        # (independiente del lado). Hallazgo del ensayo del 4-oct-2026: el TP se rechazo ("Invalid limit
+        # price") y la entrada quedo abierta y desnuda.
+        for oid in placed_exits:
+            try:
+                client.cancel_order(oid)
+            except Exception as ce:
+                log.error(f"place_bracket_order: no se pudo cancelar la orden {oid} tras el fallo -- {ce}")
+        flatten_error = None
+        try:
+            client.close_contract(account_id, contract_id)
+        except Exception as fe:
+            flatten_error = str(fe)
+            log.error(f"place_bracket_order: flatten de emergencia fallo -- {fe}")
+        raise BracketPlacementFailed(str(e), flatten_error) from e
 
     return {"entry_order_id": entry_id, "tp_order_id": tp_id, "sl_order_id": sl_id}
 
@@ -618,11 +653,26 @@ def run_once():
             return
 
         reference_price = _reference_price(client, contract_id)
-        tp_price = reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size
-        sl_price = reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size
+        tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
+        sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
 
-        bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
-                                       tp_price, sl_price, verified_map)
+        try:
+            bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
+                                           tp_price, sl_price, verified_map)
+        except BracketPlacementFailed as bf:
+            # Se descarta la señal: reintentar cada 2 min abriria y cerraria posiciones en bucle.
+            save_order_signal({})
+            if bf.flatten_error is None:
+                tail = "La posicion se aplano automaticamente (cuenta plana). Señal descartada."
+            else:
+                tail = (f"El flatten automatico TAMBIEN FALLO ({bf.flatten_error}): hay una posicion ABIERTA "
+                        f"sin proteccion en {contract_id} -- CERRARLA MANUALMENTE en TopstepX AHORA. "
+                        f"Señal descartada.")
+            msg = (f"{PREFIX}\nSTATUS: ALERTA\nLa entrada se ejecuto pero no se pudo colocar TP/SL "
+                   f"({bf.reason}). {tail}\n{utc_now_str()}")
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
 
         state = {
             "phase": "bracket_open", "signal": signal, "entry_price": reference_price,

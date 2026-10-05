@@ -53,6 +53,7 @@ class FakeClient:
         self.flattened = False
         self.closed_contracts = []
         self.close_contract_error = None
+        self.fail_order_type = None
         self._next_id = 100
 
     def get_accounts(self, only_active=True):
@@ -65,6 +66,8 @@ class FakeClient:
         return self.bars
 
     def place_order(self, account_id, contract_id, order_type, side, size, price=None, stop_price=None):
+        if self.fail_order_type is not None and order_type == self.fail_order_type:
+            raise RuntimeError("Order failed: Invalid limit price. Limit price not set.")
         oid = self._next_id
         self._next_id += 1
         self.placed_orders.append({
@@ -567,6 +570,62 @@ class TestRecentBarsRequestFormat:
         cl = FakeClient(); cl.bars = []
         with pytest.raises(RuntimeError, match="no se coloca la orden"):
             pi_executor._reference_price(cl, "X")
+
+
+class TestLimitOrderPayloadUsesLimitPrice:
+    def test_limit_order_sends_limitPrice_not_price(self, monkeypatch):
+        c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+        calls = []
+        monkeypatch.setattr(c, "ensure_auth", lambda: None)
+        monkeypatch.setattr(c, "_post", lambda path, payload: (calls.append((path, payload)),
+                                                                {"success": True, "orderId": 5})[1])
+        c.place_order(1, "CON.X", px.OrderType.LIMIT, px.OrderSide.ASK, 1, price=7800.25)
+        _, body = calls[0]
+        assert body["limitPrice"] == 7800.25 and "price" not in body
+
+
+class TestBracketFailureNeverLeavesNakedPosition:
+    def _setup(self, monkeypatch, client):
+        monkeypatch.setattr(pi_executor, "authenticate", lambda: client)
+        monkeypatch.setattr(pi_executor, "PHASE3_ENABLED", True)
+        monkeypatch.setattr(pi_executor, "_load_verified_side_map",
+                             lambda: {"BUY_SIDE_INT": 0, "SELL_SIDE_INT": 1})
+
+    def test_tp_rejected_after_entry_flattens_clears_signal_and_alerts(self, fake_gist, sent, monkeypatch):
+        client = FakeClient(); client.fail_order_type = px.OrderType.LIMIT
+        self._setup(monkeypatch, client)
+        fake_gist[pi_executor.ORDER_FILE] = _signal()
+        pi_executor.run_once()
+        assert len(client.placed_orders) == 1                      # solo la entrada
+        assert client.closed_contracts == [(555, "CON.MES.Z26")]   # aplanada
+        assert fake_gist[pi_executor.ORDER_FILE] == {}             # sin bucle de reintentos
+        assert not fake_gist.get(pi_executor.PI_STATE_FILE)        # nada a medias
+        assert any("ALERTA" in m and "aplano automaticamente" in m for m in sent)
+
+    def test_sl_rejected_cancels_tp_and_flattens(self, fake_gist, sent, monkeypatch):
+        client = FakeClient(); client.fail_order_type = px.OrderType.STOP
+        self._setup(monkeypatch, client)
+        fake_gist[pi_executor.ORDER_FILE] = _signal()
+        pi_executor.run_once()
+        assert len(client.placed_orders) == 2
+        assert client.cancelled == [client.placed_orders[1]["id"]]  # el TP que si se coloco
+        assert client.closed_contracts == [(555, "CON.MES.Z26")]
+        assert fake_gist[pi_executor.ORDER_FILE] == {}
+
+    def test_if_emergency_flatten_also_fails_alert_says_close_manually(self, fake_gist, sent, monkeypatch):
+        client = FakeClient(); client.fail_order_type = px.OrderType.LIMIT
+        client.close_contract_error = "boom"
+        self._setup(monkeypatch, client)
+        fake_gist[pi_executor.ORDER_FILE] = _signal()
+        pi_executor.run_once()
+        assert any("MANUALMENTE" in m and "boom" in m for m in sent)
+        assert fake_gist[pi_executor.ORDER_FILE] == {}
+
+
+class TestTickRounding:
+    def test_prices_are_rounded_to_tick(self):
+        assert pi_executor._round_to_tick(7788.8) == 7788.75
+        assert pi_executor._round_to_tick(7788.9) == 7789.0
 
 
 class TestResolveAccountId:
