@@ -409,13 +409,19 @@ def _notify_blocked_once_per_day(reason: str):
 
 # ── Lectura de fill price real (best-effort, siempre marcado si es estimado) ──
 def _extract_fill_price(order_record: dict) -> Optional[float]:
+    """Primer precio POSITIVO y numerico entre las claves conocidas. Un `filledPrice` de 0 / nulo / no numerico (lo que
+    puede traer una orden cancelada o sin ejecutar en un listado real) NO es un fill: aceptarlo daria un precio de
+    salida 0 y un P&L absurdo (auditoria 04-oct-2026, P0-10: el FakeClient de los tests nunca emite ceros ni nulos)."""
     for k in _FILL_PRICE_KEYS:
         v = order_record.get(k)
-        if v is not None:
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            price = float(v)
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            return price
     return None
 
 

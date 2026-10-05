@@ -1047,3 +1047,236 @@ class TestPaperModeStillWaitsForTheEntryGate:
         sched._wait_for_entry_gate()
         assert clock["t"].hour * 60 + clock["t"].minute >= 9 * 60 + 35
         assert sched.ENTRY_GATE_MINUTES == 9 * 60 + 35
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# P0-10 -- tests con la FORMA REAL de la API. El FakeClient reemplaza al cliente COMPLETO (nunca ejerce nombres de campo,
+# endpoints ni payloads): los 3 fallos del ensayo del 4-oct (`price` en vez de `limitPrice`, `Order/cancel` sin
+# `accountId`, `Order/search` sin `startTimestamp`) eran INVISIBLES para toda la suite verde. Estos tests ponen el
+# ProjectXClient REAL y el gist_store REAL, y falsean solo el transporte.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+class ScriptedProjectX:
+    """Servidor falso de ProjectX que VALIDA los payloads con las reglas verificadas en vivo el 4-oct-2026 y modela el
+    estado (ordenes, posiciones). Cualquier payload mal formado lanza AssertionError dentro del test."""
+
+    def __init__(self, buy_side=0):
+        self.buy_side = buy_side
+        self.orders = {}            # id -> dict (type, side, size, limitPrice/stopPrice, status, filledPrice)
+        self.position = None        # {"type": 1|2, "size": n}
+        self.next_id = 7000
+        self.calls = []
+        self.fill_tp_after_searchopen_calls = None
+        self._searchopen = 0
+
+    def _need(self, body, *keys):
+        for k in keys:
+            assert k in body, f"payload sin {k!r}: {body}"
+
+    def post(self, path, body, auth=True):
+        self.calls.append(path)
+        if path == "/api/Account/search":
+            return {"accounts": [{"id": 555, "name": "PRAC-V2-TEST", "balance": 150000.0}], "success": True}
+        if path == "/api/Contract/available":
+            return {"contracts": [{"id": MES, "name": "MESZ6", "expirationDate": "2026-12-18T00:00:00Z"}], "success": True}
+        if path == "/api/History/retrieveBars":
+            self._need(body, "contractId", "live", "startTime", "endTime", "unit", "unitNumber", "limit", "includePartialBar")
+            assert body["unit"] == 2 and "barType" not in body and "barTypeSize" not in body
+            return {"bars": [{"t": "2026-09-29T14:59:00+00:00", "o": 6000.0, "h": 6000.5, "l": 5999.75, "c": 6000.25, "v": 120}],
+                    "success": True}
+        if path == "/api/Order/place":
+            self._need(body, "accountId", "contractId", "type", "side", "size")
+            t = body["type"]
+            if t == 1:
+                assert "limitPrice" in body and "price" not in body, f"LIMIT debe usar limitPrice: {body}"
+            if t == 4:
+                assert "stopPrice" in body, f"STOP debe usar stopPrice: {body}"
+            if t == 2:
+                assert "limitPrice" not in body and "stopPrice" not in body
+            oid = self.next_id
+            self.next_id += 1
+            rec = {"id": oid, "accountId": body["accountId"], "contractId": body["contractId"], "type": t,
+                   "side": body["side"], "size": body["size"], "status": 1}
+            if t == 1:
+                rec["limitPrice"] = body["limitPrice"]
+            if t == 4:
+                rec["stopPrice"] = body["stopPrice"]
+            if t == 2:                                   # mercado: se llena al instante y abre la posicion
+                rec.update(status=2, filledPrice=6000.25)
+                self.position = {"type": 1 if body["side"] == self.buy_side else 2, "size": body["size"]}
+            self.orders[oid] = rec
+            return {"orderId": oid, "success": True, "errorCode": 0, "errorMessage": None}
+        if path == "/api/Order/cancel":
+            self._need(body, "accountId", "orderId")
+            o = self.orders.get(body["orderId"])
+            if not o or o["status"] != 1:
+                return {"success": False, "errorCode": 5, "errorMessage": "order not working"}
+            o["status"] = 3
+            return {"success": True}
+        if path == "/api/Order/searchOpen":
+            self._need(body, "accountId")
+            self._searchopen += 1
+            if self.fill_tp_after_searchopen_calls and self._searchopen > self.fill_tp_after_searchopen_calls:
+                for o in self.orders.values():
+                    if o["type"] == 1 and o["status"] == 1:            # el TP se llena y cierra la posicion
+                        o.update(status=2, filledPrice=o["limitPrice"])
+                        self.position = None
+            return {"orders": [o for o in self.orders.values() if o["status"] == 1], "success": True}
+        if path == "/api/Order/search":
+            self._need(body, "accountId", "startTimestamp")
+            assert "onlyOpen" not in body, "Order/search exige startTimestamp y NO acepta onlyOpen"
+            return {"orders": list(self.orders.values()), "success": True}
+        if path == "/api/Position/searchOpen":
+            self._need(body, "accountId")
+            pos = [] if self.position is None else [{"id": 1, "accountId": 555, "contractId": MES,
+                                                    "type": self.position["type"], "size": self.position["size"],
+                                                    "averagePrice": 6000.25}]
+            return {"positions": pos, "success": True}
+        if path == "/api/Position/closeContract":
+            self._need(body, "accountId", "contractId")
+            if self.position is None:
+                return {"success": False, "errorCode": 2, "errorMessage": "no position"}
+            self.position = None
+            return {"success": True}
+        raise AssertionError(f"endpoint inesperado: {path}")
+
+
+def _real_client(server, monkeypatch):
+    c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+    monkeypatch.setattr(c, "ensure_auth", lambda: None)
+    monkeypatch.setattr(c, "_post", server.post)
+    return c
+
+
+class TestRealShapeEndToEnd:
+    def test_full_cycle_through_the_real_client_with_a_natural_tp(self, fake_gist, sent, monkeypatch):
+        server = ScriptedProjectX(buy_side=0)
+        server.fill_tp_after_searchopen_calls = 3                  # el TP se llena unos polls despues de la entrada
+        client = _real_client(server, monkeypatch)
+        _arm(monkeypatch, client)
+        monkeypatch.setattr(pe, "CONFIRM_GONE_SLEEP", 0)
+        _set_clock(monkeypatch, 9, 50)
+        fake_gist[pe.ORDER_FILE] = _signal()                       # LONG, 40 contratos, SL100/TP40
+
+        pe.run_once()
+
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert e["result"] == "TP" and e["exit_price_estimated"] is False and e["entry_price_estimated"] is False
+        assert e["entry"] == 6000.25 and e["exit"] == 6010.25     # TP = referencia 6000.25 + 40 ticks de 0.25
+        assert e["pnl"] == pytest.approx(10.0 / 0.25 * 1.25 * 40)  # = $2,000, calculado con fills REALES
+        assert fake_gist[pe.ORDER_FILE] == {} and fake_gist[pe.PI_STATE_FILE] == {}
+        assert server.position is None                              # la cuenta quedo plana
+        # el SL sobrante se cancelo con accountId (si faltara, el servidor falso lo rechaza y quedaria huerfano)
+        assert [o for o in server.orders.values() if o["status"] == 1] == []
+        assert not any("ALERTA" in m for m in sent)
+
+    def test_forced_flatten_through_the_real_client_cancels_with_account_id_and_reads_the_closing_fill(self, fake_gist, sent, monkeypatch):
+        server = ScriptedProjectX(buy_side=0)
+        client = _real_client(server, monkeypatch)
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, 14, 31)                            # flatten de fin de sesion en el primer poll
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        e = fake_gist["geometry_mes_log.json"][-1]
+        assert e["result"] == "FLATTEN" and server.position is None
+        assert [o for o in server.orders.values() if o["status"] == 1] == []     # TP y SL cancelados
+        assert "/api/Position/closeContract" in server.calls
+
+    def test_a_short_signal_uses_the_verified_sell_side_for_entry_and_buy_for_exits(self, fake_gist, sent, monkeypatch):
+        server = ScriptedProjectX(buy_side=0)
+        client = _real_client(server, monkeypatch)
+        _arm(monkeypatch, client)
+        _set_clock(monkeypatch, 14, 31)
+        fake_gist[pe.ORDER_FILE] = _signal(side=-1, direction="SHORT")
+        pe.run_once()
+        placed = sorted((o for o in server.orders.values()), key=lambda o: o["id"])
+        entry, tp, sl = placed[0], placed[1], placed[2]
+        assert entry["side"] == 1 and tp["side"] == 0 and sl["side"] == 0      # SELL=1 para entrar, BUY=0 para salir
+        assert tp["limitPrice"] < 6000.25 < sl["stopPrice"]                    # en un SHORT: TP abajo, SL arriba
+
+    def test_an_api_error_on_open_orders_midway_does_not_end_the_cycle(self, fake_gist, sent, monkeypatch):
+        """R1 de punta a punta con el cliente real: success:false en Order/searchOpen a mitad del poll."""
+        server = ScriptedProjectX(buy_side=0)
+        server.fill_tp_after_searchopen_calls = 5
+        flaky = {"n": 0}
+        orig_post = server.post
+
+        def post(path, body, auth=True):
+            if path == "/api/Order/searchOpen":
+                flaky["n"] += 1
+                if flaky["n"] in (2, 3):
+                    return {"success": False, "errorCode": 9, "errorMessage": "transient"}   # HTTP 200 con error de negocio
+            return orig_post(path, body, auth)
+        server.post = post
+        client = _real_client(server, monkeypatch)
+        monkeypatch.setattr(client, "_post", post)
+        _arm(monkeypatch, client)
+        monkeypatch.setattr(pe, "CONFIRM_GONE_SLEEP", 0)
+        _set_clock(monkeypatch, 9, 50)
+        fake_gist[pe.ORDER_FILE] = _signal()
+        pe.run_once()
+        assert fake_gist["geometry_mes_log.json"][-1]["result"] == "TP"        # no UNKNOWN: el error no cerro el ciclo
+
+
+class FakeGitHubGist:
+    """Backend de GitHub falso para el gist_store REAL: GET devuelve los archivos; PATCH los actualiza, salvo los
+    fallos programados (como un 403/5xx de GitHub), que gist_store._write_file TRAGA."""
+    def __init__(self):
+        self.files, self.fail_patch_for = {}, set()
+        self.patches = []
+
+    def get(self, url, headers=None, timeout=None):
+        outer = self
+
+        class R:
+            def raise_for_status(self): pass
+            def json(self): return {"files": {k: {"content": v} for k, v in outer.files.items()}}
+        return R()
+
+    def patch(self, url, headers=None, json=None, timeout=None):
+        for name, spec in json["files"].items():
+            self.patches.append((name, spec["content"]))
+            if (name, spec["content"].strip()) in self.fail_patch_for:
+                raise ConnectionError("403 secondary rate limit")
+            self.files[name] = spec["content"]
+
+        class R:
+            def raise_for_status(self): pass
+        return R()
+
+
+class TestRealGistStoreEndToEnd:
+    @pytest.fixture
+    def github(self, monkeypatch):
+        g = FakeGitHubGist()
+        monkeypatch.setattr(gs.requests, "get", g.get)
+        monkeypatch.setattr(gs.requests, "patch", g.patch)
+        monkeypatch.setattr(gs, "GITHUB_GIST_TOKEN", "x")
+        monkeypatch.setattr(gs, "GIST_ID", "y")
+        return g
+
+    def test_a_swallowed_signal_clear_does_not_cause_a_second_trade_with_the_real_gist_store(self, github, sent, monkeypatch):
+        """A1 de punta a punta con gist_store REAL: el PATCH que limpia la señal falla en silencio (como en GitHub) y el
+        Pi, aun asi, opera UNA sola vez. Con el fake_gist de los tests heredados (escrituras siempre exitosas) esto era
+        invisible."""
+        sig = _signal()
+        github.files[pe.ORDER_FILE] = json.dumps(sig, indent=2)
+        github.fail_patch_for.add((pe.ORDER_FILE, "{}"))           # el contenido que escribe save_order_signal({})
+        client = TpFillsEachCycle()
+        _arm(monkeypatch, client)
+
+        pe.run_once()
+        assert len(client.placed_orders) == 3
+        assert json.loads(github.files[pe.ORDER_FILE]) == sig       # la limpieza REALMENTE fallo (y nadie se entero)
+
+        pe.run_once()
+        pe.run_once()
+        assert len(client.placed_orders) == 3                       # sin segundo trade
+        history = json.loads(github.files["geometry_mes_log.json"])
+        assert len(history) == 1 and history[0]["result"] == "TP"
+
+    def test_extract_fill_price_ignores_zero_null_and_garbage(self):
+        for bad in ({"filledPrice": 0}, {"filledPrice": 0.0}, {"filledPrice": None}, {"filledPrice": "0"},
+                    {"filledPrice": "abc"}, {"filledPrice": True}, {"filledPrice": -5.0}, {}):
+            assert pe._extract_fill_price(bad) is None, bad
+        assert pe._extract_fill_price({"filledPrice": None, "avgFillPrice": 6001.5}) == 6001.5
+        assert pe._extract_fill_price({"filledPrice": "6002.25"}) == 6002.25
