@@ -336,10 +336,42 @@ def _extract_fill_price(order_record: dict) -> Optional[float]:
 
 
 def _lookup_order(client: ProjectXClient, account_id: int, order_id) -> Optional[dict]:
-    for o in client.get_orders(account_id, only_open=False):
-        if (o.get("id") or o.get("orderId")) == order_id:
-            return o
+    """Mejor esfuerzo: si la consulta falla devuelve None y el llamador cae a precios estimados (marcados como
+    tales). Un fallo de lectura NO debe dejar el ciclo sin cerrar (ensayo del 4-oct-2026: Order/search dio 400
+    y el estado quedo a medias con el bracket 'abierto')."""
+    try:
+        for o in client.get_orders(account_id, only_open=False):
+            if (o.get("id") or o.get("orderId")) == order_id:
+                return o
+    except Exception as e:
+        log.warning(f"_lookup_order({order_id}) fallo -- {e} -- se usaran precios estimados")
     return None
+
+
+def _cancel_orders_verified(client: ProjectXClient, account_id: int, order_ids) -> list:
+    """Cancela las ordenes dadas CON accountId y luego verifica contra el broker (searchOpen) que ya no estan.
+    Devuelve los ids que SIGUEN abiertos (lista vacia = todo limpio). Nunca lanza: un fallo aqui no debe
+    impedir el flatten ni el cierre del ciclo, pero tampoco se oculta."""
+    for oid in order_ids:
+        try:
+            if not client.cancel_order(oid, account_id):
+                log.warning(f"cancelar orden {oid}: la API no devolvio success (puede que ya no estuviera abierta)")
+        except Exception as e:
+            log.warning(f"cancelar orden {oid} fallo -- {e}")
+    try:
+        still = {o.get("id") or o.get("orderId") for o in client.get_open_orders(account_id)}
+    except Exception as e:
+        log.error(f"_cancel_orders_verified: no se pudo verificar ordenes abiertas -- {e}")
+        return list(order_ids)
+    return [oid for oid in order_ids if oid in still]
+
+
+def _position_still_open(client: ProjectXClient, account_id: int, contract_id) -> bool:
+    try:
+        return any(p.get("contractId") == contract_id and position_is_open(p)
+                   for p in client.get_positions(account_id))
+    except Exception:
+        return True   # sin poder confirmar, se asume abierta
 
 
 def _has_untracked_position(client: ProjectXClient, account_id: int, contract_id) -> bool:
@@ -403,7 +435,7 @@ def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
         # price") y la entrada quedo abierta y desnuda.
         for oid in placed_exits:
             try:
-                client.cancel_order(oid)
+                client.cancel_order(oid, account_id)
             except Exception as ce:
                 log.error(f"place_bracket_order: no se pudo cancelar la orden {oid} tras el fallo -- {ce}")
         flatten_error = None
@@ -440,7 +472,10 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
     while True:
         now = ct_now()
         if now.hour * 60 + now.minute >= flatten_hour * 60 + flatten_minute:
-            client.cancel_exit_orders(tp_order_id, sl_order_id)
+            leftover = _cancel_orders_verified(client, account_id, [tp_order_id, sl_order_id])
+            if leftover:
+                send(f"{PREFIX}\nSTATUS: ALERTA\nTras el cierre de sesion siguen ABIERTAS las ordenes {leftover} "
+                     f"en {contract_id} -- cancelarlas MANUALMENTE en TopstepX.\n{utc_now_str()}")
             # closeContract (POST /api/Position/closeContract) NO depende de que lado es compra/venta --
             # a diferencia de client.flatten_position(), que decide el lado con brokers.projectx.OrderSide
             # (el enum SIN verificar, bloqueante #1) y lee `netPos` (campo tampoco verificado): con el enum
@@ -449,6 +484,11 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
             try:
                 client.close_contract(account_id, contract_id)
             except Exception as e:
+                # closeContract devuelve success=false si NO hay posicion que cerrar (p. ej. ya se cerro a mano
+                # o en un intento anterior): eso no es un fallo. Solo es fallo si la posicion sigue abierta.
+                if not _position_still_open(client, account_id, contract_id):
+                    log.info(f"closeContract respondio error ({e}) pero la cuenta esta plana en {contract_id} -- ok")
+                    return {"result": "FLATTEN", "exit_price": None, "exit_price_estimated": True}
                 flatten_failed = True
                 log.error(f"poll_position_until_closed: flatten de fin de sesion fallo -- {e}")
                 send(f"{PREFIX}\nSTATUS: ALERTA\n"
@@ -470,14 +510,14 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
         tp_open, sl_open = tp_order_id in open_ids, sl_order_id in open_ids
 
         if not tp_open and sl_open:
-            client.cancel_order(sl_order_id)
+            _cancel_orders_verified(client, account_id, [sl_order_id])
             rec = _lookup_order(client, account_id, tp_order_id)
             price = _extract_fill_price(rec) if rec else None
             return {"result": "TP", "exit_price": price if price is not None else tp_price,
                     "exit_price_estimated": price is None}
 
         if tp_open and not sl_open:
-            client.cancel_order(tp_order_id)
+            _cancel_orders_verified(client, account_id, [tp_order_id])
             rec = _lookup_order(client, account_id, sl_order_id)
             price = _extract_fill_price(rec) if rec else None
             return {"result": "SL", "exit_price": price if price is not None else sl_price,

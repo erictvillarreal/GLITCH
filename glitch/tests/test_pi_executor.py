@@ -85,7 +85,7 @@ class FakeClient:
     def get_orders(self, account_id, only_open=False):
         return list(self.order_records.values())
 
-    def cancel_order(self, order_id):
+    def cancel_order(self, order_id, account_id=None):
         self.cancelled.append(order_id)
         self.open_order_ids.discard(order_id)
         return True
@@ -401,9 +401,25 @@ class TestSessionEndFlattenUsesCloseContract:
     def test_flatten_failure_alerts_loudly_and_is_flagged(self, monkeypatch):
         client, sent = FakeClient(), []
         client.close_contract_error = "closeContract fallo: boom"
+        client.positions = [{"contractId": "CON.MES.Z26", "type": 1, "size": 1}]   # SIGUE abierta
         out = self._poll_at_close(client, monkeypatch, sent)
         assert out["result"] == "FLATTEN" and out["flatten_failed"] is True
         assert len(sent) == 1 and "ABIERTA" in sent[0] and "MANUALMENTE" in sent[0]
+
+    def test_closecontract_error_while_account_is_flat_is_not_a_failure(self, monkeypatch):
+        client, sent = FakeClient(), []
+        client.close_contract_error = "closeContract fallo: None"   # nada que cerrar
+        client.positions = []
+        out = self._poll_at_close(client, monkeypatch, sent)
+        assert out["result"] == "FLATTEN" and "flatten_failed" not in out
+        assert sent == []
+
+    def test_leftover_exit_orders_after_flatten_trigger_alert(self, monkeypatch):
+        client, sent = FakeClient(), []
+        client.open_order_ids = {1, 2}
+        client.cancel_order = lambda oid, account_id=None: False   # la cancelacion no surte efecto
+        out = self._poll_at_close(client, monkeypatch, sent)
+        assert any("siguen ABIERTAS" in m and "MANUALMENTE" in m for m in sent)
 
     def test_flatten_failure_is_recorded_in_the_historic_log(self, fake_gist, monkeypatch):
         client = FakeClient()
@@ -626,6 +642,40 @@ class TestTickRounding:
     def test_prices_are_rounded_to_tick(self):
         assert pi_executor._round_to_tick(7788.8) == 7788.75
         assert pi_executor._round_to_tick(7788.9) == 7789.0
+
+
+class TestCancelAndOrderSearchRequests:
+    def _client(self, monkeypatch, response):
+        c = px.ProjectXClient(px.ProjectXCredentials("u", "k"), verbose=False)
+        calls = []
+        monkeypatch.setattr(c, "ensure_auth", lambda: None)
+        monkeypatch.setattr(c, "_post", lambda path, payload: (calls.append((path, payload)), response)[1])
+        return c, calls
+
+    def test_cancel_sends_accountId(self, monkeypatch):
+        c, calls = self._client(monkeypatch, {"success": True})
+        assert c.cancel_order(77, 28197753) is True
+        assert calls == [("/api/Order/cancel", {"orderId": 77, "accountId": 28197753})]
+
+    def test_order_search_sends_startTimestamp_not_onlyOpen(self, monkeypatch):
+        c, calls = self._client(monkeypatch, {"orders": [{"id": 1}], "success": True})
+        assert c.get_orders(9) == [{"id": 1}]
+        path, body = calls[0]
+        assert path == "/api/Order/search" and set(body) == {"accountId", "startTimestamp"}
+        assert body["startTimestamp"].endswith("Z")
+
+
+class TestFinalizeSurvivesOrderLookupFailure:
+    def test_lookup_error_falls_back_to_estimated_prices(self, fake_gist, sent, monkeypatch):
+        client = FakeClient()
+        client.get_orders = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("400 Bad Request"))
+        state = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 200,
+                 "tp_price": 6010.0, "sl_price": 5990.0, "tp_order_id": 1, "sl_order_id": 2,
+                 "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "x"}
+        pi_executor._finalize_cycle(client, 555, state, {"result": "FLATTEN", "exit_price": None,
+                                                          "exit_price_estimated": True})
+        assert fake_gist[pi_executor.ORDER_FILE] == {} and fake_gist[pi_executor.PI_STATE_FILE] == {}
+        assert fake_gist["geometry_mes_log.json"][0]["entry_price_estimated"] is True
 
 
 class TestResolveAccountId:

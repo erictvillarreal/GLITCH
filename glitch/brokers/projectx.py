@@ -271,10 +271,17 @@ class ProjectXClient:
             OrderType.STOP, side, size, stop_price=stop_price
         )
 
-    def cancel_order(self, order_id: int) -> bool:
-        """POST /api/Order/cancel"""
+    def cancel_order(self, order_id: int, account_id: Optional[int] = None) -> bool:
+        """POST /api/Order/cancel {accountId, orderId}.
+
+        La API REQUIERE accountId: sin el, la cancelacion falla y (como aqui solo se devuelve success) el fallo
+        pasaba en silencio -- ensayo del 4-oct-2026: tras el flatten quedaron un Limit Sell y un Stop Sell
+        abiertos en TopstepX. Los llamadores nuevos DEBEN pasar account_id."""
         self.ensure_auth()
-        resp = self._post("/api/Order/cancel", {"orderId": order_id})
+        payload = {"orderId": order_id}
+        if account_id is not None:
+            payload["accountId"] = account_id
+        resp = self._post("/api/Order/cancel", payload)
         return resp.get("success", False)
 
     def cancel_all_orders(self, account_id: int) -> dict:
@@ -292,21 +299,21 @@ class ProjectXClient:
         })
         return resp if isinstance(resp, list) else resp.get("orders", [])
 
-    def get_orders(self, account_id: int, only_open: bool = False) -> list[dict]:
+    def get_orders(self, account_id: int, only_open: bool = False, hours_back: int = 36) -> list[dict]:
         """
-        POST /api/Order/search -- generaliza get_open_orders() (que fuerza
-        onlyOpen=True) para poder consultar TAMBIEN ordenes ya resueltas
-        (fill price, timestamp de cierre). Anadido 29-sep-2026 para que
-        pi/pi_executor.py pueda leer el precio de fill REAL de una orden
-        despues de que se llena, en vez de asumir el precio objetivo
-        (tp_price/sl_price) como si fuera el fill exacto. No toca la
-        logica de OrderSide -- ver bloqueante #1 en la clase OrderSide
-        arriba, sigue sin resolver.
+        POST /api/Order/search {accountId, startTimestamp} -- ordenes (tambien las ya resueltas: filledPrice,
+        status). La API EXIGE startTimestamp: el cuerpo anterior (accountId + onlyOpen) respondia 400 (visto en
+        vivo el 4-oct-2026, rompio el cierre del ciclo). Con only_open=True se usa /api/Order/searchOpen.
+        Registro esperado: {id, accountId, contractId, status, type, side, size, limitPrice, stopPrice,
+        filledPrice, ...} (nombres segun la documentacion de ProjectX -- aun sin confirmar en vivo).
         """
+        if only_open:
+            return self.get_open_orders(account_id)
         self.ensure_auth()
+        start = datetime.now(timezone.utc) - timedelta(hours=hours_back)
         resp = self._post("/api/Order/search", {
-            "accountId": account_id,
-            "onlyOpen":  only_open,
+            "accountId":      account_id,
+            "startTimestamp": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
         return resp if isinstance(resp, list) else resp.get("orders", [])
 
@@ -427,12 +434,12 @@ class ProjectXClient:
             "sl_order_id":    sl_id,
         }
 
-    def cancel_exit_orders(self, tp_id: int, sl_id: int):
+    def cancel_exit_orders(self, tp_id: int, sl_id: int, account_id: Optional[int] = None):
         """Cancel TP and SL after one of them fills."""
         for oid in [tp_id, sl_id]:
             try:
-                self.cancel_order(oid)
-            except:
+                self.cancel_order(oid, account_id)
+            except Exception:
                 pass
 
     def check_combine_limits(
