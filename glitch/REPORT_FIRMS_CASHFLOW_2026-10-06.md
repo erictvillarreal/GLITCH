@@ -126,7 +126,7 @@ Neto = payouts al trader − fees de compra/reset/activación − costos operati
 ## Reproducir
 ```bash
 cd glitch   # rama research/pass-rate-levers, datos en data_cache/*.parquet (no versionados)
-python scripts/run_firm_cashflow_report.py     # ~1 min, escribe dd_cash/firms_cashflow_report.txt y dd_cash/firms_cashflow_summary.csv
+python scripts/run_firm_cashflow_report.py     # ~1 min, escribe dd_cash/firms_cashflow_report.txt (versionado) y dd_cash/firms_cashflow_summary.csv (local: .gitignore lo excluye)
 python -m pytest tests/test_engine_firms.py -q  # 9 pruebas de invariantes
 ```
-Archivos: `dd_cash/engine_firms.py`, `scripts/run_firm_cashflow_report.py`, `tests/test_engine_firms.py`, `dd_cash/firms_cashflow_report.txt`, `dd_cash/firms_cashflow_summary.csv`, `scripts/pass_rate_firms_verified.py`, `scripts/pass_rate_ceiling_dp.py`.
+Archivos: `dd_cash/engine_firms.py`, `scripts/run_firm_cashflow_report.py`, `tests/test_engine_firms.py`, `dd_cash/firms_cashflow_report.txt`, `scripts/pass_rate_firms_verified.py`, `scripts/pass_rate_ceiling_dp.py`.
