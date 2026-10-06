@@ -1,0 +1,172 @@
+==========================================================================================================================================================================
+EVALUACION: G2 TAL CUAL (nc=40, TP40, SL100) = lo que corre hoy en Topstep
+==========================================================================================================================================================================
+
+Topstep 50K (control; escalado XFA supuesto 20/30/40) | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $690 mediana $551 | acum12m p10/p50/p90/media $-1,125/$6,617/$17,516/$7,615 | P(<0)=0.14 | colchon p95/p99 $4,630/$6,537 | mes equilibrio (mediana)=3 | compras/año=23.5 fondeadas=23.0 pagos=10.9 | payout anual medio $16,165 fees $7,836 ops $714
+   pass 1a evaluacion=0.254 | H1 $1,023/mes P(<0)=0.07 | H2 $425/mes P(<0)=0.27 | comisiones +50%: $680/mes | payouts -20% (demora/rechazos): $428/mes
+   neto mensual p50 por mes 1..12:   -796    515    551    551    551    551    516    551    551    551    551    551
+   neto mensual MEDIO por mes 1..12:     61    652    691    693    683    686    680    682    715    695    691    685
+
+Topstep 50K (control; escalado XFA supuesto 20/30/40) | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $93 mediana $-206 | acum12m p10/p50/p90/media $-2,710/$416/$5,105/$885 | P(<0)=0.44 | colchon p95/p99 $3,609/$4,444 | mes equilibrio (mediana)=8 | compras/año=12.3 fondeadas=12.0 pagos=10.1 | payout anual medio $5,690 fees $4,090 ops $714
+   pass 1a evaluacion=0.254 | H1 $272/mes P(<0)=0.23 | H2 $-44/mes P(<0)=0.66 | comisiones +50%: $62/mes | payouts -20% (demora/rechazos): $-1/mes
+   neto mensual p50 por mes 1..12:   -398   -207   -206   -206   -200   -206   -208   -208   -208   -208   -206   -207
+   neto mensual MEDIO por mes 1..12:   -146     99    100     92     94     94     94     86     91     96     93     93
+
+Tradeify Growth 50K | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $216 mediana $-475 | acum12m p10/p50/p90/media $-4,195/$1,285/$9,465/$2,072 | P(<0)=0.40 | colchon p95/p99 $5,735/$7,080 | mes equilibrio (mediana)=7 | compras/año=13.7 fondeadas=13.1 pagos=5.0 | payout anual medio $8,109 fees $5,498 ops $540
+   pass 1a evaluacion=0.260 | H1 $432/mes P(<0)=0.27 | H2 $47/mes P(<0)=0.56 | comisiones +50%: $121/mes | payouts -20% (demora/rechazos): $83/mes
+   neto mensual p50 por mes 1..12:   -622   -475   -475   -475   -475   -475   -475   -475   -475   -475   -475   -475
+   neto mensual MEDIO por mes 1..12:   -297    206    224    217    212    219    220    204    222    219    217    208
+
+Tradeify Growth 50K | fondeada B conservadora: G_f=$400, rho=0.35, TP=40
+   neto/mes(m3-12): media $32 mediana $-190 | acum12m p10/p50/p90/media $-3,650/$-545/$4,390/$-25 | P(<0)=0.57 | colchon p95/p99 $4,215/$4,930 | mes equilibrio (mediana)=no llega | compras/año=7.0 fondeadas=6.7 pagos=2.1 | payout anual medio $3,320 fees $2,805 ops $540
+   pass 1a evaluacion=0.260 | H1 $152/mes P(<0)=0.42 | H2 $-63/mes P(<0)=0.71 | comisiones +50%: $-37/mes | payouts -20% (demora/rechazos): $-23/mes
+   neto mensual p50 por mes 1..12:   -430   -190   -190   -190   -190   -190   -190   -190   -190   -190   -190   -190
+   neto mensual MEDIO por mes 1..12:   -369     30     40     34     28     31     41     25     30     29     33     24
+
+Tradeify Select Flex 50K | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $-21 mediana $-917 | acum12m p10/p50/p90/media $-9,012/$-1,898/$8,615/$-869 | P(<0)=0.61 | colchon p95/p99 $10,839/$12,961 | mes equilibrio (mediana)=no llega | compras/año=18.8 fondeadas=16.5 pagos=7.1 | payout anual medio $11,249 fees $11,578 ops $540
+   pass 1a evaluacion=0.173 | H1 $322/mes P(<0)=0.39 | H2 $-307/mes P(<0)=0.78 | comisiones +50%: $-41/mes | payouts -20% (demora/rechazos): $-208/mes
+   neto mensual p50 por mes 1..12:  -1191   -867   -917   -920   -917   -917   -892   -917   -867   -892   -917   -867
+   neto mensual MEDIO por mes 1..12:   -625    -36    -13    -23    -33    -21    -16    -23      2    -27    -25    -28
+
+Tradeify Select Flex 50K | fondeada B conservadora: G_f=$100, rho=0.2, TP=80
+   neto/mes(m3-12): media $-84 mediana $-45 | acum12m p10/p50/p90/media $-2,723/$-1,415/$-814/$-1,615 | P(<0)=1.00 | colchon p95/p99 $3,215/$4,305 | mes equilibrio (mediana)=no llega | compras/año=1.8 fondeadas=1.5 pagos=0.0 | payout anual medio $0 fees $1,075 ops $540
+   pass 1a evaluacion=0.173 | H1 $-74/mes P(<0)=1.00 | H2 $-95/mes P(<0)=1.00 | comisiones +50%: $-90/mes | payouts -20% (demora/rechazos): $-84/mes
+   neto mensual p50 por mes 1..12:   -537    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45
+   neto mensual MEDIO por mes 1..12:   -696    -84    -51    -62    -77    -85    -94    -96    -94    -92    -93    -92
+
+Tradeify Select Daily 50K | fondeada A optima sin restricciones: G_f=$250, rho=1.0, TP=80
+   neto/mes(m3-12): media $-46 mediana $-45 | acum12m p10/p50/p90/media $-4,526/$-1,627/$2,245/$-1,354 | P(<0)=0.72 | colchon p95/p99 $5,398/$6,871 | mes equilibrio (mediana)=no llega | compras/año=4.5 fondeadas=3.9 pagos=6.7 | payout anual medio $1,923 fees $2,737 ops $540
+   pass 1a evaluacion=0.173 | H1 $156/mes P(<0)=0.42 | H2 $-206/mes P(<0)=0.89 | comisiones +50%: $-68/mes | payouts -20% (demora/rechazos): $-79/mes
+   neto mensual p50 por mes 1..12:   -646    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45
+   neto mensual MEDIO por mes 1..12:   -721   -172   -102    -63    -47    -40    -33    -35    -34    -36    -35    -36
+
+Tradeify Select Daily 50K | fondeada B conservadora: G_f=$250, rho=0.2, TP=80
+   neto/mes(m3-12): media $-55 mediana $-45 | acum12m p10/p50/p90/media $-3,475/$-1,580/$1,292/$-1,304 | P(<0)=0.79 | colchon p95/p99 $4,143/$5,345 | mes equilibrio (mediana)=no llega | compras/año=2.9 fondeadas=2.5 pagos=3.5 | payout anual medio $1,001 fees $1,765 ops $540
+   pass 1a evaluacion=0.173 | H1 $11/mes P(<0)=0.66 | H2 $-113/mes P(<0)=0.87 | comisiones +50%: $-83/mes | payouts -20% (demora/rechazos): $-72/mes
+   neto mensual p50 por mes 1..12:   -537    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45    -45
+   neto mensual MEDIO por mes 1..12:   -695    -61    -54    -68    -66    -55    -52    -55    -51    -49    -47    -50
+
+Bulenox Qualification Opcion 2 50K + Master | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $8 mediana $-546 | acum12m p10/p50/p90/media $-6,762/$-3,455/$10,833/$-691 | P(<0)=0.74 | colchon p95/p99 $7,082/$7,475 | mes equilibrio (mediana)=no llega | compras/año=12.1 fondeadas=7.5 pagos=2.8 | payout anual medio $5,739 fees $4,691 ops $1,740
+   pass 1a evaluacion=0.285 | H1 $354/mes P(<0)=0.56 | H2 $-219/mes P(<0)=0.86 | comisiones +50%: $-28/mes | payouts -20% (demora/rechazos): $-90/mes
+   neto mensual p50 por mes 1..12:   -624   -546   -546   -546   -546   -546   -546   -546   -546   -546   -546   -546
+   neto mensual MEDIO por mes 1..12:   -537   -239     -1     17      5     -2      1     12     24      8      9     13
+
+Bulenox Qualification Opcion 2 50K + Master | fondeada B conservadora: G_f=$400, rho=0.35, TP=40
+   neto/mes(m3-12): media $-85 mediana $-320 | acum12m p10/p50/p90/media $-5,066/$-2,650/$3,654/$-1,578 | P(<0)=0.75 | colchon p95/p99 $5,389/$5,860 | mes equilibrio (mediana)=no llega | compras/año=6.8 fondeadas=4.3 pagos=2.0 | payout anual medio $2,803 fees $2,641 ops $1,740
+   pass 1a evaluacion=0.285 | H1 $196/mes P(<0)=0.50 | H2 $-253/mes P(<0)=0.91 | comisiones +50%: $-139/mes | payouts -20% (demora/rechazos): $-132/mes
+   neto mensual p50 por mes 1..12:   -546   -398   -371   -371   -320   -320   -320   -320   -320   -320   -320   -320
+   neto mensual MEDIO por mes 1..12:   -517   -213   -121    -91    -83    -77    -73    -79    -85    -77    -80    -82
+
+Bulenox Momentum 50K (Opcion 2) | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $334 mediana $-574 | acum12m p10/p50/p90/media $-4,533/$2,540/$12,255/$3,322 | P(<0)=0.34 | colchon p95/p99 $6,748/$8,607 | mes equilibrio (mediana)=4 | compras/año=12.6 fondeadas=12.1 pagos=6.2 | payout anual medio $11,133 fees $6,071 ops $1,740
+   pass 1a evaluacion=0.288 | H1 $645/mes P(<0)=0.20 | H2 $93/mes P(<0)=0.51 | comisiones +50%: $250/mes | payouts -20% (demora/rechazos): $148/mes
+   neto mensual p50 por mes 1..12:   -717   -574   -574   -574   -574   -574   -574   -574   -574   -574   -574   -574
+   neto mensual MEDIO por mes 1..12:   -347    331    349    338    329    340    337    321    342    333    325    325
+
+Bulenox Momentum 50K (Opcion 2) | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $13 mediana $-288 | acum12m p10/p50/p90/media $-5,388/$-887/$5,542/$-342 | P(<0)=0.58 | colchon p95/p99 $6,316/$7,460 | mes equilibrio (mediana)=no llega | compras/año=7.9 fondeadas=7.6 pagos=2.9 | payout anual medio $5,174 fees $3,776 ops $1,740
+   pass 1a evaluacion=0.288 | H1 $244/mes P(<0)=0.37 | H2 $-154/mes P(<0)=0.76 | comisiones +50%: $-44/mes | payouts -20% (demora/rechazos): $-71/mes
+   neto mensual p50 por mes 1..12:   -574   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288
+   neto mensual MEDIO por mes 1..12:   -494     24     16      8     -1     18     31      5     13     10     21      6
+==========================================================================================================================================================================
+EVALUACION: TP-AL-TARGET (propuesta de investigacion, stop propio)
+==========================================================================================================================================================================
+
+Topstep 50K (control; escalado XFA supuesto 20/30/40) | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $885 mediana $600 | acum12m p10/p50/p90/media $767/$9,013/$20,078/$9,894 | P(<0)=0.08 | colchon p95/p99 $3,761/$5,635 | mes equilibrio (mediana)=1 | compras/año=26.6 fondeadas=26.1 pagos=12.4 | payout anual medio $18,346 fees $7,738 ops $714
+   pass 1a evaluacion=0.330 | H1 $1,225/mes P(<0)=0.03 | H2 $609/mes P(<0)=0.16 | comisiones +50%: $861/mes | payouts -20% (demora/rechazos): $588/mes
+   neto mensual p50 por mes 1..12:    214    600    600    600    600    600    600    600    600    600    600    600
+   neto mensual MEDIO por mes 1..12:    206    836    888    885    884    881    879    880    911    890    880    875
+
+Topstep 50K (control; escalado XFA supuesto 20/30/40) | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $150 mediana $-144 | acum12m p10/p50/p90/media $-2,051/$1,107/$5,829/$1,571 | P(<0)=0.35 | colchon p95/p99 $3,053/$3,912 | mes equilibrio (mediana)=5 | compras/año=13.0 fondeadas=12.8 pagos=10.8 | payout anual medio $6,076 fees $3,790 ops $714
+   pass 1a evaluacion=0.330 | H1 $332/mes P(<0)=0.16 | H2 $9/mes P(<0)=0.57 | comisiones +50%: $115/mes | payouts -20% (demora/rechazos): $50/mes
+   neto mensual p50 por mes 1..12:   -356   -135   -138   -152   -139   -138   -148   -152   -142   -147   -135   -149
+   neto mensual MEDIO por mes 1..12:    -91    159    157    145    152    152    151    143    150    153    153    147
+
+Tradeify Growth 50K | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $479 mediana $-380 | acum12m p10/p50/p90/media $-2,085/$4,485/$13,280/$5,144 | P(<0)=0.21 | colchon p95/p99 $4,585/$6,135 | mes equilibrio (mediana)=2 | compras/año=18.6 fondeadas=18.2 pagos=7.0 | payout anual medio $11,279 fees $5,595 ops $540
+   pass 1a evaluacion=0.374 | H1 $755/mes P(<0)=0.11 | H2 $248/mes P(<0)=0.35 | comisiones +50%: $393/mes | payouts -20% (demora/rechazos): $294/mes
+   neto mensual p50 por mes 1..12:   -620   -380   -380   -380   -380   -380   -380   -380   -380   -380   -380   -380
+   neto mensual MEDIO por mes 1..12:   -111    467    485    480    476    479    493    465    480    477    483    469
+
+Tradeify Growth 50K | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $129 mediana $-235 | acum12m p10/p50/p90/media $-3,275/$615/$6,350/$1,150 | P(<0)=0.44 | colchon p95/p99 $4,175/$4,895 | mes equilibrio (mediana)=8 | compras/año=10.3 fondeadas=10.1 pagos=3.0 | payout anual medio $4,791 fees $3,101 ops $540
+   pass 1a evaluacion=0.374 | H1 $301/mes P(<0)=0.27 | H2 $-1/mes P(<0)=0.61 | comisiones +50%: $73/mes | payouts -20% (demora/rechazos): $50/mes
+   neto mensual p50 por mes 1..12:   -430   -235   -235   -235   -235   -235   -190   -235   -235   -235   -235   -235
+   neto mensual MEDIO por mes 1..12:   -268    129    137    127    121    124    144    118    132    127    135    123
+
+Tradeify Select Flex 50K | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $423 mediana $-484 | acum12m p10/p50/p90/media $-3,546/$3,459/$13,684/$4,417 | P(<0)=0.28 | colchon p95/p99 $5,948/$7,857 | mes equilibrio (mediana)=4 | compras/año=19.4 fondeadas=18.6 pagos=8.0 | payout anual medio $12,668 fees $7,710 ops $540
+   pass 1a evaluacion=0.310 | H1 $714/mes P(<0)=0.16 | H2 $187/mes P(<0)=0.45 | comisiones +50%: $358/mes | payouts -20% (demora/rechazos): $216/mes
+   neto mensual p50 por mes 1..12:   -811   -537   -484   -484   -484   -537   -484   -484   -484   -537   -537   -537
+   neto mensual MEDIO por mes 1..12:   -208    399    429    433    416    428    432    421    438    408    410    410
+
+Tradeify Select Flex 50K | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $7 mediana $-210 | acum12m p10/p50/p90/media $-3,400/$-603/$3,541/$-198 | P(<0)=0.59 | colchon p95/p99 $4,253/$5,282 | mes equilibrio (mediana)=no llega | compras/año=11.2 fondeadas=10.7 pagos=7.6 | payout anual medio $4,790 fees $4,448 ops $540
+   pass 1a evaluacion=0.310 | H1 $134/mes P(<0)=0.40 | H2 $-98/mes P(<0)=0.75 | comisiones +50%: $-48/mes | payouts -20% (demora/rechazos): $-72/mes
+   neto mensual p50 por mes 1..12:   -375   -210   -210   -210   -210   -210   -210   -210   -210   -210   -210   -210
+   neto mensual MEDIO por mes 1..12:   -270      0      8     11      2     12     12     -2     10     11      7      1
+
+Tradeify Select Daily 50K | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $230 mediana $-375 | acum12m p10/p50/p90/media $-3,965/$1,659/$9,108/$2,223 | P(<0)=0.37 | colchon p95/p99 $5,659/$7,050 | mes equilibrio (mediana)=6 | compras/año=14.4 fondeadas=13.8 pagos=16.3 | payout anual medio $8,495 fees $5,732 ops $540
+   pass 1a evaluacion=0.310 | H1 $531/mes P(<0)=0.17 | H2 $-12/mes P(<0)=0.60 | comisiones +50%: $87/mes | payouts -20% (demora/rechazos): $90/mes
+   neto mensual p50 por mes 1..12:   -646   -375   -373   -373   -375   -375   -375   -375   -375   -375   -375   -375
+   neto mensual MEDIO por mes 1..12:   -314    234    239    232    231    238    233    224    229    221    233    224
+
+Tradeify Select Daily 50K | fondeada B conservadora: G_f=$400, rho=0.35, TP=40
+   neto/mes(m3-12): media $48 mediana $-210 | acum12m p10/p50/p90/media $-3,492/$-387/$4,606/$155 | P(<0)=0.55 | colchon p95/p99 $4,202/$5,064 | mes equilibrio (mediana)=no llega | compras/año=7.3 fondeadas=7.0 pagos=9.5 | payout anual medio $3,598 fees $2,903 ops $540
+   pass 1a evaluacion=0.310 | H1 $204/mes P(<0)=0.35 | H2 $-77/mes P(<0)=0.73 | comisiones +50%: $-19/mes | payouts -20% (demora/rechazos): $-13/mes
+   neto mensual p50 por mes 1..12:   -428   -210   -210   -210   -210   -210   -210   -210   -210   -210   -210   -210
+   neto mensual MEDIO por mes 1..12:   -359     34     47     52     41     52     56     44     50     43     48     47
+
+Bulenox Qualification Opcion 2 50K + Master | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=20
+   neto/mes(m3-12): media $291 mediana $-546 | acum12m p10/p50/p90/media $-6,182/$-1,038/$15,027/$2,281 | P(<0)=0.56 | colchon p95/p99 $7,226/$8,420 | mes equilibrio (mediana)=no llega | compras/año=13.6 fondeadas=12.5 pagos=4.6 | payout anual medio $9,515 fees $5,493 ops $1,740
+   pass 1a evaluacion=0.437 | H1 $730/mes P(<0)=0.37 | H2 $-15/mes P(<0)=0.72 | comisiones +50%: $251/mes | payouts -20% (demora/rechazos): $132/mes
+   neto mensual p50 por mes 1..12:   -791   -605   -546   -546   -546   -546   -546   -546   -554   -546   -546   -546
+   neto mensual MEDIO por mes 1..12:   -575    -51    291    289    280    289    279    292    304    302    295    285
+
+Bulenox Qualification Opcion 2 50K + Master | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $12 mediana $-398 | acum12m p10/p50/p90/media $-5,115/$-1,598/$5,783/$-515 | P(<0)=0.65 | colchon p95/p99 $5,602/$6,164 | mes equilibrio (mediana)=no llega | compras/año=7.5 fondeadas=6.9 pagos=3.0 | payout anual medio $4,246 fees $3,021 ops $1,740
+   pass 1a evaluacion=0.437 | H1 $338/mes P(<0)=0.37 | H2 $-192/mes P(<0)=0.84 | comisiones +50%: $-53/mes | payouts -20% (demora/rechazos): $-60/mes
+   neto mensual p50 por mes 1..12:   -624   -449   -398   -398   -371   -398   -398   -398   -398   -398   -371   -398
+   neto mensual MEDIO por mes 1..12:   -530   -101    -17     13     14     13     19     14     12     19     16     14
+
+Bulenox Momentum 50K (Opcion 2) | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $648 mediana $-288 | acum12m p10/p50/p90/media $-1,389/$6,468/$16,326/$7,038 | P(<0)=0.15 | colchon p95/p99 $4,746/$6,737 | mes equilibrio (mediana)=2 | compras/año=15.9 fondeadas=15.6 pagos=7.9 | payout anual medio $14,263 fees $5,486 ops $1,740
+   pass 1a evaluacion=0.409 | H1 $1,051/mes P(<0)=0.06 | H2 $318/mes P(<0)=0.32 | comisiones +50%: $553/mes | payouts -20% (demora/rechazos): $413/mes
+   neto mensual p50 por mes 1..12:   -717   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288
+   neto mensual MEDIO por mes 1..12:    -82    644    659    651    641    657    648    637    640    650    647    646
+
+Bulenox Momentum 50K (Opcion 2) | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $136 mediana $-288 | acum12m p10/p50/p90/media $-4,101/$613/$7,185/$1,163 | P(<0)=0.44 | colchon p95/p99 $5,172/$6,173 | mes equilibrio (mediana)=8 | compras/año=9.0 fondeadas=8.8 pagos=3.4 | payout anual medio $5,983 fees $3,079 ops $1,740
+   pass 1a evaluacion=0.409 | H1 $413/mes P(<0)=0.22 | H2 $-65/mes P(<0)=0.67 | comisiones +50%: $82/mes | payouts -20% (demora/rechazos): $39/mes
+   neto mensual p50 por mes 1..12:   -431   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288   -288
+   neto mensual MEDIO por mes 1..12:   -337    145    139    130    125    137    146    129    138    142    142    129
+
+Bulenox Fast Track 50K (Opcion 2) | fondeada A optima sin restricciones: G_f=$600, rho=1.0, TP=40
+   neto/mes(m3-12): media $373 mediana $391 | acum12m p10/p50/p90/media $-2,169/$4,321/$9,681/$4,015 | P(<0)=0.19 | colchon p95/p99 $6,380/$8,969 | mes equilibrio (mediana)=2 | compras/año=20.3 fondeadas=20.3 pagos=9.6 | payout anual medio $15,657 fees $9,902 ops $1,740
+   pass 1a evaluacion=0.000 | H1 $637/mes P(<0)=0.05 | H2 $71/mes P(<0)=0.47 | comisiones +50%: $297/mes | payouts -20% (demora/rechazos): $112/mes
+   neto mensual p50 por mes 1..12:    -97    625    391    391    391    391    391    264    191    191    191    191
+   neto mensual MEDIO por mes 1..12:   -194    482    471    461    426    417    383    338    328    314    302    288
+
+Bulenox Fast Track 50K (Opcion 2) | fondeada B conservadora: G_f=$400, rho=0.5, TP=40
+   neto/mes(m3-12): media $-30 mediana $-633 | acum12m p10/p50/p90/media $-5,351/$-1,073/$3,772/$-848 | P(<0)=0.61 | colchon p95/p99 $6,673/$8,427 | mes equilibrio (mediana)=no llega | compras/año=10.1 fondeadas=10.1 pagos=3.3 | payout anual medio $5,845 fees $4,953 ops $1,740
+   pass 1a evaluacion=0.000 | H1 $200/mes P(<0)=0.31 | H2 $-228/mes P(<0)=0.83 | comisiones +50%: $-84/mes | payouts -20% (demora/rechazos): $-128/mes
+   neto mensual p50 por mes 1..12:   -633   -633   -633   -633   -633   -633   -633   -633   -633   -633   -633   -633
+   neto mensual MEDIO por mes 1..12:   -510    -34    -34    -28    -35    -32    -24    -34    -24    -28    -32    -33
+
+==========================================================================================================================================================================
+SENSIBILIDAD AL COSTO DE API (politica B, evaluacion TP-al-target)
+==========================================================================================================================================================================
+  Bulenox Momentum 50K (Opcion 2) API $100.0/mes: neto/mes(m3-12) $134 P(<0)=0.45
+  Bulenox Momentum 50K (Opcion 2) API $ 14.5/mes: neto/mes(m3-12) $220 P(<0)=0.36
+  Bulenox Momentum 50K (Opcion 2) API $  0.0/mes: neto/mes(m3-12) $234 P(<0)=0.34
+  Bulenox Qualification Opcion 2 50K + Master API $100.0/mes: neto/mes(m3-12) $11 P(<0)=0.65
+  Bulenox Qualification Opcion 2 50K + Master API $ 14.5/mes: neto/mes(m3-12) $97 P(<0)=0.56
+  Bulenox Qualification Opcion 2 50K + Master API $  0.0/mes: neto/mes(m3-12) $111 P(<0)=0.54
