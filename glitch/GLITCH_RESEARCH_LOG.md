@@ -3469,3 +3469,104 @@ del Combine"; "no sé si una Practice se puede reiniciar". Verificado contra el 
 después del kickoff, sin esperar la hora de entrada del paper (~9:35–9:45 CT); el Pi la consume en su siguiente poll de 120 s
 y coloca una orden de MERCADO. Si el cron de GEOMETRY arranca ~8:30 CT (inferido de un "Next in 22 hours", no confirmado),
 el Pi entraría ~70 min antes que el paper/backtest → el Pi no replicaría el paper en hora de entrada. Verificar el cron.
+
+
+## 05-oct-2026 — ¿Qué más está en nuestras manos para mejorar el ~26% de pass rate? Techo teórico, palancas y estado de exploración
+
+Pedido del usuario: confirmar que no queda nada por investigar en productos, timeframes, geometrías, reglas y plataformas, incluyendo ideas
+fuera de la caja (opciones en IBKR, futuros de cripto). R&D puro: rama `research/pass-rate-levers`, cero cambios a producción, Railway ni Pi.
+Scripts nuevos (reproducibles): `scripts/pass_rate_ceiling_dp.py`, `scripts/pass_rate_bold_real.py`, `scripts/pass_rate_vs_ev.py`.
+
+**Respuesta corta (no es "confirmado, no queda nada"):** (1) sin edge, el pass rate tiene un TECHO matemático fijado por las reglas, no por
+el producto/timeframe/instrumento; para Topstep 50K ese techo es 32.7% (31.1% con $50/día de comisiones) y hoy estamos en ~26%;
+(2) hay ~+5pp al alcance DENTRO de Topstep con un cambio de un solo parámetro (TP 40→32 ticks, ver abajo), que NO se había probado así;
+(3) el techo de otras firmas es más alto (Bulenox 45.5%, Tradeify 40.0%) y la geometría actual desperdicia 10–14pp ahí;
+(4) opciones/cripto/blockchain NO eluden el techo (misma matemática) y Topstep es "Futures-only"; (5) un edge real mueve poco el pass rate
+(+0.5 a +1pp por cada 1pp de WR sobre lo justo) — no es la palanca.
+
+### 1. Cota de juego justo (programación dinámica) — `pass_rate_ceiling_dp.py`
+Si el precio es una martingala (sin edge, sin costos), cualquier política de tamaño/brackets, cualquier estructura de payoff (futuros,
+opciones valuadas justo, cripto) tiene E[P&L]=0 (parada opcional); las reglas solo fijan barreras. El DP calcula la MÁXIMA probabilidad de pasar
+eligiendo cada día CUALQUIER distribución de P&L con media −costo y soporte ≥ −(distancia al piso) (= envolvente cóncava del valor siguiente).
+Estado: balance, máximo EOD (piso = máx_EOD − MLL, trabado en 0), mejor día (consistencia), día. Simplificaciones: trailing al cierre del día
+(Topstep: "updates at end of each trading day but monitored in real time", help.topstep.com/8284204), un día sin operar cuenta como día de
+trading, balance discretizado (h = MLL/40; convergencia: h=100 → 0.3268, h=50 → 0.3271, h=25 → 0.3271).
+**Validación contra respuestas conocidas:** 1 día sin consistencia D=2000/T=3000 → 0.4000 (=D/(D+T)); Bulenox D=2500/T=3000 → 0.4545;
+estático D=2000/T=4000 → 0.3333; Topstep 50K → 0.3271 = el cálculo a mano de 2 días de apuesta máxima (P1=2000/(2000+1650)·P2=2000/(2000+1350)).
+La cota anterior del log (exp(−1)·2/3 = 24.5%) es la de UNA política de tamaño constante; la cota sobre TODAS las políticas es 32.7%.
+
+| Estructura (50K salvo indicación) | Techo sin edge/costos |
+|---|---|
+| Topstep 50K (MLL $2,000 trailing→lock 0, target $3,000, consistencia 55%, mín 2 días) | **32.7%** (31.1% con $50/día de costo; 28.0% con $150/día) |
+| Topstep 100K (MLL $3,000, target $6,000) / 150K (MLL $4,500, target $9,000) | 26.2% / 26.2% (**el 50K es el mejor tamaño**) |
+| Tradeify 50K (EOD, sin consistencia, mín 1 día) | 40.0% |
+| Bulenox Opción 2 50K (MLL $2,500) | 45.5% |
+| MFFU Rapid 50K (consistencia 30%, mín 4 días) | 29.5% |
+| Estilo Lucid/TPT 50K (consistencia 50%, mín 5 días) | 32.7% (el mín de días está subestimado: el DP permite días ociosos) |
+| HIPOTÉTICA estática (sin trailing) D=2000/T=3000 | 40.0% (el trailing de Topstep cuesta ~7pp) |
+Parámetros Topstep verificados HOY en fuente propia: MLL 2000/3000/4500 (help.topstep.com/8284204, verbatim) y target 3000/6000/9000 con MLL (topstep.com/no-activation-fee).
+Parámetros de Tradeify/Bulenox/MFFU/TPT/Lucid: de fuentes de terceros en esta pasada (agregadores) o del log del 30-sep; el lock del piso EOD en
+$0 al llegar a +MLL es SUPUESTO por analogía con Topstep, NO verificado por firma.
+
+### 2. Evidencia con barras REALES de MES (mismo motor `g2_real_rules_scan.py`, 515 días, reproduce G2 = 26.0%)
+**(a) Cambio de un parámetro en Topstep 50K:** G2 con TP fijo distinto (nc=40, SL=100 que la liquidación recorta a 40 ticks), n=100k:
+TP=40 (actual) 25.8%; TP=33 31.1% (H1 33.5 / H2 28.9); TP=32 **32.8%** (H1 34.7 / H2 31.1); TP=31 33.7% pero es filo de navaja (2×neto = $3,002.4 vs target
+$3,000; con comisión >$1.25 por contrato deja de pasar en 2 TP); TP=30 24.2% (2 TP netos = $2,902 < $3,000, necesita un 3er TP). Mecanismo, no azar:
+TP más cerca ⇒ mayor probabilidad de tocar el TP antes de la liquidación (40/(40+32) vs 40/(40+40)) mientras 2 TP sigan sumando ≥ target. Efecto de
+una comisión 50% mayor sobre TP=33: sin cambio. Tamaño y SL (liquidación) quedan IGUALES a G2; no cambia el perfil de riesgo por trade (pérdida efectiva $2,000).
+**(b) Política "audaz adaptativa"** (G_hoy = min(target restante, tope por consistencia), nc o TP ajustado, SL = liquidación; `pass_rate_bold_real.py`)
+sobre la misma historia, barrido de ~40 configs, top por firma (comisión incluida en el TP bruto): Topstep 33.6% (H1 38.0 / H2 29.0; sesgo de selección),
+Tradeify 38.8% (H1 37.5 / H2 39.7), Bulenox **43.0%** (H1 42.1 / H2 42.9). Con tamaño CONSTANTE nc=40 (compatible con ToU Sec. 8): Topstep 33.6%, Tradeify 38.8%, Bulenox 42.8%
+— o sea, el tamaño dinámico no aporta; lo que aporta es dimensionar el TP al target restante. Frente al techo DP: Topstep 103% (dentro del ruido de una sola historia
+de 515 días, ±~2pp), Tradeify 97%, Bulenox 94%. Con geometría G2 sin modificar esas firmas daban 26.7% y 30.6% (log 30-sep).
+**(c) Ambigüedad de barras de 5 min:** el motor cuenta barras donde se tocan TP y SL como SL primero; la cota optimista (TP primero) sube 0.5–1.1pp
+(Topstep 32.5→33.0, Tradeify 33.8→34.5, Bulenox 37.1→38.2 sobre el barrido previo a la corrección de comisión). Resolver con datos de 1 min/tick: sube a lo sumo ~1pp. No es una palanca grande.
+**(d) Calidad = EV neto, no pass rate** (`pass_rate_vs_ev.py`, motor de flujo de caja `dd_cash/real_pnl.py`, Combine→XFA 50K, 20,000 trayectorias × 252 días, 2 semillas):
+G2 TP40: 1er Combine 25.7%, media neto/mes (m3–12) $523, P(neto 12m<0) 15%; **TP32: 32.4%, $614 (+17%), P(<0) 10%**; TP33: 31.0%, $598; nc25/TP50/SL40 (alt. del 24-sep): 30.7%, $445 (−15%).
+Las semillas dan diferencias <2%. ADVERTENCIA: la base G2 da $523/mes con los parquets de este checkout vs ~$386/mes en la corrida del 24-sep (log): no explicado
+(los parquets MES/MGC de los dos checkouts tienen md5 distinto; MGC usado = `mgc_5min_2y_corrected_window` de GLITCH-clean). Solo son comparables las diferencias RELATIVAS dentro de esta corrida.
+Subir el pass rate a veces sube el EV y a veces no (nc25/TP50/SL40 lo bajó): depende de pases por año (p / días por intento), no solo de p.
+Costo por pase Topstep 50K = 49/p + 149: p=26% $337; 30% $312; 32.7% $299; 40% $272; 50% $247 (fórmula simple sin renovaciones).
+
+### 3. Sensibilidad a edge real (DP, brackets de dos puntos, WR = justo + δ, $50/trade, h=MLL/40, 12 días)
+| δ (pp de WR sobre lo justo) | 0 | 0.5 | 1 | 2 | 3 | 5 | 8 |
+|---|---|---|---|---|---|---|---|
+| Topstep 50K | 31.1% | 31.7 | 32.2 | 33.4 | 37.9 | 48.3 | 66.5 |
+| Topstep 150K | 26.2% | 29.0 | 32.0 | 38.1 | 44.5 | 57.6 | 73.1 |
+| Tradeify 50K | 38.1% | 38.8 | 39.5 | 41.1 | 47.1 | 58.9 | 74.2 |
+| Bulenox 50K | 43.0% | 43.7 | 44.4 | 45.8 | 49.7 | 61.1 | 76.5 |
+(los escalones entre 2 y 3pp en Topstep 50K incluyen efectos de discretización/umbral; tratar como ±2pp.) Un edge de ≤1pp de WR por trade — el orden de magnitud de todo lo que hemos
+medido y que NO sobrevivió replicación (712+ pruebas, ninguno con N>200; MGC 143/143: EV/trade +$162, t=1.77, p=0.077, sin corrección por 196 configs) — vale ≤ +1pp de pass rate. Se necesitan
+≥3–5pp de WR sostenidos para llegar a 40–50%, magnitud implausible en micros líquidos tras costos.
+
+### 4. Opciones (IBKR), cripto, "blockchain que capea pérdidas" — resultado del análisis
+- **Opciones valuadas justo no cambian el techo:** el DP del modo general ya permite CUALQUIER distribución de P&L diario con media −costo (eso es todo lo que una cartera de opciones
+  valuadas con precio de riesgo neutral puede fabricar); da 32.7% (Topstep) / 45.5% (Bulenox). Comprar calls = pérdida acotada al premio + cola derecha (WR bajo, RR alto); vender spreads de crédito = WR alto, pérdida grande
+  (justo la forma de G2: WR ~70%, RR 0.4). Son reempaquetados de la misma geometría. Lo que SÍ cambia en la práctica: comprador paga prima de varianza + bid/ask (deriva negativa); vendedor cobra la prima de varianza (deriva
+  positiva, riesgo de cola). Esa prima es un posible edge estructural, NO medido por nosotros: no tenemos datos de cadenas de opciones (solo barras de futuros) → no se puede probar con lo que hay.
+- **Topstep no permite opciones:** help.topstep.com/8284206: "Topstep is a Futures-only program" (verbatim). Es decir, opciones solo existirían en IBKR con capital propio, donde NO hay Combine ni pass rate: el riesgo es capital propio.
+  El Combine ya es una opción vendida por la firma: tarifa $49 compra ~$2,000 de capacidad de pérdida (≈40:1) sobre un juego justo, más payouts 90/10 sin clawback. Con premios de opciones en IBKR, el riesgo del trader = el premio entero (1:1).
+  Ese apalancamiento por tarifa es la ventaja estructural real (el EV positivo del pipeline viene de ahí, no del pass rate).
+- **Cripto:** Topstep SÍ permite MBT y MET (help.topstep.com/8284206, con asterisco de restricciones de conducta). Nuestro dataset de MBT tiene hueco de 13 meses (log 25-ago); MET nunca se descargó. No hay mecanismo que cambie la
+  matemática: mayor volatilidad solo cambia en cuántos días se alcanzan los brackets, no la probabilidad (el producto no movió el resultado en 8 productos de 4 familias: 48–54 combines/año antes de la corrección de reglas, log 25-ago).
+- **"Blockchain que capea las pérdidas":** no verificado con fuentes en esta sesión (conocimiento general, marcar como tal): los perps on-chain liquidan al llegar al margen de mantenimiento (con riesgo de deuda mala/ADL), no limitan pérdidas;
+  las opciones cripto (Deribit/DeFi) y los contratos binarios tienen pérdida acotada pero precio justo ⇒ misma martingala. No hay un "seguro on-chain" gratuito: cualquier pérdida acotada se paga con valor esperado. No se encontró ninguna estructura que evada el teorema.
+- **Excluido por ToS (no recomendado, no simulado):** cobertura entre cuentas/firmas (largo en una, corto en otra) para garantizar un pase; ToU de Topstep Sec. 16 (una sola cuenta personal; múltiples cuentas ⇒ suspensión) y "account stacking". Riesgo de pérdida de payouts.
+
+### 5. Estado de exploración (auditado contra este log)
+| Dimensión | Cubierto | NO cubierto / pendiente |
+|---|---|---|
+| Productos | MES, MNQ, MGC, M2K, MCL, M6E, ZN, ZC (geometría y/o Cerebro 2); MBT excluido por hueco de datos | MET, MYM, M6B/M6A, MNG, MHG, SIL, otros micros permitidos. Esperable: igual (el producto no mueve el techo); solo cambia velocidad y comisión/tick |
+| Timeframes | 5 min intradía; horas de entrada 7:13/8:43/9:45; holds de 1–10 días (Cerebro 2) | 1 min/tick (≤+1pp, ver 2c); historia >2 años (Massive Developer $79/mes da 5 años; el usuario lo pausó el 4-sep) |
+| Geometrías | Grid nc×TP×SL fijos (1,080 + 767 configs) | **TP dimensionado al target restante / política audaz (esta sección): nunca probado; es la palanca de +5pp** |
+| Reglas / tamaño de cuenta | 50K Topstep, 100K/150K solo por parámetros | El techo DP dice que 100K/150K (26.2%) son peores que 50K (32.7%): no vale la pena |
+| Plataformas | Apex (descartada: automatización prohibida), Tradeify, Bulenox, MFFU, Upcomers, FTMO, IUX | **Bulenox/Tradeify con geometría óptima (esta sección: 43.0%/38.8% sobre datos, vs 30.6%/26.7% con G2)**; Take Profit Trader, Lucid, Elite Trader Funding (estática), Alpha Futures, FundedNext Futures: solo vistos en agregadores, sin política de automatización verificada |
+| Edge | 712+ pruebas, ninguno N>200 | Prima de varianza (necesita datos de opciones); eventos (FOMC/CPI: N muy pequeño en 2 años); order flow (necesita tick/L2, ToU lo restringe) |
+| Costos | Fees Topstep (corregidos 24-sep) | Fee "No Activation Fee": página oficial hoy dice $85/$129/$199 (50K/100K/150K) vs $95/$149/$229 en el log del 24-sep — discrepancia sin explicar, verificar |
+
+### 6. Limitaciones y qué NO está verificado
+- Una sola historia de 515 días; el motor es de 5 min con SL primero en barras ambiguas; sin slippage de liquidación; los resultados "reales" son in-sample (barrido ~40 configs; el TP=32 tiene un mecanismo, pero el valor exacto no es robusto: usar 28–31% como expectativa realista, no 32.8%).
+- Los parámetros de Tradeify/Bulenox (DLL suave, tope de 40 micros, lock del piso, "Contratos EOD: 7" de Bulenox) vienen de terceros o del log; no verificados con fuente propia. La política audaz usa el MLL/DLL como stop (práctica que Apex prohíbe nombrándola; Topstep no la nombra pero su RTP/ToU son discrecionales).
+- El DP supone días ociosos válidos como día de trading y una martingala continua (sin gaps ni slippage).
+- El motor de flujo de caja no se reconcilió con la corrida del 24-sep (ver 2d).
+- Cualquier cambio de TP/tamaño toca lógica de capital: CLAUDE.md regla 4 → solo propuesta; la aprueba un humano. No se tocó `geometry_scheduler.py`, `main`, ni el Pi.
