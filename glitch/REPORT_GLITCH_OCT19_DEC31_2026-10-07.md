@@ -44,7 +44,7 @@ La caja acumulada **mediana** no cruza a positivo antes del 31-dic en ningún es
 | Pasa el Combine "mediados de nov" (central) | Mediana **23-oct** si reinicias tras cada fallo (p90 3-nov); con 3.9 intentos de media |
 | Primer payout "mediados de dic" (central) | Mediana **6-nov** entre quienes cobran (p90 18-nov), pero solo cobra ~31–39% en el primer ciclo |
 | Monto $500–$2,000, tope $5,000 | Mediana ~$940; máximo $1,800 al trader ($2,000 bruto); el tope de $5,000 no aplica a la 50K |
-| "1 de cada 3 sin payout al 31-dic" | **61–69% sin payout** en un solo ciclo; 23–39% si recompras Combines (según el ajuste) |
+| "1 de cada 3 sin payout al 31-dic" | **61–69% sin payout** en un solo ciclo; 23% si recompras Combines tras cada quiebre de la XFA (cifra sin ajuste; con el ajuste sería mayor, no se calculó) |
 | Neto al 31-dic "cerca de cero" | Mediana −$208 a −$328; media entre −$99 y +$310 según el escenario. Coincide en el orden de magnitud |
 | Cruce a positivo "día 49" | No cruza antes del 31-dic en la mediana de ningún escenario |
 
