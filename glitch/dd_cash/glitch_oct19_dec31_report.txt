@@ -1,0 +1,130 @@
+Calendario: 52 dias habiles del 2026-10-19 al 2026-12-31 (sin 26-nov ni 25-dic); dias sin operar por cierre anticipado: ['27-Nov', '24-Dec']
+Primer dia del Combine (G2 nc=40): P(TP +$2,000) = 49.3% | P(liquidacion -$2,000, Combine perdido) = 48.2% | P(ninguno, flatten 14:30) = 2.5%   [515 dias de MES, barras de 5 min, SL primero si la barra toca ambos]
+
+### A. G2 tal cual (nc40/TP40/SL100), handoff MGC inmediato, CICLO REPETIDO (si la XFA quiebra se recompra un Combine)
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 12.1 | p50 12 | p90 19
+  P(>=1 payout SOLICITADO) al: 30-oct 2% | 13-nov 34% | 30-nov 51% | 15-dic 67% | 31-dic 77%
+  Sin ningun payout al 31-dic: 23%
+  fecha del 1er payout (entre quienes cobran): p10 03-Nov | mediana 18-Nov | p90 18-Dec
+  monto del 1er payout al trader (ya 90%): p10 $275 | p50 $947 | p90 $1,705 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $1,150 | p90 $3,954 | media $1,590 | n pagos: media 1.43
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $1,005 | media $1,423
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $988 | p90 $1,333 | media $988 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-1,508 | p50 $-208 | p90 $2,734 | media $257 | P(neto<0)=55%
+  capital maximo hundido en algun momento (colchon): p50 $823 | p90 $1,508 | p95 $1,606 | p99 $1,754
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-457 | media $-99 | P(neto<0)=63% ; payouts solicitados media $1,192 ; (P(>=1 payout) con ciclos repetidos no se ajusta de forma simple)
+  caja acumulada MEDIANA al: 30-oct $-354 | 13-nov $-504 | 30-nov $-662 | 15-dic $-381 | 31-dic $-208 | no cruza a >=0 antes del 31-dic
+
+### A1. G2 tal cual, handoff inmediato, SOLO EL PRIMER CICLO (si la XFA quiebra no se recompra)
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 3.9 | p50 3 | p90 8
+  P(>=1 payout SOLICITADO) al: 30-oct 2% | 13-nov 32% | 30-nov 38% | 15-dic 39% | 31-dic 39%
+  Sin ningun payout al 31-dic: 61%
+  fecha del 1er payout (entre quienes cobran): p10 02-Nov | mediana 06-Nov | p90 18-Nov
+  monto del 1er payout al trader (ya 90%): p10 $268 | p50 $941 | p90 $1,702 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $0 | p90 $2,512 | media $746 | n pagos: media 0.66
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $0 | media $727
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $247 | p90 $492 | media $293 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-622 | p50 $-328 | p90 $2,022 | media $256 | P(neto<0)=67%
+  capital maximo hundido en algun momento (colchon): p50 $376 | p90 $670 | p95 $768 | p99 $1,062
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-328 | media $74 | P(neto<0)=70% ; payouts solicitados media $559 ; P(>=1 payout) aprox. 31%
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-306 | 30-nov $-268 | 15-dic $-268 | 31-dic $-328 | no cruza a >=0 antes del 31-dic
+
+### B. G2 tal cual, handoff del MGC listo el 2-nov, ciclo repetido
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 11.3 | p50 11 | p90 18
+  P(>=1 payout SOLICITADO) al: 30-oct 0% | 13-nov 25% | 30-nov 44% | 15-dic 62% | 31-dic 73%
+  Sin ningun payout al 31-dic: 27%
+  fecha del 1er payout (entre quienes cobran): p10 11-Nov | mediana 20-Nov | p90 21-Dec
+  monto del 1er payout al trader (ya 90%): p10 $282 | p50 $949 | p90 $1,699 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $1,012 | p90 $3,600 | media $1,434 | n pagos: media 1.30
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $866 | media $1,269
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $937 | p90 $1,282 | media $919 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-1,412 | p50 $-274 | p90 $2,505 | media $172 | P(neto<0)=57%
+  capital maximo hundido en algun momento (colchon): p50 $820 | p90 $1,412 | p95 $1,556 | p99 $1,706
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-488 | media $-146 | P(neto<0)=65% ; payouts solicitados media $1,075 ; (P(>=1 payout) con ciclos repetidos no se ajusta de forma simple)
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-406 | 30-nov $-613 | 15-dic $-498 | 31-dic $-274 | no cruza a >=0 antes del 31-dic
+
+### B1. G2 tal cual, handoff del MGC listo el 2-nov, solo el primer ciclo
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 3.9 | p50 3 | p90 8
+  P(>=1 payout SOLICITADO) al: 30-oct 0% | 13-nov 25% | 30-nov 39% | 15-dic 40% | 31-dic 40%
+  Sin ningun payout al 31-dic: 60%
+  fecha del 1er payout (entre quienes cobran): p10 10-Nov | mediana 13-Nov | p90 19-Nov
+  monto del 1er payout al trader (ya 90%): p10 $281 | p50 $947 | p90 $1,696 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $0 | p90 $2,587 | media $744 | n pagos: media 0.66
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $0 | media $721
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $247 | p90 $492 | media $293 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-622 | p50 $-328 | p90 $2,079 | media $250 | P(neto<0)=67%
+  capital maximo hundido en algun momento (colchon): p50 $376 | p90 $670 | p95 $768 | p99 $1,062
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-328 | media $70 | P(neto<0)=69% ; payouts solicitados media $558 ; P(>=1 payout) aprox. 32%
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-306 | 30-nov $-268 | 15-dic $-268 | 31-dic $-328 | no cruza a >=0 antes del 31-dic
+
+### C. G2 tal cual, handoff del MGC listo el 1-dic, ciclo repetido
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 7.6 | p50 7 | p90 13
+  P(>=1 payout SOLICITADO) al: 30-oct 0% | 13-nov 0% | 30-nov 0% | 15-dic 34% | 31-dic 50%
+  Sin ningun payout al 31-dic: 50%
+  fecha del 1er payout (entre quienes cobran): p10 09-Dec | mediana 14-Dec | p90 29-Dec
+  monto del 1er payout al trader (ya 90%): p10 $305 | p50 $969 | p90 $1,717 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $24 | p90 $2,145 | media $694 | n pagos: media 0.65
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $0 | media $533
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $592 | p90 $888 | media $600 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-1,064 | p50 $-672 | p90 $1,059 | media $-245 | P(neto<0)=70%
+  capital maximo hundido en algun momento (colchon): p50 $722 | p90 $1,064 | p95 $1,164 | p99 $1,456
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-672 | media $-379 | P(neto<0)=75% ; payouts solicitados media $520 ; (P(>=1 payout) con ciclos repetidos no se ajusta de forma simple)
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-306 | 30-nov $-366 | 15-dic $-513 | 31-dic $-672 | no cruza a >=0 antes del 31-dic
+
+### C1. G2 tal cual, handoff del MGC listo el 1-dic, solo el primer ciclo
+  P(Combine ya pasado) al: 30-oct 86% | 13-nov 98% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 23-Oct | p90 03-Nov
+  Combines comprados (intentos) hasta el 31-dic: media 3.9 | p50 3 | p90 8
+  P(>=1 payout SOLICITADO) al: 30-oct 0% | 13-nov 0% | 30-nov 0% | 15-dic 34% | 31-dic 40%
+  Sin ningun payout al 31-dic: 60%
+  fecha del 1er payout (entre quienes cobran): p10 09-Dec | mediana 11-Dec | p90 16-Dec
+  monto del 1er payout al trader (ya 90%): p10 $287 | p50 $941 | p90 $1,698 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $0 | p90 $2,103 | media $576 | n pagos: media 0.54
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $0 | media $493
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $247 | p90 $492 | media $293 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-622 | p50 $-328 | p90 $1,178 | media $22 | P(neto<0)=68%
+  capital maximo hundido en algun momento (colchon): p50 $426 | p90 $670 | p95 $818 | p99 $1,062
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-328 | media $-101 | P(neto<0)=71% ; payouts solicitados media $432 ; P(>=1 payout) aprox. 32%
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-306 | 30-nov $-366 | 15-dic $-366 | 31-dic $-328 | no cruza a >=0 antes del 31-dic
+
+### D. TP 32 en vez de 40 (propuesta), handoff inmediato, ciclo repetido
+  P(Combine ya pasado) al: 30-oct 92% | 13-nov 99% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 22-Oct | p90 30-Oct
+  Combines comprados (intentos) hasta el 31-dic: media 10.1 | p50 10 | p90 16
+  P(>=1 payout SOLICITADO) al: 30-oct 2% | 13-nov 37% | 30-nov 55% | 15-dic 71% | 31-dic 80%
+  Sin ningun payout al 31-dic: 20%
+  fecha del 1er payout (entre quienes cobran): p10 03-Nov | mediana 17-Nov | p90 17-Dec
+  monto del 1er payout al trader (ya 90%): p10 $277 | p50 $949 | p90 $1,706 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $1,297 | p90 $4,160 | media $1,721 | n pagos: media 1.55
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $1,136 | media $1,542
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $939 | p90 $1,280 | media $924 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-1,410 | p50 $-7 | p90 $2,991 | media $440 | P(neto<0)=50%
+  capital maximo hundido en algun momento (colchon): p50 $760 | p90 $1,410 | p95 $1,510 | p99 $1,658
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-294 | media $54 | P(neto<0)=59% ; payouts solicitados media $1,290 ; (P(>=1 payout) con ciclos repetidos no se ajusta de forma simple)
+  caja acumulada MEDIANA al: 30-oct $-306 | 13-nov $-502 | 30-nov $-564 | 15-dic $-212 | 31-dic $-7 | no cruza a >=0 antes del 31-dic
+
+### D1. TP 32, handoff inmediato, solo el primer ciclo
+  P(Combine ya pasado) al: 30-oct 92% | 13-nov 99% | 30-nov 100% | 15-dic 100% | 31-dic 100%
+  fecha del pase (entre quienes pasan antes del 31-dic): p10 20-Oct | mediana 22-Oct | p90 30-Oct
+  Combines comprados (intentos) hasta el 31-dic: media 3.1 | p50 2 | p90 6
+  P(>=1 payout SOLICITADO) al: 30-oct 2% | 13-nov 35% | 30-nov 39% | 15-dic 39% | 31-dic 39%
+  Sin ningun payout al 31-dic: 61%
+  fecha del 1er payout (entre quienes cobran): p10 02-Nov | mediana 06-Nov | p90 16-Nov
+  monto del 1er payout al trader (ya 90%): p10 $269 | p50 $942 | p90 $1,695 | max $1,800
+  payouts al trader solicitados hasta 31-dic: p10 $0 | p50 $0 | p90 $2,525 | media $755 | n pagos: media 0.67
+  ... de los cuales COBRADOS (5 dias de demora) al 31-dic: p50 $0 | media $739
+  fees Topstep hasta 31-dic (Combine + resets + activacion): p50 $198 | p90 $394 | media $251 ; costos operativos $178
+  NETO en caja al 31-dic (cobrado - fees - ops): p10 $-524 | p50 $-328 | p90 $2,094 | media $310 | P(neto<0)=66%
+  capital maximo hundido en algun momento (colchon): p50 $376 | p90 $572 | p95 $670 | p99 $866
+  [AJUSTADO -25% a payouts por liquidacion en tiempo real de la XFA] NETO al 31-dic: p50 $-328 | media $125 | P(neto<0)=69% ; payouts solicitados media $567 ; P(>=1 payout) aprox. 32%
+  caja acumulada MEDIANA al: 30-oct $-258 | 13-nov $-258 | 30-nov $-268 | 15-dic $-268 | 31-dic $-328 | no cruza a >=0 antes del 31-dic
