@@ -1,0 +1,39 @@
+BUSQUEDA XFA — Bulenox Momentum Master 50K — payout esperado por cuenta (al trader, 90%), vida hasta 126 dias, 3000 trayectorias por celda
+
+SIN RESTRICCIONES DE CONDUCTA
+  global: mejor en H1 = MGC 7:13 G=900 rho=0.2 q=0.35 (H1 $4,000 -> OOS H2 $2,780) | mejor en H2 = MES 13:15 G=250 rho=1.0 q=0.2 (H2 $2,881 -> OOS H1 $410) | OOS promedio $1,595
+  M2K: mejor H1 -> OOS H2 $330 (11:30 G=1300 rho=1.0 q=0.5) | mejor H2 -> OOS H1 $624 (9:15 G=900 rho=1.0 q=0.1) | OOS prom $477
+  M6E: mejor H1 -> OOS H2 $404 (9:45 G=250 rho=1.0 q=0.5) | mejor H2 -> OOS H1 $1,245 (9:45 G=900 rho=0.75 q=0.1) | OOS prom $825
+  MCL: mejor H1 -> OOS H2 $469 (9:45 G=150 rho=1.0 q=0.2) | mejor H2 -> OOS H1 $1,058 (11:30 G=250 rho=1.0 q=0.5) | OOS prom $763
+  MES: mejor H1 -> OOS H2 $1,120 (12:30 G=900 rho=1.0 q=0.5) | mejor H2 -> OOS H1 $410 (13:15 G=250 rho=1.0 q=0.2) | OOS prom $765
+  MGC: mejor H1 -> OOS H2 $2,780 (7:13 G=900 rho=0.2 q=0.35) | mejor H2 -> OOS H1 $3,076 (7:13 G=600 rho=0.2 q=0.5) | OOS prom $2,928
+  MNQ: mejor H1 -> OOS H2 $513 (12:30 G=250 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $1,504 (8:45 G=250 rho=1.0 q=0.35) | OOS prom $1,009
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MGC 7:13 G=900 rho=0.2 q=0.35 tp=167: H1 $4,000 / H2 $2,780  P(>=1 pago) 64%/54%  vida 77/70 dias
+     MGC 7:13 G=1300 rho=0.2 q=0.35 tp=167: H1 $3,723 / H2 $2,589  P(>=1 pago) 57%/46%  vida 69/61 dias
+     MGC 8:15 G=1300 rho=0.2 q=0.2 tp=86: H1 $3,405 / H2 $2,804  P(>=1 pago) 44%/49%  vida 52/59 dias
+     MGC 7:13 G=900 rho=0.2 q=0.5 tp=238: H1 $3,195 / H2 $2,801  P(>=1 pago) 60%/54%  vida 77/71 dias
+     MGC 7:13 G=600 rho=0.2 q=0.5 tp=238: H1 $3,076 / H2 $2,822  P(>=1 pago) 62%/56%  vida 87/80 dias
+     MGC 7:13 G=600 rho=0.2 q=0.35 tp=167: H1 $3,209 / H2 $2,439  P(>=1 pago) 61%/52%  vida 77/77 dias
+     MGC 8:15 G=600 rho=0.2 q=0.2 tp=86: H1 $3,145 / H2 $2,289  P(>=1 pago) 60%/50%  vida 63/70 dias
+     MGC 8:15 G=900 rho=0.2 q=0.2 tp=86: H1 $2,927 / H2 $2,231  P(>=1 pago) 51%/48%  vida 54/59 dias
+  mediana del grid: H1 $576 / H2 $389; correlacion H1-H2 del payout entre estructuras: 0.42
+
+CONDUCTA-COMPATIBLE (rho<=0.5 y G<=400)
+  global: mejor en H1 = MNQ 12:30 G=250 rho=0.5 q=0.35 (H1 $3,062 -> OOS H2 $513) | mejor en H2 = MES 13:15 G=150 rho=0.35 q=0.2 (H2 $2,866 -> OOS H1 $152) | OOS promedio $332
+  M2K: mejor H1 -> OOS H2 $140 (11:30 G=400 rho=0.2 q=0.5) | mejor H2 -> OOS H1 $350 (9:15 G=400 rho=0.2 q=0.2) | OOS prom $245
+  M6E: mejor H1 -> OOS H2 $374 (9:45 G=250 rho=0.2 q=0.2) | mejor H2 -> OOS H1 $758 (9:45 G=400 rho=0.2 q=0.5) | OOS prom $566
+  MCL: mejor H1 -> OOS H2 $457 (11:30 G=400 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $1,047 (11:30 G=250 rho=0.5 q=0.5) | OOS prom $752
+  MES: mejor H1 -> OOS H2 $1,013 (9:15 G=400 rho=0.35 q=0.5) | mejor H2 -> OOS H1 $152 (13:15 G=150 rho=0.35 q=0.2) | OOS prom $582
+  MGC: mejor H1 -> OOS H2 $1,662 (8:15 G=400 rho=0.2 q=0.2) | mejor H2 -> OOS H1 $2,202 (7:13 G=400 rho=0.2 q=0.35) | OOS prom $1,932
+  MNQ: mejor H1 -> OOS H2 $513 (12:30 G=250 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $1,438 (8:45 G=250 rho=0.5 q=0.35) | OOS prom $976
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MGC 8:15 G=400 rho=0.2 q=0.2 tp=86: H1 $2,800 / H2 $1,662  P(>=1 pago) 61%/45%  vida 79/83 dias
+     MGC 7:13 G=400 rho=0.2 q=0.35 tp=167: H1 $2,202 / H2 $2,184  P(>=1 pago) 57%/54%  vida 102/93 dias
+     MGC 7:13 G=400 rho=0.2 q=0.5 tp=238: H1 $2,202 / H2 $2,184  P(>=1 pago) 57%/54%  vida 102/93 dias
+     MGC 7:13 G=400 rho=0.35 q=0.35 tp=167: H1 $1,816 / H2 $1,948  P(>=1 pago) 47%/47%  vida 71/55 dias
+     MGC 7:13 G=400 rho=0.35 q=0.5 tp=238: H1 $1,816 / H2 $1,948  P(>=1 pago) 47%/47%  vida 71/55 dias
+     MNQ 8:45 G=250 rho=0.5 q=0.35 tp=359: H1 $1,438 / H2 $2,297  P(>=1 pago) 47%/60%  vida 87/85 dias
+     MNQ 8:45 G=250 rho=0.5 q=0.5 tp=513: H1 $1,438 / H2 $2,297  P(>=1 pago) 47%/60%  vida 87/85 dias
+     MNQ 12:30 G=250 rho=0.35 q=0.35 tp=158: H1 $3,034 / H2 $557  P(>=1 pago) 68%/21%  vida 80/54 dias
+  mediana del grid: H1 $404 / H2 $283; correlacion H1-H2 del payout entre estructuras: 0.42

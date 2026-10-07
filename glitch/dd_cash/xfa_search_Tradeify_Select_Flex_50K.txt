@@ -1,0 +1,31 @@
+BUSQUEDA XFA — Tradeify Select Flex 50K — payout esperado por cuenta (al trader, 90%), vida hasta 126 dias, 3000 trayectorias por celda
+
+SIN RESTRICCIONES DE CONDUCTA
+  global: mejor en H1 = MNQ 12:30 G=1300 rho=1.0 q=0.35 (H1 $2,235 -> OOS H2 $753) | mejor en H2 = MNQ 8:45 G=1300 rho=1.0 q=0.5 (H2 $1,797 -> OOS H1 $1,337) | OOS promedio $1,045
+  MES: mejor H1 -> OOS H2 $677 (12:30 G=1300 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $560 (13:15 G=900 rho=1.0 q=0.1) | OOS prom $619
+  MNQ: mejor H1 -> OOS H2 $753 (12:30 G=1300 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $1,337 (8:45 G=1300 rho=1.0 q=0.5) | OOS prom $1,045
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MNQ 8:45 G=1300 rho=1.0 q=0.5 tp=513: H1 $1,337 / H2 $1,797  P(>=1 pago) 26%/26%  vida 9/10 dias
+     MNQ 12:30 G=1300 rho=1.0 q=0.35 tp=158: H1 $2,235 / H2 $753  P(>=1 pago) 27%/16%  vida 11/5 dias
+     MNQ 8:45 G=1300 rho=0.75 q=0.5 tp=513: H1 $1,205 / H2 $1,688  P(>=1 pago) 25%/29%  vida 11/13 dias
+     MNQ 8:45 G=1300 rho=0.5 q=0.5 tp=513: H1 $1,076 / H2 $1,555  P(>=1 pago) 29%/32%  vida 15/17 dias
+     MNQ 12:30 G=1300 rho=0.75 q=0.35 tp=158: H1 $1,978 / H2 $652  P(>=1 pago) 27%/16%  vida 13/8 dias
+     MNQ 12:30 G=900 rho=1.0 q=0.35 tp=158: H1 $1,926 / H2 $670  P(>=1 pago) 37%/23%  vida 10/5 dias
+     MES 8:45 G=1300 rho=1.0 q=0.5 tp=104: H1 $1,311 / H2 $1,273  P(>=1 pago) 25%/25%  vida 8/8 dias
+     MES 12:30 G=1300 rho=1.0 q=0.1 tp=9: H1 $1,604 / H2 $954  P(>=1 pago) 22%/17%  vida 8/6 dias
+  mediana del grid: H1 $427 / H2 $410; correlacion H1-H2 del payout entre estructuras: 0.52
+
+CONDUCTA-COMPATIBLE (rho<=0.5 y G<=400)
+  global: mejor en H1 = MNQ 12:30 G=400 rho=0.5 q=0.35 (H1 $969 -> OOS H2 $429) | mejor en H2 = MNQ 8:45 G=400 rho=0.5 q=0.35 (H2 $849 -> OOS H1 $680) | OOS promedio $555
+  MES: mejor H1 -> OOS H2 $547 (9:15 G=400 rho=0.5 q=0.5) | mejor H2 -> OOS H1 $704 (8:45 G=400 rho=0.5 q=0.5) | OOS prom $625
+  MNQ: mejor H1 -> OOS H2 $429 (12:30 G=400 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $680 (8:45 G=400 rho=0.5 q=0.35) | OOS prom $555
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MNQ 8:45 G=400 rho=0.5 q=0.35 tp=359: H1 $680 / H2 $849  P(>=1 pago) 65%/69%  vida 21/21 dias
+     MNQ 8:45 G=400 rho=0.5 q=0.5 tp=513: H1 $680 / H2 $849  P(>=1 pago) 65%/69%  vida 21/21 dias
+     MES 8:45 G=400 rho=0.5 q=0.5 tp=104: H1 $704 / H2 $794  P(>=1 pago) 69%/71%  vida 23/23 dias
+     MES 9:15 G=400 rho=0.5 q=0.5 tp=92: H1 $919 / H2 $547  P(>=1 pago) 75%/62%  vida 26/22 dias
+     MES 9:15 G=400 rho=0.35 q=0.5 tp=92: H1 $916 / H2 $521  P(>=1 pago) 77%/63%  vida 32/28 dias
+     MES 8:45 G=400 rho=0.5 q=0.35 tp=72: H1 $684 / H2 $739  P(>=1 pago) 65%/66%  vida 20/20 dias
+     MES 8:45 G=400 rho=0.35 q=0.5 tp=104: H1 $665 / H2 $754  P(>=1 pago) 70%/74%  vida 28/28 dias
+     MNQ 12:30 G=400 rho=0.5 q=0.35 tp=158: H1 $969 / H2 $429  P(>=1 pago) 72%/52%  vida 20/16 dias
+  mediana del grid: H1 $300 / H2 $294; correlacion H1-H2 del payout entre estructuras: 0.55

@@ -1,0 +1,39 @@
+BUSQUEDA XFA — Topstep XFA 50K — slip del stop=1 — payout esperado por cuenta (al trader, 90%), vida hasta 126 dias, 3000 trayectorias por celda
+
+SIN RESTRICCIONES DE CONDUCTA
+  global: mejor en H1 = MNQ 12:30 G=1300 rho=1.0 q=0.35 (H1 $2,428 -> OOS H2 $761) | mejor en H2 = MES 13:15 G=900 rho=1.0 q=0.1 (H2 $2,208 -> OOS H1 $612) | OOS promedio $686
+  M2K: mejor H1 -> OOS H2 $452 (11:30 G=1300 rho=1.0 q=0.5) | mejor H2 -> OOS H1 $608 (9:15 G=400 rho=1.0 q=0.1) | OOS prom $530
+  M6E: mejor H1 -> OOS H2 $162 (11:30 G=1300 rho=1.0 q=0.1) | mejor H2 -> OOS H1 $617 (9:45 G=400 rho=1.0 q=0.35) | OOS prom $389
+  MCL: mejor H1 -> OOS H2 $709 (11:30 G=900 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $1,085 (11:30 G=1300 rho=1.0 q=0.5) | OOS prom $897
+  MES: mejor H1 -> OOS H2 $717 (12:30 G=1300 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $612 (13:15 G=900 rho=1.0 q=0.1) | OOS prom $664
+  MGC: mejor H1 -> OOS H2 $1,292 (7:13 G=1300 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $1,392 (8:15 G=1300 rho=1.0 q=0.35) | OOS prom $1,342
+  MNQ: mejor H1 -> OOS H2 $761 (12:30 G=1300 rho=1.0 q=0.35) | mejor H2 -> OOS H1 $1,348 (8:45 G=1300 rho=1.0 q=0.5) | OOS prom $1,054
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MNQ 12:30 G=1300 rho=1.0 q=0.35 tp=158: H1 $2,428 / H2 $761  P(>=1 pago) 27%/17%  vida 12/5 dias
+     MNQ 8:45 G=1300 rho=1.0 q=0.5 tp=513: H1 $1,348 / H2 $1,794  P(>=1 pago) 26%/26%  vida 9/10 dias
+     MNQ 12:30 G=900 rho=1.0 q=0.35 tp=158: H1 $2,286 / H2 $723  P(>=1 pago) 39%/23%  vida 12/6 dias
+     MES 13:15 G=900 rho=1.0 q=0.1 tp=7: H1 $612 / H2 $2,208  P(>=1 pago) 23%/34%  vida 6/11 dias
+     MES 13:15 G=900 rho=1.0 q=0.2 tp=15: H1 $612 / H2 $2,208  P(>=1 pago) 23%/34%  vida 6/11 dias
+     MES 8:45 G=1300 rho=1.0 q=0.5 tp=104: H1 $1,497 / H2 $1,323  P(>=1 pago) 27%/26%  vida 9/8 dias
+     MES 12:30 G=1300 rho=1.0 q=0.1 tp=9: H1 $1,724 / H2 $1,051  P(>=1 pago) 23%/18%  vida 9/7 dias
+     MES 12:30 G=1300 rho=1.0 q=0.2 tp=19: H1 $1,724 / H2 $1,051  P(>=1 pago) 23%/18%  vida 9/7 dias
+  mediana del grid: H1 $286 / H2 $222; correlacion H1-H2 del payout entre estructuras: 0.66
+
+CONDUCTA-COMPATIBLE (rho<=0.5 y G<=400)
+  global: mejor en H1 = MES 9:15 G=400 rho=0.5 q=0.5 (H1 $781 -> OOS H2 $454) | mejor en H2 = MNQ 8:45 G=400 rho=0.5 q=0.35 (H2 $619 -> OOS H1 $549) | OOS promedio $502
+  M2K: mejor H1 -> OOS H2 $254 (11:30 G=400 rho=0.5 q=0.5) | mejor H2 -> OOS H1 $443 (8:45 G=400 rho=0.5 q=0.2) | OOS prom $349
+  M6E: mejor H1 -> OOS H2 $231 (9:15 G=400 rho=0.5 q=0.5) | mejor H2 -> OOS H1 $370 (9:45 G=400 rho=0.5 q=0.35) | OOS prom $300
+  MCL: mejor H1 -> OOS H2 $271 (11:30 G=400 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $480 (11:30 G=400 rho=0.5 q=0.5) | OOS prom $375
+  MES: mejor H1 -> OOS H2 $454 (9:15 G=400 rho=0.5 q=0.5) | mejor H2 -> OOS H1 $614 (8:45 G=400 rho=0.5 q=0.5) | OOS prom $534
+  MGC: mejor H1 -> OOS H2 $579 (7:13 G=400 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $532 (7:13 G=400 rho=0.5 q=0.35) | OOS prom $556
+  MNQ: mejor H1 -> OOS H2 $340 (12:30 G=400 rho=0.5 q=0.35) | mejor H2 -> OOS H1 $549 (8:45 G=400 rho=0.5 q=0.35) | OOS prom $445
+  top-8 por promedio de H1 y H2 (estructuras consistentes en ambas mitades):
+     MES 9:15 G=400 rho=0.5 q=0.5 tp=92: H1 $781 / H2 $454  P(>=1 pago) 75%/63%  vida 19/15 dias
+     MES 8:45 G=400 rho=0.5 q=0.5 tp=104: H1 $614 / H2 $598  P(>=1 pago) 68%/68%  vida 16/15 dias
+     MNQ 8:45 G=400 rho=0.5 q=0.35 tp=359: H1 $549 / H2 $619  P(>=1 pago) 64%/64%  vida 14/12 dias
+     MNQ 8:45 G=400 rho=0.5 q=0.5 tp=513: H1 $549 / H2 $619  P(>=1 pago) 64%/64%  vida 14/12 dias
+     MES 8:45 G=400 rho=0.5 q=0.35 tp=72: H1 $553 / H2 $567  P(>=1 pago) 62%/62%  vida 13/13 dias
+     MGC 7:13 G=400 rho=0.5 q=0.35 tp=167: H1 $532 / H2 $579  P(>=1 pago) 70%/57%  vida 16/11 dias
+     MGC 7:13 G=400 rho=0.5 q=0.5 tp=238: H1 $532 / H2 $579  P(>=1 pago) 70%/57%  vida 16/11 dias
+     MNQ 12:30 G=400 rho=0.5 q=0.35 tp=158: H1 $721 / H2 $340  P(>=1 pago) 64%/45%  vida 13/10 dias
+  mediana del grid: H1 $187 / H2 $156; correlacion H1-H2 del payout entre estructuras: 0.70
