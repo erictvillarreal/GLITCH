@@ -1,0 +1,17 @@
+EXP 1 — Calificacion 50K, reglas verificadas de Bulenox; pase por intento (21 dias de acceso), seleccion H1->H2 y H2->H1, config ganadora medida tambien en el mundo justo sintetico
+
+qualification Opcion 2 ($175, DD $2,500, DLL 1100, contratos (2, 4, 7) minis): OOS global H1->H2 50.3% (MGC 7:13 tp=100 gf=1.0) | H2->H1 54.8% (MGC 7:13 tp=100 gf=1.0) | OOS prom 52.6%
+   config consistente en ambas mitades: MGC 7:13 tp=100 gfrac=1.0: H1 54.8% / H2 50.3%; serie completa pase 52.2% quiebre 47.8% dias/intento 2.8; mundo justo sintetico 45.7%
+   costo esperado hasta tener la Master ACTIVA (fees + reinicios + activacion + API $100/mes): $497; dias de trading esperados 5.3; intentos 1.9
+
+qualification Opcion 1 ($175, DD $2,500, DLL None, contratos (7,) minis): OOS global H1->H2 27.9% (MNQ 12:30 tp=160 gf=0.3) | H2->H1 29.6% (MNQ 9:15 tp=160 gf=0.3) | OOS prom 28.8%
+   config consistente en ambas mitades: MES 8:45 tp=100 gfrac=0.3: H1 38.8% / H2 36.4%; serie completa pase 38.2% quiebre 61.7% dias/intento 5.3; mundo justo sintetico 30.0%
+   costo esperado hasta tener la Master ACTIVA (fees + reinicios + activacion + API $100/mes): $585; dias de trading esperados 13.8; intentos 2.6
+
+momentum Opcion 2 ($143, DD $2,250, DLL 1200, contratos (4,) minis): OOS global H1->H2 46.4% (MGC 7:13 tp=160 gf=1.0) | H2->H1 49.0% (MGC 8:15 tp=60 gf=1.0) | OOS prom 47.7%
+   config consistente en ambas mitades: MGC 7:13 tp=160 gfrac=1.0: H1 50.6% / H2 46.4%; serie completa pase 48.6% quiebre 51.4% dias/intento 2.1; mundo justo sintetico 42.5%
+   costo esperado hasta tener la Master ACTIVA (fees + reinicios + activacion + API $100/mes): $395; dias de trading esperados 4.2; intentos 2.1
+
+momentum Opcion 1 ($143, DD $2,250, DLL None, contratos (7,) minis): OOS global H1->H2 24.3% (MES 12:30 tp=60 gf=0.3) | H2->H1 26.3% (MNQ 9:15 tp=160 gf=0.3) | OOS prom 25.3%
+   config consistente en ambas mitades: MES 8:45 tp=100 gfrac=0.3: H1 34.0% / H2 32.7%; serie completa pase 33.7% quiebre 66.3% dias/intento 4.7; mundo justo sintetico 26.7%
+   costo esperado hasta tener la Master ACTIVA (fees + reinicios + activacion + API $100/mes): $561; dias de trading esperados 14.1; intentos 3.0

@@ -1,0 +1,85 @@
+EXP 3 — Pipeline por plan Bulenox (50K, Opcion 2), 12 meses (252 dias), slip del stop 0.5, costos compartidos $145.0/mes (API $100 + Massive $43.5 + Pi $1.5); las cifras por cuenta NO incluyen los compartidos
+
+======================================================================================================================================================
+ESCENARIO: FUERA DE MUESTRA (config elegida en una mitad de los dias y evaluada en la otra) = EXPECTATIVA
+======================================================================================================================================================
+
+Qualification Opc.2 + Master ($175 + $148)
+  por ciclo: pase calificacion 44.8% | costo de cuentas $418 | payout por cuenta fondeada $923 (P>=1 pago 24%, vida 26 dias) | dias por ciclo 32 | neto por ciclo $504
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $3,019 | p10/p50/p90 $-3,128/$2,069/$10,555 | ciclos 8.6
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $1,279, p10 $-4,868, P(<0)=48% | independientes media $1,254, p10 $-4,957, P(<0)=48%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $4,299, p10 $-7,995, P(<0)=41% | independientes media $4,128, p10 $-4,762, P(<0)=32%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $7,318, p10 $-11,123, P(<0)=39% | independientes media $7,071, p10 $-4,340, P(<0)=24%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $13,357, p10 $-17,378, P(<0)=37% | independientes media $13,100, p10 $-2,087, P(<0)=14%
+
+Momentum Opc.2 ($143, Master gratis)
+  por ciclo: pase calificacion 43.2% | costo de cuentas $331 | payout por cuenta fondeada $770 (P>=1 pago 25%, vida 25 dias) | dias por ciclo 32 | neto por ciclo $439
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $2,933 | p10/p50/p90 $-2,035/$2,225/$8,800 | ciclos 8.7
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $1,193, p10 $-3,775, P(<0)=45% | independientes media $1,161, p10 $-3,701, P(<0)=46%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $4,125, p10 $-5,810, P(<0)=37% | independientes media $4,157, p10 $-3,242, P(<0)=27%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $7,058, p10 $-7,845, P(<0)=34% | independientes media $7,198, p10 $-2,092, P(<0)=17%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $12,923, p10 $-11,916, P(<0)=31% | independientes media $12,910, p10 $1,297, P(<0)=7%
+
+Fast Track Opc.2 ($488, sin evaluacion)
+  por ciclo: pase calificacion nan% | costo de cuentas $488 | payout por cuenta fondeada $614 (P>=1 pago 25%, vida 27 dias) | dias por ciclo 27 | neto por ciclo $126
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $904 | p10/p50/p90 $-3,272/$907/$5,072 | ciclos 10.1
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $-836, p10 $-5,012, P(<0)=60% | independientes media $-799, p10 $-4,932, P(<0)=60%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $68, p10 $-8,284, P(<0)=50% | independientes media $9, p10 $-6,048, P(<0)=50%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $973, p10 $-11,556, P(<0)=46% | independientes media $1,033, p10 $-6,233, P(<0)=43%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $2,781, p10 $-18,099, P(<0)=44% | independientes media $2,761, p10 $-6,504, P(<0)=36%
+
+======================================================================================================================================================
+ESCENARIO: REAL-CONSISTENTE (config elegida mirando AMBAS mitades) = COTA SUPERIOR optimista, con sesgo de seleccion
+======================================================================================================================================================
+
+Qualification Opc.2 + Master ($175 + $148)
+  por ciclo: pase calificacion 44.3% | costo de cuentas $421 | payout por cuenta fondeada $1,800 (P>=1 pago 38%, vida 39 dias) | dias por ciclo 45 | neto por ciclo $1,379
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $7,098 | p10/p50/p90 $-15/$6,827/$14,568 | ciclos 6.3
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $5,358, p10 $-1,755, P(<0)=18% | independientes media $5,278, p10 $-1,704, P(<0)=19%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $12,457, p10 $-1,770, P(<0)=14% | independientes media $12,442, p10 $2,518, P(<0)=5%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $19,555, p10 $-1,784, P(<0)=12% | independientes media $19,333, p10 $7,290, P(<0)=1%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $33,752, p10 $-1,814, P(<0)=11% | independientes media $33,268, p10 $17,658, P(<0)=0%
+
+Momentum Opc.2 ($143, Master gratis)
+  por ciclo: pase calificacion 42.8% | costo de cuentas $336 | payout por cuenta fondeada $1,508 (P>=1 pago 34%, vida 15 dias) | dias por ciclo 22 | neto por ciclo $1,173
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $12,393 | p10/p50/p90 $2,480/$11,638/$23,638 | ciclos 12.6
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $10,653, p10 $740, P(<0)=8% | independientes media $10,647, p10 $735, P(<0)=7%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $23,047, p10 $3,220, P(<0)=6% | independientes media $22,780, p10 $8,260, P(<0)=1%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $35,440, p10 $5,700, P(<0)=6% | independientes media $35,237, p10 $17,246, P(<0)=0%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $60,227, p10 $10,661, P(<0)=5% | independientes media $60,175, p10 $36,893, P(<0)=0%
+
+Fast Track Opc.2 ($488, sin evaluacion)
+  por ciclo: pase calificacion nan% | costo de cuentas $488 | payout por cuenta fondeada $1,125 (P>=1 pago 27%, vida 21 dias) | dias por ciclo 21 | neto por ciclo $637
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $6,896 | p10/p50/p90 $-76/$7,063/$13,490 | ciclos 13.4
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $5,156, p10 $-1,816, P(<0)=16% | independientes media $5,245, p10 $-1,537, P(<0)=16%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $12,052, p10 $-1,893, P(<0)=13% | independientes media $12,149, p10 $2,181, P(<0)=6%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $18,947, p10 $-1,969, P(<0)=12% | independientes media $18,904, p10 $7,089, P(<0)=2%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $32,739, p10 $-2,121, P(<0)=11% | independientes media $32,927, p10 $17,491, P(<0)=0%
+
+======================================================================================================================================================
+ESCENARIO: MUNDO JUSTO sintetico (sin persistencia ni deriva) = PISO prudente
+======================================================================================================================================================
+
+Qualification Opc.2 + Master ($175 + $148)
+  por ciclo: pase calificacion 39.5% | costo de cuentas $446 | payout por cuenta fondeada $807 (P>=1 pago 19%, vida 12 dias) | dias por ciclo 20 | neto por ciclo $361
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $3,877 | p10/p50/p90 $-5,005/$1,253/$15,593 | ciclos 13.6
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $2,137, p10 $-6,745, P(<0)=52% | independientes media $1,956, p10 $-6,785, P(<0)=53%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $6,013, p10 $-11,751, P(<0)=48% | independientes media $6,032, p10 $-7,981, P(<0)=36%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $9,890, p10 $-16,756, P(<0)=47% | independientes media $9,367, p10 $-8,209, P(<0)=30%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $17,643, p10 $-26,767, P(<0)=45% | independientes media $17,754, p10 $-5,910, P(<0)=18%
+
+Momentum Opc.2 ($143, Master gratis)
+  por ciclo: pase calificacion 38.0% | costo de cuentas $377 | payout por cuenta fondeada $818 (P>=1 pago 27%, vida 52 dias) | dias por ciclo 60 | neto por ciclo $441
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $1,532 | p10/p50/p90 $-1,841/$1,129/$5,441 | ciclos 5.0
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $-208, p10 $-3,581, P(<0)=57% | independientes media $-211, p10 $-3,622, P(<0)=56%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $1,324, p10 $-5,422, P(<0)=47% | independientes media $1,257, p10 $-3,815, P(<0)=41%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $2,856, p10 $-7,264, P(<0)=44% | independientes media $2,896, p10 $-3,362, P(<0)=30%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $5,920, p10 $-10,946, P(<0)=40% | independientes media $5,991, p10 $-2,346, P(<0)=19%
+
+Fast Track Opc.2 ($488, sin evaluacion)
+  por ciclo: pase calificacion nan% | costo de cuentas $488 | payout por cuenta fondeada $606 (P>=1 pago 17%, vida 14 dias) | dias por ciclo 15 | neto por ciclo $118
+  UNA cuenta, 12 meses, SIN compartidos: neto medio $416 | p10/p50/p90 $-7,297/$499/$8,065 | ciclos 19.6
+  N=1 cuentas, CON compartidos $1,740/año: correlacionadas media $-1,324, p10 $-9,037, P(<0)=57% | independientes media $-1,318, p10 $-8,964, P(<0)=57%
+  N=2 cuentas, CON compartidos $1,740/año: correlacionadas media $-907, p10 $-16,334, P(<0)=52% | independientes media $-919, p10 $-11,799, P(<0)=54%
+  N=3 cuentas, CON compartidos $1,740/año: correlacionadas media $-491, p10 $-23,631, P(<0)=50% | independientes media $-586, p10 $-14,000, P(<0)=52%
+  N=5 cuentas, CON compartidos $1,740/año: correlacionadas media $342, p10 $-38,225, P(<0)=49% | independientes media $460, p10 $-16,872, P(<0)=49%

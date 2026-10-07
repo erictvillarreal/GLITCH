@@ -1,0 +1,34 @@
+EXP 2 — Etapa fondeada 50K (Opcion 2), slip del stop=0.5, orden de barra conservador; payout esperado por cuenta al trader; seleccion H1->H2 y H2->H1
+
+Master (Qualification Opc.2, 10 dias, 40%, reserva $2,600)
+  global: mejor en H1 = MNQ 12:30 G=400 rho=1.0 tp=158 (H1 $3,075 -> OOS H2 $427) | mejor en H2 = MNQ 8:45 G=600 rho=1.0 tp=513 (H2 $2,338 -> OOS H1 $1,190) | OOS prom $808
+  mediana del grid: H1 $652 / H2 $486
+  top-6 por el MINIMO de H1 y H2 (consistentes en ambas mitades) y su payout en el mundo justo sintetico:
+     MNQ 8:45 G=1300 rho=1.0 q=0.5 tp=513: H1 $2,094 / H2 $1,768  P(>=1) 25%/20%  vida 15/12 dias | mundo justo $857
+     MGC 7:13 G=400 rho=1.0 q=0.35 tp=167: H1 $1,857 / H2 $1,702  P(>=1) 43%/36%  vida 60/29 dias | mundo justo $514
+     MGC 7:13 G=400 rho=1.0 q=0.5 tp=238: H1 $1,857 / H2 $1,702  P(>=1) 43%/36%  vida 60/29 dias | mundo justo $434
+     MNQ 8:45 G=1300 rho=0.75 q=0.5 tp=513: H1 $1,701 / H2 $1,679  P(>=1) 23%/20%  vida 15/13 dias | mundo justo $837
+     MGC 8:15 G=1300 rho=1.0 q=0.35 tp=150: H1 $1,657 / H2 $1,740  P(>=1) 20%/16%  vida 12/9 dias | mundo justo $536
+     MNQ 8:45 G=900 rho=1.0 q=0.5 tp=513: H1 $1,645 / H2 $1,820  P(>=1) 28%/27%  vida 17/15 dias | mundo justo $894
+
+Momentum Master (5 dias rentables, 35%, saldo $53,000)
+  global: mejor en H1 = MNQ 12:30 G=250 rho=1.0 tp=158 (H1 $2,680 -> OOS H2 $438) | mejor en H2 = MNQ 8:45 G=600 rho=1.0 tp=513 (H2 $1,938 -> OOS H1 $1,009) | OOS prom $724
+  mediana del grid: H1 $608 / H2 $460
+  top-6 por el MINIMO de H1 y H2 (consistentes en ambas mitades) y su payout en el mundo justo sintetico:
+     MES 8:45 G=900 rho=1.0 q=0.5 tp=104: H1 $1,422 / H2 $1,533  P(>=1) 34%/34%  vida 16/15 dias | mundo justo $696
+     MNQ 8:45 G=250 rho=1.0 q=0.35 tp=359: H1 $1,381 / H2 $1,585  P(>=1) 43%/45%  vida 65/56 dias | mundo justo $697
+     MNQ 8:45 G=250 rho=1.0 q=0.5 tp=513: H1 $1,381 / H2 $1,585  P(>=1) 43%/45%  vida 65/56 dias | mundo justo $870
+     MGC 8:15 G=150 rho=1.0 q=0.2 tp=86: H1 $1,608 / H2 $1,369  P(>=1) 50%/39%  vida 74/42 dias | mundo justo $268
+     MES 8:45 G=900 rho=0.75 q=0.5 tp=104: H1 $1,348 / H2 $1,476  P(>=1) 33%/33%  vida 17/16 dias | mundo justo $722
+     MES 8:45 G=400 rho=0.75 q=0.5 tp=104: H1 $1,402 / H2 $1,340  P(>=1) 39%/36%  vida 34/29 dias | mundo justo $734
+
+Fast Track (objetivo $3,000, consistencia 20/25/30%)
+  global: mejor en H1 = MNQ 12:30 G=250 rho=1.0 tp=158 (H1 $1,756 -> OOS H2 $368) | mejor en H2 = MNQ 8:45 G=600 rho=1.0 tp=513 (H2 $1,588 -> OOS H1 $838) | OOS prom $603
+  mediana del grid: H1 $510 / H2 $381
+  top-6 por el MINIMO de H1 y H2 (consistentes en ambas mitades) y su payout en el mundo justo sintetico:
+     MES 8:45 G=900 rho=1.0 q=0.5 tp=104: H1 $1,123 / H2 $1,167  P(>=1) 28%/26%  vida 21/21 dias | mundo justo $768
+     MES 8:45 G=900 rho=0.75 q=0.5 tp=104: H1 $1,093 / H2 $1,109  P(>=1) 27%/25%  vida 22/21 dias | mundo justo $554
+     MNQ 8:45 G=400 rho=1.0 q=0.35 tp=359: H1 $1,059 / H2 $1,316  P(>=1) 38%/43%  vida 32/31 dias | mundo justo $654
+     MNQ 8:45 G=400 rho=1.0 q=0.5 tp=513: H1 $1,059 / H2 $1,316  P(>=1) 38%/43%  vida 32/31 dias | mundo justo $692
+     MGC 8:15 G=250 rho=1.0 q=0.35 tp=150: H1 $1,343 / H2 $1,050  P(>=1) 54%/39%  vida 65/34 dias | mundo justo $396
+     MES 8:45 G=400 rho=1.0 q=0.35 tp=72: H1 $1,036 / H2 $1,040  P(>=1) 37%/37%  vida 31/27 dias | mundo justo $561
