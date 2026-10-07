@@ -173,7 +173,7 @@ KIND_MASTER, KIND_MOMENTUM, KIND_FT, KIND_TOPSTEP = 0, 1, 2, 3
 
 @njit(cache=True)
 def funded_life(H, L, C, start, end, side, idx, tick, tv, comm_side, kind, opt, dd, dll_plan, caps_micro, breaks, cap_kind, lock_off, g_f, rho, tp_ticks,
-                req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, seed, slip, conserv):
+                req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, seed, slip, conserv, slfix):
     """Una vida de cuenta fondeada. Devuelve (neto al trader, n pagos, dias de vida, dia del 1er pago (-1 si ninguno), murio(0/1))."""
     np.random.seed(seed)
     bal = 0.0; thr = -dd; peak = 0.0; locked = False; maxc = 0.0
@@ -194,6 +194,9 @@ def funded_life(H, L, C, start, end, side, idx, tick, tv, comm_side, kind, opt, 
         dist = bal - thr
         if rho >= 0.999: k = int(np.ceil(dist / unit - 1e-9))
         else: k = int(np.floor(rho * dist / unit))
+        if slfix > 0.0:
+            kf = int(np.ceil(dist / unit - 1e-9))
+            k = int(slfix) if int(slfix) < kf else kf
         if dll > 0.0 and dist > dll:
             kd = int(np.floor((dll - 2 * comm_side * nc) / unit))
             if kd < 1: kd = 1
@@ -246,16 +249,16 @@ def funded_life(H, L, C, start, end, side, idx, tick, tv, comm_side, kind, opt, 
 
 @njit(cache=True)
 def funded_many(H, L, C, start, end, side, idx, tick, tv, comm_side, kind, opt, dd, dll_plan, caps_micro, breaks, cap_kind, lock_off, g_f, rho, tp_ticks,
-                req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, n, seed0, slip, conserv):
+                req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, n, seed0, slip, conserv, slfix):
     out = np.zeros((n, 5))
     for p in range(n):
         a, b, c, d, e2 = funded_life(H, L, C, start, end, side, idx, tick, tv, comm_side, kind, opt, dd, dll_plan, caps_micro, breaks, cap_kind, lock_off, g_f, rho, tp_ticks,
-                                     req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, seed0 + p, slip, conserv)
+                                     req, wmin, mbal, mincheck, pay_caps, cons, tgt1, tgt2, first100, split_after, days_req, horizon, seed0 + p, slip, conserv, slfix)
         out[p, 0] = a; out[p, 1] = b; out[p, 2] = c; out[p, 3] = d; out[p, 4] = e2
     return out
 
 
-def run_funded(bars, stage, size_plan, g_f, rho, tp_ticks, n=3000, seed0=1, idx=None, horizon=126, slip=0.0, conserv=1):
+def run_funded(bars, stage, size_plan, g_f, rho, tp_ticks, n=3000, seed0=1, idx=None, horizon=126, slip=0.0, conserv=1, slfix=0.0):
     """stage: 'master' (size_plan = plan Qualification Opcion 2), 'momentum_master' (plan momentum), 'fast_track' (plan fast_track). Devuelve dict de metricas."""
     from bulenox.rules import payout_rules
     if stage == "topstep_xfa":
@@ -273,11 +276,11 @@ def run_funded(bars, stage, size_plan, g_f, rho, tp_ticks, n=3000, seed0=1, idx=
     o = funded_many(bars["H"], bars["L"], bars["C"], bars["start"], bars["end"], bars["side"], idx.astype(np.int64), bars["tick"], bars["tv"], bars["comm_side"], kind, size_plan.option,
                     float(size_plan.drawdown), float(size_plan.dll or 0.0), caps_m, br, 0 if len(size_plan.contracts) == 1 else 1, 100.0, g_f, rho, tp_ticks,
                     float(pr.min_request), float(pr.win_day_min if stage == "momentum_master" else 150.0), float(pr.min_balance), 0.0, caps_pay, cons, float(pr.first_cycle_target),
-                    float(pr.next_cycle_target), float(pr.split_first_100), float(pr.split_after), int(pr.days_required), horizon, n, seed0, float(slip), int(conserv))
+                    float(pr.next_cycle_target), float(pr.split_first_100), float(pr.split_after), int(pr.days_required), horizon, n, seed0, float(slip), int(conserv), float(slfix))
     return dict(payout=o[:, 0].mean(), p1=(o[:, 3] >= 0).mean(), npay=o[:, 1].mean(), life=o[:, 2].mean(), died=o[:, 4].mean(), raw=o)
 
 
-def build_bars_synthetic(prod, entry_m, rng, flat_m=14 * 60 + 30):
+def build_bars_synthetic(prod, entry_m, rng, flat_m=14 * 60 + 30, p_up=0.5, long_only=False):
     """Mundo de JUEGO JUSTO con la volatilidad real (signo de cada barra volteado al azar, encadenado desde la entrada); misma estructura de arreglos que build_bars."""
     stem, tick, tv = SPEC[prod]
     if prod not in _S: _S[prod] = load_sessions(stem)
@@ -290,20 +293,24 @@ def build_bars_synthetic(prod, entry_m, rng, flat_m=14 * 60 + 30):
         if jf <= ep: continue
         e0 = c[ep]; prev = c[ep:jf]
         up = h[ep + 1:jf + 1] - prev; dn = l[ep + 1:jf + 1] - prev; ch = c[ep + 1:jf + 1] - prev
-        sg = rng.random(len(prev)) < 0.5
+        if p_up == 0.5:
+            sg = rng.random(len(prev)) < 0.5
+        else:                                                                # inclinacion: cada barra es alcista con prob. p_up (deriva positiva para operaciones LARGAS)
+            orient_up = ch >= 0
+            sg = np.where(rng.random(len(prev)) < p_up, orient_up, ~orient_up)
         up2 = np.where(sg, up, -dn); dn2 = np.where(sg, dn, -up); ch2 = np.where(sg, ch, -ch)
         lvl = e0 + np.concatenate([[0.0], np.cumsum(ch2)])                 # cierres sinteticos (primer elemento = entrada)
         Hs.append(np.concatenate([[e0], lvl[:-1] + up2])); Ls.append(np.concatenate([[e0], lvl[:-1] + dn2])); Cs.append(lvl)
         n = jf - ep + 1; starts.append(off); ends.append(off + n - 1); sides.append(1 if rng.random() < 0.5 else -1); off += n
     return dict(H=np.concatenate(Hs), L=np.concatenate(Ls), C=np.concatenate(Cs), start=np.array(starts, dtype=np.int64), end=np.array(ends, dtype=np.int64),
-                side=np.array(sides, dtype=np.int64), dates=None, tick=tick, tv=tv, comm_side=COMMISSION_PER_SIDE[prod], prod=prod, entry_m=entry_m)
+                side=(np.ones(len(sides), dtype=np.int64) if long_only else np.array(sides, dtype=np.int64)), dates=None, tick=tick, tv=tv, comm_side=COMMISSION_PER_SIDE[prod], prod=prod, entry_m=entry_m)
 
 
-def run_funded_topstep(bars, g_f, rho, tp_ticks, n=3000, seed0=1, idx=None, horizon=126, slip=0.0, conserv=1):
+def run_funded_topstep(bars, g_f, rho, tp_ticks, n=3000, seed0=1, idx=None, horizon=126, slip=0.0, conserv=1, dd=2000.0, cap=2000.0, caps_micro=(20.0, 30.0, 40.0, 40.0), breaks=(1_500.0, 2_000.0, 1e18), slfix=0.0):
     """XFA estandar Topstep 50K (help.topstep.com 8284204/8284233, log 24/25-sep): MLL $2,000 EOD, se traba en $0 al llegar el balance a +$2,000, 5 dias >= $150, pago = min(50% del balance, $2,000), 90% al trader,
     tras un pago el piso queda en $0; sin DLL; escalado de contratos 20/30/40 micros (SUPUESTO, no verificado)."""
-    caps_m = np.array([20.0, 30.0, 40.0, 40.0]); br = np.array([1_500.0, 2_000.0, 1e18])
+    caps_m = np.array(caps_micro, dtype=np.float64); br = np.array(breaks, dtype=np.float64)
     idx = np.arange(len(bars["start"])) if idx is None else idx
-    o = funded_many(bars["H"], bars["L"], bars["C"], bars["start"], bars["end"], bars["side"], idx.astype(np.int64), bars["tick"], bars["tv"], bars["comm_side"], KIND_TOPSTEP, 2, 2000.0, 0.0,
-                    caps_m, br, 1, 0.0, g_f, rho, tp_ticks, 0.0, 150.0, 0.0, 0.0, np.array([2000.0]), np.array([1.0]), 0.0, 0.0, 0.0, 0.9, 5, horizon, n, seed0, float(slip), int(conserv))
+    o = funded_many(bars["H"], bars["L"], bars["C"], bars["start"], bars["end"], bars["side"], idx.astype(np.int64), bars["tick"], bars["tv"], bars["comm_side"], KIND_TOPSTEP, 2, float(dd), 0.0,
+                    caps_m, br, 1, 0.0, g_f, rho, tp_ticks, 0.0, 150.0, 0.0, 0.0, np.array([float(cap)]), np.array([1.0]), 0.0, 0.0, 0.0, 0.9, 5, horizon, n, seed0, float(slip), int(conserv), float(slfix))
     return dict(payout=o[:, 0].mean(), p1=(o[:, 3] >= 0).mean(), npay=o[:, 1].mean(), life=o[:, 2].mean(), died=o[:, 4].mean(), raw=o)
