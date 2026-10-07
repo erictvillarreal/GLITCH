@@ -1,0 +1,21 @@
+Pipeline que corre hoy (G2 nc40/TP40/SL100 + XFA Cerebro 2), 255 dias habiles desde 19-oct-2026; acumulado en caja por fecha (media | mediana | p10 | p90 | P(<0))
+
+[motor tal cual (payouts sin ajuste)]
+  31-dic-2026             : media $    270 | mediana $   -190 | p10 $ -1,480 | p90 $  2,782 | P(<0) 55%
+  31-ene-2027             : media $    655 | mediana $     75 | p10 $ -1,863 | p90 $  3,935 | P(<0) 49%
+  31-mar-2027             : media $  1,598 | mediana $  1,004 | p10 $ -2,065 | p90 $  6,028 | P(<0) 37%
+  30-jun-2027             : media $  2,989 | mediana $  2,348 | p10 $ -1,977 | p90 $  8,868 | P(<0) 27%
+  30-sep-2027             : media $  4,377 | mediana $  3,714 | p10 $ -1,728 | p90 $ 11,300 | P(<0) 21%
+  19-oct-2027 (12 meses)  : media $  4,646 | mediana $  4,014 | p10 $ -1,673 | p90 $ 11,730 | P(<0) 20%
+  la caja MEDIANA cruza a >= 0 el 26-Jan-2027; la MEDIA cruza el 14-Dec-2026
+  ritmo mensual implícito entre 31-mar y 30-sep-2027 (media): $463/mes
+
+[con ajuste -25% a payouts por liquidacion en tiempo real de la XFA]
+  31-dic-2026             : media $    -89 | mediana $   -445 | p10 $ -1,504 | p90 $  1,886 | P(<0) 64%
+  31-ene-2027             : media $     97 | mediana $   -346 | p10 $ -1,865 | p90 $  2,668 | P(<0) 57%
+  31-mar-2027             : media $    587 | mediana $    132 | p10 $ -2,288 | p90 $  4,059 | P(<0) 48%
+  30-jun-2027             : media $  1,311 | mediana $    818 | p10 $ -2,583 | p90 $  5,902 | P(<0) 40%
+  30-sep-2027             : media $  2,028 | mediana $  1,520 | p10 $ -2,752 | p90 $  7,413 | P(<0) 34%
+  19-oct-2027 (12 meses)  : media $  2,158 | mediana $  1,674 | p10 $ -2,775 | p90 $  7,695 | P(<0) 33%
+  la caja MEDIANA cruza a >= 0 el 12-Mar-2027; la MEDIA cruza el 14-Jan-2027
+  ritmo mensual implícito entre 31-mar y 30-sep-2027 (media): $240/mes
