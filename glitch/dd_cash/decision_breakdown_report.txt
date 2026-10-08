@@ -1,0 +1,8 @@
+Desglose de decision, 12 meses desde 19-oct-2026, payouts -25% por liquidación, costos compartidos $59.5/mes. Meta del usuario: ~US$7,000 al año (~$583/mes ≈ 10,500 MXN/mes a 18 MXN/USD, supuesto)
+Escenario                                               media  mediana      p10      p90  P(<0)  P(>=7k)  MXN/mes colchón p95
+A. Hoy: 50K, TP 40, 1 cuenta                            2,158    1,674   -2,775    7,695    33%      13%    3,238       4,241
+B. 50K, TP 32, 1 cuenta                                 2,936    2,454   -2,017    8,454    26%      16%    4,403       3,679
+C. 50K, TP 32, 2 cuentas (mismas señales)               6,645    5,681   -3,261   17,681    22%      44%    9,967       6,732
+D. 50K, TP 32, 3 cuentas (mismas señales)              10,354    8,908   -4,505   26,908    21%      56%   15,530       9,796
+E. 150K, TP 32, 1 cuenta (nc 90, Cerebro 2 nc 6)        1,251      277   -9,040   12,969    49%      23%    1,877      11,707
+F. 150K, TP 32, 2 cuentas                               3,276    1,328  -17,307   26,711    47%      37%    4,914      22,716
