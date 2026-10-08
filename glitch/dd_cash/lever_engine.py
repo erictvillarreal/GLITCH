@@ -43,6 +43,7 @@ class Spec:
     lock_gain: float | None = None    # dejar de comprar si la caja acumulada >= lock_gain
     fee_scale: float = 1.0; pay_scale: float = 1.0
     haircut: float = 1.0              # el -25% se aplica fuera del motor (en el reporte)
+    entry_slip: int = 0               # slippage de ENTRADA adverso en ticks (llenado de mercado peor que el cierre de la barra de referencia), ambos stages
     tp_fill_extra: int = 0            # el TP limite solo se considera lleno si el precio lo cruza este numero de ticks (sensibilidad de colocacion)
     p_up: float = 0.0; p_dn: float = 0.0; seed: int = 0   # palanca EXOGENA de elasticidad: prob. de convertir un quiebre del Combine en pase (p_up) o un pase en quiebre (p_dn); NO es una estrategia
 
@@ -52,7 +53,7 @@ def xfa_cap_micros(xb, restricted=True):
     return np.where(xb < 1500.0, 12, np.where(xb < 2000.0, 18, 31))
 
 
-def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0):
+def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None):
     """D: (T,H) indices de dia en el eje comun. Devuelve dict (arreglos por trayectoria y por dia)."""
     T, H = D.shape
     fee = S.fee * S.fee_scale; act = S.act * S.fee_scale
@@ -68,26 +69,34 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0):
     n_xtrades = np.zeros(T, np.int64); n_xmax = np.zeros(T, np.int64)
     pass_day = np.zeros(T, np.int64); stopped = np.zeros(T, bool)
     fee_c_tot = np.zeros(T); fee_a_tot = np.zeros(T)
-    if start_mode == 0: cash -= fee; n_att += 1; fee_d[:, 0] += fee; fee_c_tot += fee
+    if start is not None:
+        start = np.asarray(start); mode[:] = 4                         # 4 = inactiva hasta su dia de arranque (start[t]; >=H = nunca)
+    elif start_mode == 0: cash -= fee; n_att += 1; fee_d[:, 0] += fee; fee_c_tot += fee
+    mode_d = np.zeros((T, H), np.int8)
     unit = S.nc * S.tv
     rng = np.random.default_rng(S.seed)
     for day in range(H):
         lg = int(lag[day]) if hasattr(lag, '__len__') else lag
         sk = bool(skip[day]) if skip is not None else False
         idx = D[:, day]
-        m0 = mode == 0; m1 = mode == 1
         fee_today = np.zeros(T)
+        if start is not None:
+            st = (mode == 4) & (start <= day)
+            if st.any():
+                mode = np.where(st, start_mode, mode).astype(np.int8); fee_today += np.where(st, fee, 0.0); n_att = n_att + st; fee_c_tot += np.where(st, fee, 0.0)
+        m0 = mode == 0; m1 = mode == 1
         # ---------------- Combine
         dist = cb - cfl
         dist_eff = dist if S.dll is None else np.minimum(dist, S.dll - S.comm * S.nc)
         kliq = np.ceil(dist_eff / unit - 1e-9); kmll = np.ceil(dist / unit - 1e-9)
         k = np.clip(np.minimum(S.sl, kliq), 1, S.kmax).astype(int)
-        ab = S.adv[idx, k]; tb = S.tpt[idx, S.tp_ticks + S.tp_fill_extra]
+        e = S.entry_slip
+        ab = S.adv[idx, np.maximum(k - e, 1)] if e else S.adv[idx, k]; tb = S.tpt[idx, S.tp_ticks + S.tp_fill_extra + e]
         tp_hit = tb < ab; sl_hit = ~tp_hit & (ab < INF)
         loss_ticks = k.astype(float)
         if S.slip > 0 and not S.legacy and S.amag is not None:
             loss_ticks = np.where(k < kmll, k + S.slip * (S.amag[idx, k] - k), k)      # solo si el stop es propio o del DLL (no es liquidacion del MLL)
-        pnl = np.where(tp_hit, S.tp_ticks * unit, np.where(sl_hit, -loss_ticks * unit, S.flat[idx] * unit)) - S.comm * S.nc
+        pnl = np.where(tp_hit, S.tp_ticks * unit, np.where(sl_hit, -loss_ticks * unit, (S.flat[idx] - e) * unit)) - S.comm * S.nc
         pnl = np.where(m0, pnl, 0.0)
         if sk: pnl = np.zeros(T)
         trade0 = m0 & (not sk)
@@ -118,10 +127,10 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0):
             else: dist_xe = dist_x
             kx_liq = np.ceil(dist_xe / unit_x - 1e-9); kx_mll = np.ceil(dist_x / unit_x - 1e-9)
             kx = np.clip(np.minimum(S.x_sl, kx_liq), 1, S.xkmax).astype(int)
-            abx = S.xadv[idx, kx]; tbx = S.xtpt[idx, S.x_tp + S.tp_fill_extra]
+            abx = S.xadv[idx, np.maximum(kx - e, 1)] if e else S.xadv[idx, kx]; tbx = S.xtpt[idx, S.x_tp + S.tp_fill_extra + e]
             tphx = tbx < abx; slhx = ~tphx & (abx < INF)
             lossx = np.where(kx < kx_mll, kx + S.slip * (S.xamag[idx, kx] - kx), kx) if S.slip > 0 else kx.astype(float)
-            p1 = np.where(m1, np.where(tphx, S.x_tp * unit_x, np.where(slhx, -lossx * unit_x, S.xflat[idx] * unit_x)) - S.x_comm * nc_t, 0.0)
+            p1 = np.where(m1, np.where(tphx, S.x_tp * unit_x, np.where(slhx, -lossx * unit_x, (S.xflat[idx] - e) * unit_x)) - S.x_comm * nc_t, 0.0)
         else:
             ser = S.xser[idx]
             p1 = np.where(m1, nc_t * ser, 0.0)
@@ -184,7 +193,8 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0):
         pass_day = np.where((pass_day == 0) & passed, day + 1, pass_day)
         mode = np.where(m3 & (wait <= 0), 1, mode).astype(np.int8)
         cash = cash + take - fee_today
+        mode_d[:, day] = mode
         take_d[:, day] = take; fee_d[:, day] += fee_today
         cum[:, day] = cash
     return dict(take_d=take_d, fee_d=fee_d, cum=cum, blow_d=blow_d, n_att=n_att, n_b0=n_b0, n_b1=n_b1, n_pay=n_pay, n_pass=n_pass, pass_day=pass_day, stopped=stopped,
-                fee_c=fee_c_tot, fee_a=fee_a_tot, n_trades_c=n_trades_c, n_trades_cmax=n_trades_cmax, n_trades_c80=n_trades_c80, n_xtrades=n_xtrades, n_xmax=n_xmax, mode_end=mode)
+                fee_c=fee_c_tot, fee_a=fee_a_tot, n_trades_c=n_trades_c, n_trades_cmax=n_trades_cmax, n_trades_c80=n_trades_c80, n_xtrades=n_xtrades, n_xmax=n_xmax, mode_end=mode, mode_d=mode_d)

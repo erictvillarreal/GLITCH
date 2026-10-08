@@ -1,0 +1,99 @@
+APILAMIENTO — neto total a 12 meses desde 19-oct-2026 (2 cuentas; costo compartido $714 una vez; liquidacion explicita de la XFA; slip 0.5). Colchon/pico = percentil 95/99 de la mayor caja acumulada negativa. 'int.2a/ano' = intentos de la 2a por ano ACTIVO.
+
+--- HISTORIA REAL CON oro — senales IDENTICAS (A + A) ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    3,190   2,419    31%    27%   5,148   6,508        0.0   53.4        0.0      53     0%
+(a) mismo dia                                 7,035   5,493    29%    48%   9,616  12,277       52.4   53.4       53.4     107   100%
+(b) al pasar el Combine la 1a                 6,942   5,421    29%    48%   9,471  12,047       48.8   53.4       53.4     106   100%
+(c) al cobrar el 1er payout la 1a             6,090   4,477    31%    44%   8,337  10,577       39.2   53.4       54.3      97   100%
+(d) 2 semanas despues                         6,844   5,355    29%    48%   9,442  11,981       48.6   53.4       53.4     105   100%
+(d) 4 semanas despues                         6,648   5,178    29%    47%   9,257  11,862       46.4   53.4       53.5     103   100%
+(d) 8 semanas despues                         6,279   4,855    30%    46%   8,985  11,468       42.4   53.4       53.9      99   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       4,970   3,343    32%    37%   7,476  10,171       24.9   53.4       54.5      81    67%
+(e2) mes 3 solo si la caja de la 1a >= 0      4,405   2,576    34%    33%   6,108   8,193       17.6   53.4       54.5      73    47%
+(e1) mes 6 solo si la 1a tiene XFA viva       4,195   2,876    33%    34%   6,711   8,921       16.3   53.4       55.8      72    68%
+(e2) mes 6 solo si la caja de la 1a >= 0      4,037   2,297    36%    32%   5,547   6,893       14.9   53.4       56.0      70    60%
+
+--- HISTORIA REAL CON oro — senales DISTINTAS (A + B: MES>MGC y MCL>MCL) ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    3,190   2,419    31%    27%   5,148   6,508        0.0   53.4        0.0      53     0%
+(a) mismo dia                                 6,442   5,684    22%    48%   6,891   9,073       11.7   53.4       56.7     110   100%
+(b) al pasar el Combine la 1a                 6,372   5,575    22%    48%   6,872   9,154       11.0   53.4       56.8     109   100%
+(c) al cobrar el 1er payout la 1a             5,628   4,789    24%    44%   6,575   8,336        9.0   53.4       57.7      99   100%
+(d) 2 semanas despues                         6,299   5,515    22%    47%   6,823   9,130       11.0   53.4       56.8     108   100%
+(d) 4 semanas despues                         6,131   5,359    22%    47%   6,808   8,991       10.5   53.4       56.8     106   100%
+(d) 8 semanas despues                         5,831   5,096    23%    45%   6,729   8,877        9.6   53.4       57.2     102   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       4,714   3,770    27%    37%   6,071   8,070        5.7   53.4       57.7      83    67%
+(e2) mes 3 solo si la caja de la 1a >= 0      4,259   3,078    30%    34%   5,450   6,928        4.0   53.4       57.6      74    47%
+(e1) mes 6 solo si la 1a tiene XFA viva       4,017   3,120    29%    33%   5,885   7,678        3.9   53.4       59.2      74    68%
+(e2) mes 6 solo si la caja de la 1a >= 0      3,933   2,832    31%    33%   5,282   6,584        3.5   53.4       59.0      71    60%
+
+--- HISTORIA REAL SIN oro — senales IDENTICAS (A + A) ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    2,011   1,310    39%    20%   5,490   6,828        0.0   54.8        0.0      55     0%
+(a) mismo dia                                 4,676   3,275    36%    39%  10,287  12,933       53.8   54.8       54.8     110   100%
+(b) al pasar el Combine la 1a                 4,607   3,194    36%    39%  10,174  12,763       50.2   54.8       54.8     109   100%
+(c) al cobrar el 1er payout la 1a             3,975   2,563    38%    35%   8,873  11,095       39.9   54.8       55.7      98   100%
+(d) 2 semanas despues                         4,533   3,138    36%    39%  10,124  12,687       50.1   54.8       54.9     107   100%
+(d) 4 semanas despues                         4,416   3,058    36%    38%   9,941  12,495       47.8   54.8       54.9     105   100%
+(d) 8 semanas despues                         4,149   2,879    37%    37%   9,632  12,016       43.7   54.8       55.3     101   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       3,203   1,827    39%    29%   8,149  10,860       25.4   54.8       55.7      83    66%
+(e2) mes 3 solo si la caja de la 1a >= 0      2,787   1,200    42%    25%   6,392   8,491       16.6   54.8       55.5      73    43%
+(e1) mes 6 solo si la 1a tiene XFA viva       2,672   1,559    40%    26%   7,208   9,410       16.8   54.8       56.8      74    67%
+(e2) mes 6 solo si la caja de la 1a >= 0      2,512     936    44%    24%   5,881   7,139       13.9   54.8       56.9      70    54%
+
+--- HISTORIA REAL SIN oro — senales DISTINTAS (A + B: MES>MGC y MCL>MCL) ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    2,011   1,310    39%    20%   5,490   6,828        0.0   54.8        0.0      55     0%
+(a) mismo dia                                 5,163   4,501    26%    42%   7,421   9,721       12.4   54.8       58.0     113   100%
+(b) al pasar el Combine la 1a                 5,076   4,417    26%    41%   7,416   9,684       11.7   54.8       58.0     112   100%
+(c) al cobrar el 1er payout la 1a             4,291   3,560    30%    37%   7,075   8,769        9.5   54.8       59.2     101   100%
+(d) 2 semanas despues                         4,985   4,342    26%    41%   7,385   9,626       11.7   54.8       58.1     111   100%
+(d) 4 semanas despues                         4,822   4,121    27%    40%   7,291   9,615       11.3   54.8       58.2     108   100%
+(d) 8 semanas despues                         4,516   3,834    28%    38%   7,255   9,604       10.3   54.8       58.6     104   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       3,434   2,503    33%    30%   6,519   8,734        6.1   54.8       59.0      84    66%
+(e2) mes 3 solo si la caja de la 1a >= 0      2,906   1,784    37%    27%   5,778   7,182        3.9   54.8       59.1      74    43%
+(e1) mes 6 solo si la 1a tiene XFA viva       2,770   1,995    36%    26%   6,283   8,117        4.1   54.8       60.6      75    67%
+(e2) mes 6 solo si la caja de la 1a >= 0      2,612   1,526    39%    25%   5,595   6,877        3.4   54.8       60.4      71    54%
+
+--- MUNDO JUSTO — senales IDENTICAS (A + A) ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    5,332   4,427    25%    42%   5,585   7,228        0.0   53.7        0.0      54     0%
+(a) mismo dia                                11,318   9,508    23%    60%  10,503  13,734       52.7   53.7       53.7     107   100%
+(b) al pasar el Combine la 1a                11,176   9,361    23%    60%  10,251  13,497       48.6   53.7       53.8     106   100%
+(c) al cobrar el 1er payout la 1a             9,754   7,792    25%    56%   8,552  11,125       36.7   53.7       55.4      96    99%
+(d) 2 semanas despues                        11,045   9,258    23%    59%  10,229  13,446       48.6   53.7       53.8     105   100%
+(d) 4 semanas despues                        10,741   8,946    23%    59%  10,092  13,226       46.2   53.7       54.0     104   100%
+(d) 8 semanas despues                        10,204   8,401    24%    58%   9,758  12,810       41.9   53.7       54.6     100   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       8,105   5,880    25%    50%   7,873  11,219       23.5   53.7       55.2      81    66%
+(e2) mes 3 solo si la caja de la 1a >= 0      7,532   5,098    27%    46%   6,718   9,062       19.1   53.7       55.3      76    53%
+(e1) mes 6 solo si la 1a tiene XFA viva       6,946   5,261    26%    47%   7,068   9,779       15.5   53.7       57.5      74    68%
+(e2) mes 6 solo si la caja de la 1a >= 0      6,891   4,827    28%    45%   6,036   7,626       15.5   53.7       57.5      73    66%
+
+--- MUNDO JUSTO — senales DISTINTAS (A + B), independientes ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    5,332   4,427    25%    42%   5,585   7,228        0.0   53.7        0.0      54     0%
+(a) mismo dia                                 9,948   9,102    14%    63%   6,731   9,402       11.5   53.7       55.6     109   100%
+(b) al pasar el Combine la 1a                 9,828   8,981    14%    63%   6,750   9,368       10.8   53.7       55.7     108   100%
+(c) al cobrar el 1er payout la 1a             8,720   7,798    18%    58%   6,571   8,314        8.3   53.7       56.9      98    99%
+(d) 2 semanas despues                         9,737   8,865    15%    62%   6,738   9,326       10.8   53.7       55.7     107   100%
+(d) 4 semanas despues                         9,504   8,705    15%    61%   6,671   9,228       10.3   53.7       55.8     105   100%
+(d) 8 semanas despues                         9,054   8,242    16%    60%   6,719   9,165        9.4   53.7       56.3     101   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       7,418   6,290    20%    51%   6,170   8,214        5.4   53.7       56.9      82    66%
+(e2) mes 3 solo si la caja de la 1a >= 0      6,992   5,687    23%    49%   5,837   7,581        4.3   53.7       57.0      76    53%
+(e1) mes 6 solo si la 1a tiene XFA viva       6,582   5,507    22%    48%   6,110   8,148        3.7   53.7       58.3      74    68%
+(e2) mes 6 solo si la caja de la 1a >= 0      6,509   5,436    24%    47%   5,676   7,316        3.7   53.7       58.6      73    66%
+
+--- SENSIBILIDAD paso 1 (TP32, XFA 364x3) — MUNDO JUSTO — senales IDENTICAS ---
+momento de la 2a cuenta                       media mediana  P(<0)  P>=6k colch95  pico99 dias>=2MLL int.1a int.2a/ano int.tot  apila
+solo 1 cuenta (referencia)                    3,040   2,338    31%    26%   4,885   6,208        0.0   54.6        0.0      55     0%
+(a) mismo dia                                 6,734   5,330    28%    47%   9,114  11,672       53.6   54.6       54.6     109   100%
+(b) al pasar el Combine la 1a                 6,644   5,268    28%    47%   8,901  11,507       49.4   54.6       54.6     108   100%
+(c) al cobrar el 1er payout la 1a             5,901   4,424    31%    44%   7,892  10,132       40.8   54.6       55.4      99   100%
+(d) 2 semanas despues                         6,549   5,163    28%    46%   8,920  11,411       49.5   54.6       54.6     107   100%
+(d) 4 semanas despues                         6,376   4,989    29%    46%   8,806  11,256       47.4   54.6       54.7     105   100%
+(d) 8 semanas despues                         6,048   4,704    29%    44%   8,476  10,899       43.4   54.6       55.1     101   100%
+(e1) mes 3 solo si la 1a tiene XFA viva       4,773   3,248    31%    37%   7,118   9,649       25.0   54.6       55.5      82    66%
+(e2) mes 3 solo si la caja de la 1a >= 0      4,253   2,466    34%    32%   5,732   7,615       17.8   54.6       55.3      74    46%
+(e1) mes 6 solo si la 1a tiene XFA viva       4,043   2,814    32%    33%   6,388   8,522       16.6   54.6       56.6      74    67%
+(e2) mes 6 solo si la caja de la 1a >= 0      3,933   2,244    35%    31%   5,264   6,594       15.4   54.6       56.6      72    61%

@@ -1,0 +1,46 @@
+PARTE 1 — cuanto informan los primeros N intentos
+mundo          p pase/intentodias hasta el intento N (mediana)
+justo                   0.308   dias (med.) hasta N Combines RESUELTOS: N=3: 8d  N=5: 16d  N=10: 38d  N=20: 84d  
+                 Combines resueltos a 10/20/40/60 dias: 3.5 / 5.9 / 10.2 / 14.3;  P(>=1 pase a 10/20/40/60 dias)= 91% / 99% / 100% / 100%;  P(>=1 payout a 20/40/60 dias)= 22% / 48% / 66%
+real CON oro            0.324   dias (med.) hasta N Combines RESUELTOS: N=3: 8d  N=5: 17d  N=10: 41d  N=20: 91d  
+                 Combines resueltos a 10/20/40/60 dias: 3.3 / 5.5 / 9.5 / 13.4;  P(>=1 pase a 10/20/40/60 dias)= 92% / 100% / 100% / 100%;  P(>=1 payout a 20/40/60 dias)= 25% / 53% / 71%
+real SIN oro            0.326   dias (med.) hasta N Combines RESUELTOS: N=3: 8d  N=5: 17d  N=10: 41d  N=20: 89d  
+                 Combines resueltos a 10/20/40/60 dias: 3.3 / 5.5 / 9.6 / 13.6;  P(>=1 pase a 10/20/40/60 dias)= 92% / 100% / 100% / 100%;  P(>=1 payout a 20/40/60 dias)= 23% / 50% / 68%
+
+Si el modelo es correcto (p = 0.308, intentos independientes; un 'pase' = Combine pasado). Alternativas de 'el modelo falla': p = 0.20 y p = 0.15 (la mitad). Regla: rechazar el modelo si pases <= k* con alfa <= 5%.
+   N  P(0 pases)  P(<=1 pase)  k* alfa real  poder si p=0.20  poder si p=0.15  P(0 pases | p=0.15)
+   3       0.332        0.774  -1     0.000             0.00             0.00                0.614
+   5       0.159        0.512  -1     0.000             0.00             0.00                0.444
+  10       0.025        0.138   0     0.025             0.11             0.20                0.197
+  20       0.001        0.006   2     0.030             0.21             0.40                0.039
+  40       0.000        0.000   7     0.045             0.44             0.76                0.002
+
+PARTE 2 — neto anual por cuenta (paso 2) bajo friccion adicional, justo / real CON oro / real SIN oro. 'dEV' = cambio vs base. Cada fila cambia UNA friccion.
+friccion                                                     justo  CON oro  SIN oro  dEV SIN oro
+base (slip stop 0.5, entrada exacta, TP al tocar, comision modelada)   6,105    3,989    2,713            0    0.308
+slippage de ENTRADA adverso 1 tick(s) por contrato           5,660    3,576    2,347         -366    0.289
+slippage de ENTRADA adverso 2 tick(s) por contrato           5,215    3,114    1,944         -769    0.271
+slippage de ENTRADA adverso 3 tick(s) por contrato           4,747    2,813    1,660       -1,053    0.253
+slippage de ENTRADA adverso 4 tick(s) por contrato           4,326    2,567    1,446       -1,267    0.238
+slippage de STOP 0.0 (fraccion hasta el extremo de la barra; >1 = peor que el extremo)   6,728    4,143    2,833          120    0.308
+slippage de STOP 1.0 (fraccion hasta el extremo de la barra; >1 = peor que el extremo)   5,584    3,858    2,612         -101    0.308
+slippage de STOP 1.5 (fraccion hasta el extremo de la barra; >1 = peor que el extremo)   5,132    3,745    2,533         -180    0.308
+slippage de STOP 2.0 (fraccion hasta el extremo de la barra; >1 = peor que el extremo)   4,737    3,642    2,456         -257    0.308
+TP solo se llena si el precio lo cruza 1 tick(s)             5,921    3,800    2,555         -158    0.297
+TP solo se llena si el precio lo cruza 2 tick(s)             5,736    3,644    2,427         -286    0.287
+comision x1.2                                                6,038    3,937    2,660          -52    0.308
+comision x1.5                                                5,943    3,851    2,584         -129    0.308
+costo por intento (Combine y reinicio) x1.1                  5,597    3,472    2,179         -534    0.308
+costo por intento (Combine y reinicio) x1.25                 4,834    2,697    1,378       -1,335    0.308
+2% de los dias sin operar (fallo de API / senal perdida)     6,002    3,903    2,657          -56    0.308
+5% de los dias sin operar (fallo de API / senal perdida)     5,794    3,777    2,556         -157    0.308
+10% de los dias sin operar (fallo de API / senal perdida)    5,471    3,553    2,416         -297    0.308
+COMBINADO: entrada 1 tick + stop slip 1.0 + TP +1 + comision x1.2 + 2% dias   4,812    3,167    2,010         -703    0.278
+ADVERSO: entrada 2 ticks + stop slip 1.5 + TP +1 + comision x1.5 + 5% dias   3,636    2,422    1,358       -1,355    0.253
+
+MUNDO 'EL MODELO FALLA' (pase exogeno reducido a la mitad con todo lo demas igual): neto por cuenta
+  justo 2,566 | CON oro 1,023 | SIN oro 43
+
+PAYOUT por XFA (mundo justo, una vida): media $760, desv. est. $2,261, CV 2.98, P(pago>0) 21% -> XFAs necesarias para estimar la media con +-25% (IC95%): 545; con +-50%: 136
+Slippage de stop MODELADO en la XFA (MGC, stop 728 ticks, dias con stop: 41 de 515): exceso hasta el extremo de la barra, mediana 37 ticks, media 68; con slip 0.5 el modelo cobra 34 ticks (= $34 por contrato y stop) en promedio, p90 80
+Rango mediano entrada->flatten: MES 9:45 164 ticks; MGC 7:13 477 ticks; MCL 8:43 128 ticks
