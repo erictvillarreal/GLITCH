@@ -1,0 +1,85 @@
+DESGLOSE DE COSTOS POR ESCENARIO — 12 meses desde 19-oct-2026 (255 dias habiles), motor validado, payouts con ajuste -25%, cobro de payouts 5 dias despues, costo compartido $59.5/mes x12 = $714 una sola vez
+
+A. 50K, TP 40, 1 cuenta (lo que corre)
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)   9,950    9,375    4,431   16,211
+  payouts tras el -25%                         7,462    7,031    3,323   12,159
+  fees de Combine (renov.+reinicios+compras nuevas)   2,539    2,499    1,813    3,283
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 1,991    1,937    1,639    2,384
+  tarifa inicial del Combine (1 compra)           49       49       49       49
+  neto por cuenta (sin compartido)             2,883    2,399   -2,050    8,419
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=1 cuenta(s)                 2,169    1,685   -2,764    7,705   P(<0)=33%   P(>=7k)=13%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 52.8 (p90 68) = 1 inicial + 39.1 reinicios + 12.7 compras nuevas tras morir la XFA; activaciones 13.4; pagos pedidos 8.9
+  TOTAL con N=1: intentos de Combine 53/año (~4.4/mes), de ellos reinicios 39, compras nuevas 14, activaciones de XFA 13
+
+B. 50K, TP 32, 1 cuenta
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)  10,583   10,010    4,976   16,869
+  payouts tras el -25%                         7,938    7,507    3,732   12,652
+  fees de Combine (renov.+reinicios+compras nuevas)   2,110    2,107    1,519    2,744
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 2,119    2,086    1,639    2,533
+  tarifa inicial del Combine (1 compra)           49       49       49       49
+  neto por cuenta (sin compartido)             3,660    3,178   -1,293    9,178
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=1 cuenta(s)                 2,946    2,464   -2,007    8,464   P(<0)=25%   P(>=7k)=16%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 44.1 (p90 57) = 1 inicial + 29.6 reinicios + 13.5 compras nuevas tras morir la XFA; activaciones 14.2; pagos pedidos 9.4
+  TOTAL con N=1: intentos de Combine 44/año (~3.7/mes), de ellos reinicios 30, compras nuevas 14, activaciones de XFA 14
+
+C. 50K, TP 32, 2 cuentas
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)  10,583   10,010    4,976   16,869
+  payouts tras el -25%                         7,938    7,507    3,732   12,652
+  fees de Combine (renov.+reinicios+compras nuevas)   2,110    2,107    1,519    2,744
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 2,119    2,086    1,639    2,533
+  tarifa inicial del Combine (1 compra)           49       49       49       49
+  neto por cuenta (sin compartido)             3,660    3,178   -1,293    9,178
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=2 cuenta(s)                 6,606    5,642   -3,299   17,643   P(<0)=22%   P(>=7k)=44%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 44.1 (p90 57) = 1 inicial + 29.6 reinicios + 13.5 compras nuevas tras morir la XFA; activaciones 14.2; pagos pedidos 9.4
+  TOTAL con N=2: intentos de Combine 88/año (~7.3/mes), de ellos reinicios 59, compras nuevas 29, activaciones de XFA 28
+
+D. 50K, TP 32, 3 cuentas
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)  10,583   10,010    4,976   16,869
+  payouts tras el -25%                         7,938    7,507    3,732   12,652
+  fees de Combine (renov.+reinicios+compras nuevas)   2,110    2,107    1,519    2,744
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 2,119    2,086    1,639    2,533
+  tarifa inicial del Combine (1 compra)           49       49       49       49
+  neto por cuenta (sin compartido)             3,660    3,178   -1,293    9,178
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=3 cuenta(s)                10,266    8,820   -4,592   26,821   P(<0)=21%   P(>=7k)=56%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 44.1 (p90 57) = 1 inicial + 29.6 reinicios + 13.5 compras nuevas tras morir la XFA; activaciones 14.2; pagos pedidos 9.4
+  TOTAL con N=3: intentos de Combine 132/año (~11.0/mes), de ellos reinicios 89, compras nuevas 43, activaciones de XFA 43
+
+E. 150K, TP 32, 1 cuenta
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)  18,330   16,993    7,414   30,931
+  payouts tras el -25%                        13,747   12,745    5,561   23,198
+  fees de Combine (renov.+reinicios+compras nuevas)  10,042    9,950    7,164   12,935
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 1,680    1,639    1,341    1,937
+  tarifa inicial del Combine (1 compra)          199      199      199      199
+  neto por cuenta (sin compartido)             1,826      852   -8,466   13,543
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=1 cuenta(s)                 1,112      138   -9,180   12,829   P(<0)=49%   P(>=7k)=23%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 51.5 (p90 66) = 1 inicial + 39.8 reinicios + 10.7 compras nuevas tras morir la XFA; activaciones 11.3; pagos pedidos 8.5
+  TOTAL con N=1: intentos de Combine 51/año (~4.3/mes), de ellos reinicios 40, compras nuevas 12, activaciones de XFA 11
+
+F. 150K, TP 32, 2 cuentas
+                                               media  mediana      p10      p90   (USD por cuenta y año salvo la fila TOTAL)
+  payouts brutos (motor, cobrados en el horizonte)  18,330   16,993    7,414   30,931
+  payouts tras el -25%                        13,747   12,745    5,561   23,198
+  fees de Combine (renov.+reinicios+compras nuevas)  10,042    9,950    7,164   12,935
+     de los cuales renovaciones mensuales          0        0        0        0
+  activaciones                                 1,680    1,639    1,341    1,937
+  tarifa inicial del Combine (1 compra)          199      199      199      199
+  neto por cuenta (sin compartido)             1,826      852   -8,466   13,543
+  costo compartido (una vez, todas las cuentas)     714
+  NETO TOTAL con N=2 cuenta(s)                 2,938      989  -17,645   26,373   P(<0)=48%   P(>=7k)=37%
+  compras/reinicios de Combine por AÑO y por cuenta: intentos totales 51.5 (p90 66) = 1 inicial + 39.8 reinicios + 10.7 compras nuevas tras morir la XFA; activaciones 11.3; pagos pedidos 8.5
+  TOTAL con N=2: intentos de Combine 103/año (~8.6/mes), de ellos reinicios 80, compras nuevas 23, activaciones de XFA 23

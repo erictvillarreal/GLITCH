@@ -39,6 +39,8 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
     cum = np.zeros((T, H), np.float32); pay_m = np.zeros((T, H // DAYS_PER_MONTH)); fee_m = np.zeros_like(pay_m)
     fee_c_m = np.zeros_like(pay_m); fee_a_m = np.zeros_like(pay_m)
     first_pass = np.zeros(T, np.int8); first_day = np.zeros(T, np.int64); pass_day = np.zeros(T, np.int64)
+    n_b0 = np.zeros(T, np.int64); n_b1 = np.zeros(T, np.int64)                    # quiebres del Combine (= reinicios) y de la XFA (= nueva compra de Combine)
+    fee_c_d = np.zeros((T, H), np.float32); fee_a_d = np.zeros((T, H), np.float32)  # fees diarios de Combine (renovacion + reinicio + compra nueva) y de activacion
     n_pay = np.zeros(T, np.int64); n_pass = np.zeros(T, np.int64)
     for day in range(H):
         mo = min(day // DAYS_PER_MONTH, pay_m.shape[1] - 1)
@@ -95,6 +97,7 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         fee_today += np.where(new_fee, cs.monthly_fee, 0.0)
         fee_c_today = fee_c_today + np.where(new_fee, cs.monthly_fee, 0.0)
         fee_a_today = np.where(passed, cs.activation_fee, 0.0)
+        fee_c_d[:, day] = fee_c_today; fee_a_d[:, day] = fee_a_today; n_b0 += blown0; n_b1 += blown1
         fee_today += fee_a_today
         n_att = n_att + new_fee; n_pass = n_pass + passed
         newfirst = (first_pass == 0) & (blown0 | passed)
@@ -116,4 +119,5 @@ def simulate(acc: Account, D: np.ndarray, fix_neg=True, start_mode=0, single_epi
         cum[:, day] = cash
         take_d[:, day] = take; fee_d[:, day] = fee_today
     return dict(take_d=take_d, fee_d=fee_d, cum=cum, pay_m=pay_m, fee_m=fee_m, fee_c_m=fee_c_m, fee_a_m=fee_a_m,
-                n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day, pass_day=pass_day)
+                n_att=n_att, n_pass=n_pass, n_pay=n_pay, first_pass=first_pass, first_day=first_day, pass_day=pass_day,
+                n_b0=n_b0, n_b1=n_b1, fee_c_d=fee_c_d, fee_a_d=fee_a_d, mode_end=mode)

@@ -1,0 +1,53 @@
+VALIDACION FUERA DE MUESTRA de TP 32 vs TP 40 — 515 dias de MES, 10 bloques contiguos de ~51 dias; Combine 50K reglas reales (MLL en tiempo real, consistencia 55%, min 2 dias)
+Valores de TP probados en ESTE analisis: K=13 (20, 25, 28, 30, 31, 32, 33, 34, 35, 36, 40, 45, 50). En todo el proyecto el grid de geometrias (Camino B bajo reglas reales: 1,080 configs; Parte B: 767 configs; barridos del 5-8 oct) suma >1,800 configuraciones.
+
+[1] PUNTO DE EQUILIBRIO Y WIN RATE OBSERVADO (win = el TP se toca antes que el stop; barra ambigua = stop primero)
+  TP32 / stop EFECTIVO 40 ticks (liquidacion del MLL con nc=40; lo que pasa en el Combine): WR observado 56.5% [IC95% 52.2%-60.7%] | equilibrio sin comision 55.6%, con comision 56.9% | exceso sobre equilibrio (con comision) -0.4% | por bloque min 53% max 63%
+  TP32 / stop NOMINAL 100 ticks (Practice/paper; el MLL de 150K no vincula): WR observado 71.5% [IC95% 67.4%-75.2%] | equilibrio sin comision 75.8%, con comision 76.5% | exceso sobre equilibrio (con comision) -5.0% | por bloque min 61% max 83%
+  TP40 / stop EFECTIVO 40 ticks (liquidacion del MLL con nc=40; lo que pasa en el Combine): WR observado 49.3% [IC95% 45.0%-53.6%] | equilibrio sin comision 50.0%, con comision 51.2% | exceso sobre equilibrio (con comision) -1.9% | por bloque min 43% max 58%
+  TP40 / stop NOMINAL 100 ticks (Practice/paper; el MLL de 150K no vincula): WR observado 65.2% [IC95% 61.0%-69.2%] | equilibrio sin comision 71.4%, con comision 72.1% | exceso sobre equilibrio (con comision) -6.9% | por bloque min 51% max 77%
+  -> el win rate de TP 32 NO supera su punto de equilibrio (tampoco el de TP 40): no hay edge de direccion; la ventaja de TP 32 es de ESTRUCTURA (dos TP netos de $1,551 suman $3,102 >= $3,000), no de acertar mas.
+
+[2] POR BLOQUE (pareado, mismos numeros aleatorios): P(pasar el Combine) TP32 vs TP40
+  bloque  1 (52 dias): TP32 41.9% | TP40 34.4% | diferencia +7.4%
+  bloque  2 (52 dias): TP32 32.8% | TP40 25.9% | diferencia +6.9%
+  bloque  3 (52 dias): TP32 39.4% | TP40 31.4% | diferencia +8.1%
+  bloque  4 (52 dias): TP32 31.2% | TP40 23.2% | diferencia +8.0%
+  bloque  5 (52 dias): TP32 30.6% | TP40 29.2% | diferencia +1.4%
+  bloque  6 (51 dias): TP32 30.0% | TP40 20.4% | diferencia +9.6%
+  bloque  7 (51 dias): TP32 30.8% | TP40 22.8% | diferencia +8.0%
+  bloque  8 (51 dias): TP32 30.0% | TP40 21.6% | diferencia +8.4%
+  bloque  9 (51 dias): TP32 30.9% | TP40 24.5% | diferencia +6.4%
+  bloque 10 (51 dias): TP32 33.9% | TP40 26.5% | diferencia +7.3%
+  diferencia media +7.1%; TP32 gana en 10/10 bloques (prueba de signos unilateral p=0.001); IC95% bootstrap por bloques [+5.7%, +8.2%]
+
+[3] PIPELINE ANUAL por bloque (motor validado, 12 meses, payouts -25%, compartido $59.5/mes): media, mediana, P(perdida) con dias muestreados solo de ese bloque
+  bloque  1: TP32 media $ 1,747 mediana $ 1,317 P(<0) 32% | TP40 media $ 1,353 mediana $   910 P(<0) 37%
+  bloque  2: TP32 media $ 2,905 mediana $ 2,508 P(<0) 21% | TP40 media $ 2,254 mediana $ 1,913 P(<0) 28%
+  bloque  3: TP32 media $  -224 mediana $  -587 P(<0) 59% | TP40 media $  -510 mediana $  -840 P(<0) 63%
+  bloque  4: TP32 media $-1,127 mediana $-1,482 P(<0) 70% | TP40 media $-1,863 mediana $-2,264 P(<0) 78%
+  bloque  5: TP32 media $ 1,991 mediana $ 1,509 P(<0) 33% | TP40 media $ 1,925 mediana $ 1,420 P(<0) 34%
+  bloque  6: TP32 media $ 2,156 mediana $ 1,624 P(<0) 35% | TP40 media $   727 mediana $   123 P(<0) 49%
+  bloque  7: TP32 media $27,526 mediana $28,552 P(<0) 0% | TP40 media $26,419 mediana $27,446 P(<0) 0%
+  bloque  8: TP32 media $-1,660 mediana $-2,102 P(<0) 72% | TP40 media $-2,659 mediana $-3,144 P(<0) 80%
+  bloque  9: TP32 media $ 1,090 mediana $   629 P(<0) 44% | TP40 media $   360 mediana $   -97 P(<0) 51%
+  bloque 10: TP32 media $ 3,496 mediana $ 3,009 P(<0) 24% | TP40 media $ 2,670 mediana $ 2,175 P(<0) 31%
+  promedio entre bloques: TP32 media $3,790 (mediana $3,498, P(<0) 39%) vs TP40 media $3,068 (mediana $2,764, P(<0) 45%); diferencia de la media $+723/año, TP32 mejor en 10/10 bloques, IC95% bootstrap por bloques [$+490, $+958]
+
+[4] WALK-FORWARD con expansion: se elige el mejor TP de K=13 con los bloques de entrenamiento y se mide en el bloque siguiente (fuera de muestra)
+  entrena bloques 1-2 -> elige TP31 (37.3% en entrenamiento) | bloque 3 fuera de muestra: elegido 45.1% | TP40 32.4% | TP32 40.1%
+  entrena bloques 1-3 -> elige TP31 (40.4% en entrenamiento) | bloque 4 fuera de muestra: elegido 31.5% | TP40 23.4% | TP32 31.5%
+  entrena bloques 1-4 -> elige TP31 (37.5% en entrenamiento) | bloque 5 fuera de muestra: elegido 31.3% | TP40 29.4% | TP32 30.7%
+  entrena bloques 1-5 -> elige TP31 (36.4% en entrenamiento) | bloque 6 fuera de muestra: elegido 30.2% | TP40 20.4% | TP32 30.2%
+  entrena bloques 1-6 -> elige TP31 (35.3% en entrenamiento) | bloque 7 fuera de muestra: elegido 31.1% | TP40 23.4% | TP32 31.1%
+  entrena bloques 1-7 -> elige TP31 (34.2% en entrenamiento) | bloque 8 fuera de muestra: elegido 32.0% | TP40 21.6% | TP32 30.1%
+  entrena bloques 1-8 -> elige TP31 (33.7% en entrenamiento) | bloque 9 fuera de muestra: elegido 31.7% | TP40 23.3% | TP32 29.5%
+  entrena bloques 1-9 -> elige TP31 (34.2% en entrenamiento) | bloque 10 fuera de muestra: elegido 34.1% | TP40 26.7% | TP32 34.1%
+  promedio fuera de muestra: TP elegido 33.4% | TP40 25.1% | TP32 fijo 32.2%; TP elegidos [31]; el elegido supera a TP40 en 8/8 bloques y TP32 fijo supera a TP40 en 8/8
+
+[5] REALITY CHECK (White) sobre los K=13 TP vs benchmark TP40: bootstrap por bloques de 10 dias, B=200
+  diferencia de P(pasar) frente a TP40 en toda la muestra: TP20 -3.7%, TP25 +0.6%, TP28 -0.5%, TP30 -1.4%, TP31 +8.3%, TP32 +7.3%, TP33 +5.5%, TP34 +4.4%, TP35 +4.0%, TP36 +3.7%, TP45 -2.6%, TP50 -3.5%
+  mejor candidato en la muestra: TP31 (+8.3%); p-valor del reality check (maximo entre 13) = 0.000
+  TP32 vs TP40: diferencia en la muestra +7.3%; IC95% bootstrap por bloques [+5.1%, +9.1%]; p unilateral sin corregir 0.000
+
+CONCLUSION: ¿la ventaja de TP 32 sobrevive fuera de muestra? -> SI. Diferencia en P(pasar) +7.1% (IC95% por bloques [+5.7%, +8.2%]); reality check p=0.000 con K=13; anual +723 USD (IC95% [+490, +958]).
