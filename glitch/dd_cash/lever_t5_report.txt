@@ -1,0 +1,42 @@
+TAREA 5 — geometrias estructurales por cuenta (nc Combine / TP ticks / XFA bracket SL=TP ticks x nc_x):
+  A MES9:45>MGC7:13 (vigente)                      nc= 40 TP=  32 | XFA   728 ticks x  3
+  B MCL8:43>MCL8:43                                nc= 50 TP=  33 | XFA   195 ticks x 11
+  C1 MGC9:45>MGC9:45                               nc= 26 TP=  62 | XFA   490 ticks x  4
+  C2 M6E8:43>M6E8:43                               nc= 50 TP=  26 | XFA    60 ticks x 12
+  E1 MNQ9:45>MGC7:13 (Combine equity, para contraste) nc= 20 TP= 158 | XFA   728 ticks x  3
+
+Eje comun: 497 dias (2024-09-06..2026-08-24)
+
+=== HISTORIA REAL CON oro (neto total/ano de N cuentas, liquidacion explicita de la XFA (sin ajuste -25 por ciento), todos los fees y costo compartido $714; T=20000) ===
+portafolio                                     media mediana     p10  P(<0)  P>=6k P>=10k intent.dias>=2MLLcolch p95
+1 cuenta A                                     3,240   2,483  -3,202    31%    27%    12%      53      0.0    5,160
+2 cuentas A+A (MISMA senal)                    7,194   5,680  -5,690    28%    49%    35%     107     52.3    9,648
+2 cuentas A+B (MES>MGC, MCL)                   6,348   5,588  -2,995    22%    48%    29%     111     11.9    6,921
+2 cuentas A+C1 (MES>MGC, MGC9:45)              4,458   3,432  -4,891    31%    37%    22%     110     17.1    8,124
+3 cuentas A+B+C1                               7,566   6,691  -4,083    23%    53%    37%     167     33.9    9,099
+3 cuentas A+B+C2 (M6E)                         6,432   5,679  -3,507    23%    48%    30%     148     24.3    7,793
+2 cuentas A+E1 (MNQ: equity, contraste)        4,954   3,365  -5,520    34%    39%    25%     104     20.8    8,325
+
+=== HISTORIA REAL SIN oro (neto total/ano de N cuentas, liquidacion explicita de la XFA (sin ajuste -25 por ciento), todos los fees y costo compartido $714; T=20000) ===
+portafolio                                     media mediana     p10  P(<0)  P>=6k P>=10k intent.dias>=2MLLcolch p95
+1 cuenta A                                     1,821   1,137  -3,881    40%    18%     7%      55      0.0    5,542
+2 cuentas A+A (MISMA senal)                    4,356   2,987  -7,049    37%    38%    25%     110     53.9   10,391
+2 cuentas A+B (MES>MGC, MCL)                   4,567   3,862  -4,174    28%    39%    22%     114     12.9    7,626
+2 cuentas A+C1 (MES>MGC, MGC9:45)              2,809   1,884  -5,725    39%    29%    16%     111     17.0    8,533
+3 cuentas A+B+C1                               5,556   4,693  -5,318    29%    44%    29%     170     34.6    9,783
+3 cuentas A+B+C2 (M6E)                         4,404   3,670  -4,969    31%    39%    23%     153     26.0    8,767
+2 cuentas A+E1 (MNQ: equity, contraste)        2,321     920  -6,756    45%    27%    16%     109     21.7    9,122
+
+=== MUNDO JUSTO (30 mundos sinteticos por cuenta, productos independientes): neto/ano POR CUENTA, sin costo compartido ===
+  A MES9:45>MGC7:13 (vigente)                        6,567   5,542  -2,020  P(<0)=19%  intentos 53  dias MLL 52  pase 0.308  Pxfa $713
+  B MCL8:43>MCL8:43                                  4,334   3,412  -2,806  P(<0)=26%  intentos 57  dias MLL 56  pase 0.290  Pxfa $582
+  C1 MGC9:45>MGC9:45                                 4,528   3,622  -2,910  P(<0)=26%  intentos 57  dias MLL 56  pase 0.286  Pxfa $600
+  C2 M6E8:43>M6E8:43                                 1,138     651  -1,913  P(<0)=40%  intentos 35  dias MLL 34  pase 0.257  Pxfa $468
+  E1 MNQ9:45>MGC7:13 (Combine equity, para contraste)   3,547   2,138  -3,370  P(<0)=35%  intentos 50  dias MLL 49  pase 0.212  Pxfa $712
+
+  portafolios en mundo justo, cuentas INDEPENDIENTES (cota optimista de diversificacion) vs MISMA senal (cota pesimista):
+  A+B independientes                  10,187   9,236  -1,429  P(<0)=14%  P>=6k=64%  P>=10k=47%
+  A+A misma senal                     12,420  10,370  -4,754  P(<0)=20%  P>=6k=62%  P>=10k=51%
+  A+B+C1 independientes               14,715  13,887     681  P(<0)=9%  P>=6k=77%  P>=10k=63%
+  A+A+A misma senal                   18,988  15,912  -6,774  P(<0)=20%  P>=6k=69%  P>=10k=61%
+  A+B+C1+C2 independientes            15,852  14,886   1,218  P(<0)=8%  P>=6k=79%  P>=10k=67%

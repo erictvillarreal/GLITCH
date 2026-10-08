@@ -1,0 +1,23 @@
+ESCALERA DE PALANCAS — 1 cuenta 50K, neto anual por cuenta (sin costo compartido $714), 12 meses desde 19-oct-2026, slip 0.5, liquidacion explicita de la XFA (sin ajuste -25 por ciento), fees completos
+paso                                                     media mediana     p10     p90  P(<0) intent. dias MLL  Pxfa | real CON oro real SIN oro
+0. Hoy: TP40, XFA 364x3 (Cerebro 2), plan Standard       2,781   2,068  -3,086   9,635    33%    64.4     63.4   531 |        2,421        1,104
+1. + TP32 (aprobable: mismo tamano y stop)               3,740   3,051  -2,259  10,622    25%    54.6     53.6   531 |        3,294        1,874
+2. + bracket XFA 728x3 (propuesta; cambia logica de capital)   6,098   5,129  -2,262  15,816    21%    53.6     52.6   678 |        3,914        2,759
+3. paso 2 + bloqueo de ganancia $3,000 (control de conducta)   4,579   4,063  -2,226  11,272    19%    35.8     35.4   723 |        3,046        2,247
+4. paso 2 + huella nc=25 (TP51; ~mitad del tamano maximo)   5,741   4,756  -2,601  15,436    22%    53.1     52.1   678 |        3,553        2,463
+5. paso 2 con No Activation Fee $95 + act $0             6,089   5,133  -2,390  15,900    21%    53.6     52.6   678 |        4,033        2,900
+6. paso 2 + primer tramo de $10k al 100% (supuesto, solo 1er ano)   6,954   6,129  -1,785  16,816    18%    53.6     52.6   730 |        4,714        3,510
+7. paso 2 + DLL comprado (Combine+XFA $1,000, tope $4,000)   2,519   1,637  -2,668   8,925    35%    47.8     46.8   651 |        1,347          512
+
+ESTRES del paso 2 (bracket XFA 728x3) y del paso 1: neto por cuenta, mundo justo / real CON oro / real SIN oro
+estres                                                   justo  CON oro  SIN oro
+1. + TP32 (aprobable: mismo ta slip 0.5 (base)                              3,744    3,333    1,868
+1. + TP32 (aprobable: mismo ta slip 1.0                                     2,475    2,614    1,256
+1. + TP32 (aprobable: mismo ta slip 0.0                                     5,415    4,264    2,631
+1. + TP32 (aprobable: mismo ta TP necesita +1 tick para llenar (slip 0.5)   3,578    3,164    1,727
+1. + TP32 (aprobable: mismo ta slip 1.0 + TP +1 tick                        2,319    2,446    1,113
+2. + bracket XFA 728x3 (propue slip 0.5 (base)                              6,162    3,959    2,804
+2. + bracket XFA 728x3 (propue slip 1.0                                     5,620    3,826    2,700
+2. + bracket XFA 728x3 (propue slip 0.0                                     6,796    4,110    2,915
+2. + bracket XFA 728x3 (propue TP necesita +1 tick para llenar (slip 0.5)   5,986    3,768    2,632
+2. + bracket XFA 728x3 (propue slip 1.0 + TP +1 tick                        5,447    3,635    2,531

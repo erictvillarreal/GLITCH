@@ -1,0 +1,46 @@
+TAREA 3 — politica de ciclos (50K, 1 cuenta, neto/ano POR CUENTA con liquidacion explicita de la XFA (sin ajuste -25 por ciento) y todos los fees, sin costo compartido). T=20000, 30 mundos sinteticos. XFA: bracket 728x3 (la mejor sin loteria de la Tarea 4), slip 0.5
+politica                                         media mediana     p10  P(<0) intent.dias MLLnc>=80%
+
+--- (A) huella del Combine (nc) con TP estructural, sin tope de intentos ---
+nc=50 TP=26 (stop = liquidacion del MLL)         6,563   5,506  -2,109    19%    54.7    53.7   100%   pase=0.293
+nc=40 TP=32 (stop = liquidacion del MLL)         6,796   5,770  -1,833    18%    52.1    51.1   100%   pase=0.311
+nc=25 TP=51 (stop = liquidacion del MLL)         6,390   5,373  -2,270    20%    51.7    50.7     0%   pase=0.301
+nc=16 TP=79 (stop = liquidacion del MLL)         5,497   4,317  -2,467    24%    48.3    47.3     0%   pase=0.284
+
+--- (B) tope de intentos K x huella (reinicio = compra nueva al mismo precio; al llegar a K se detiene) ---
+nc=40 K=10                                       1,687    -467  -1,086    52%    10.0     9.9   100%   $/intento=170
+nc=40 K=15                                       2,487     320  -1,480    42%    14.9    14.8   100%   $/intento=167
+nc=40 K=20                                       3,276   1,130  -1,874    40%    19.7    19.7   100%   $/intento=166
+nc=40 K=30                                       4,657   2,439  -2,364    31%    29.1    29.0   100%   $/intento=160
+nc=40 K=None                                     6,796   5,770  -1,833    18%    52.1    51.1   100%   $/intento=130
+nc=25 K=10                                       1,612    -490  -1,086    54%    10.0     9.9     0%   $/intento=162
+nc=25 K=15                                       2,378     320  -1,480    43%    14.9    14.8     0%   $/intento=160
+nc=25 K=20                                       3,130     953  -1,874    41%    19.7    19.7     0%   $/intento=159
+nc=25 K=30                                       4,450   2,291  -2,364    32%    29.1    29.0     0%   $/intento=153
+nc=25 K=None                                     6,390   5,373  -2,270    20%    51.7    50.7     0%   $/intento=124
+nc=16 K=10                                       1,482    -490  -1,086    55%    10.0     9.9     0%   $/intento=149
+nc=16 K=15                                       2,199     320  -1,480    45%    14.9    14.8     0%   $/intento=148
+nc=16 K=20                                       2,882     523  -1,725    42%    19.7    19.7     0%   $/intento=146
+nc=16 K=30                                       4,085   1,981  -2,364    35%    29.0    28.9     0%   $/intento=141
+nc=16 K=None                                     5,497   4,317  -2,467    24%    48.3    47.3     0%   $/intento=114
+
+--- (C) paro por perdida acumulada S y bloqueo de ganancia Z (nc=40, K libre): minimizar P(<0) para una media dada ---
+paro perdida None / bloqueo ganancia None        6,796   5,770  -1,833    18%    52.1    51.1   100%
+paro perdida 500 / bloqueo ganancia None         2,650    -543    -658    72%    18.9    18.6   100%
+paro perdida 1000 / bloqueo ganancia None        4,062  -1,030  -1,135    55%    29.5    29.0   100%
+paro perdida 2000 / bloqueo ganancia None        5,691   4,360  -2,074    34%    42.1    41.4   100%
+paro perdida None / bloqueo ganancia 3000        5,016   4,248  -1,784    17%    33.9    33.6   100%
+paro perdida None / bloqueo ganancia 6000        6,006   6,312  -1,833    18%    42.6    42.0   100%
+paro perdida 1000 / bloqueo ganancia 6000        3,399  -1,030  -1,135    55%    22.1    22.0   100%
+paro perdida 2000 / bloqueo ganancia 6000        4,915   5,035  -2,074    34%    33.1    32.8   100%
+paro perdida 1000 / bloqueo ganancia 3000        2,656  -1,027  -1,135    54%    16.2    16.2   100%
+
+--- (D) paquete DLL: Combine DLL $1,000 + XFA DLL $1,000 (bracket 622/498 x2, sin loteria) + tope $4,000 (oferta temporal; verificar vigencia) ---
+DLL nc=40 TP=32 Standard $49 + act $149          2,921   1,980  -2,502    32%    47.3    46.3   100%   pase=0.202
+DLL nc=40 TP=32 No Activation Fee con DLL $85    2,645   1,714  -3,007    35%    47.3    46.3   100%   pase=0.202
+DLL nc=25 TP=51 Standard $49 + act $149          3,317   2,340  -2,130    28%    42.5    41.5     0%   pase=0.232
+DLL nc=25 TP=51 No Activation Fee con DLL $85    3,256   2,306  -2,371    30%    42.5    41.5     0%   pase=0.232
+DLL nc=16 TP=79 Standard $49 + act $149          3,132   2,145  -2,077    29%    39.6    38.6     0%   pase=0.236
+DLL nc=16 TP=79 No Activation Fee con DLL $85    3,096   2,145  -2,261    30%    39.6    38.6     0%   pase=0.236
+DLL nc=10 TP=125 Standard $49 + act $149         2,732   1,723  -2,038    32%    33.6    32.6     0%   pase=0.240
+DLL nc=10 TP=125 No Activation Fee con DLL $85   2,725   1,739  -2,219    32%    33.6    32.6     0%   pase=0.240

@@ -1,0 +1,98 @@
+TAREA 4 — payout esperado por XFA 50K al trader (una vida, 126 dias; liquidacion en tiempo real EXPLICITA en el motor, sin ajuste -25 por ciento), MGC 7:13 CT, bracket SL=TP=S ticks (1 tick = $1 por contrato), comision $1.92
+Techo de juego justo del payout esperado por XFA (DP, scripts/xfa_dp_ceiling.py, sin ajuste -25 por ciento): ~US$1,341 al trader (ya incluye la liquidacion en tiempo real; cualquier politica, incluso de loteria; comparable directamente con las cifras de abajo).
+
+--- (A) geometria del bracket y tamano (SOLO brackets sin loteria: TP <= 1.25 x SL efectivo), mundo justo (20 mundos), slip 0.5, ruta Standard, cap $2,000, retiro en cuanto es elegible ---
+    S nc_x   rho riesgo $/trade E[payout]  mediana P(>=1 pago) pagos vida d
+  728    3  None          2,184       779        0         21%   0.5      9
+  728    2  None          1,456       765        0         30%   0.5     11
+  637    3  None          1,911       763        0         22%   0.5      9
+  637    2  None          1,274       754        0         32%   0.6     11
+  546    4  None          2,184       748        0         19%   0.4      8
+  546    3  None          1,638       743        0         23%   0.5      9
+  728    2   1.0          1,456       736        0         37%   0.6     13
+  637    3   1.0          1,911       728        0         29%   0.5     11
+  546    2  None          1,092       719        0         35%   0.6     11
+  637    2   1.0          1,274       714        0         38%   0.6     13
+  455    3  None          1,365       712        0         25%   0.5      9
+  455    4  None          1,820       704        0         19%   0.4      8
+  hoy (Cerebro 2: S=364, nc 3, fijo): E[payout] $602
+  mejor sin loteria: S=728, nc_x=3, rho=None: $779
+
+--- (B) momento de retiro (umbral de balance para pedir el pago) x ruta x tope, geometria de hoy (364x3) y la mejor, mundo justo, slip 0.5 ---
+     geometria  ruta   tope  umbral E[payout] P(>=1 pago) pagos
+     hoy 364x3   std  2,000       0       602         27%   0.4
+     hoy 364x3   std  2,000     500       602         27%   0.4
+     hoy 364x3   std  2,000    1000       603         27%   0.4
+     hoy 364x3   std  2,000    2000       605         24%   0.4
+     hoy 364x3   std  2,000    3000       586         21%   0.4
+     hoy 364x3   std  2,000    4000       562         16%   0.3
+     hoy 364x3   std  2,000    6000       450         10%   0.2
+     hoy 364x3   std  4,000       0       621         27%   0.4
+     hoy 364x3   std  4,000     500       621         27%   0.4
+     hoy 364x3   std  4,000    1000       622         27%   0.4
+     hoy 364x3   std  4,000    2000       624         24%   0.4
+     hoy 364x3   std  4,000    3000       608         21%   0.3
+     hoy 364x3   std  4,000    4000       578         16%   0.3
+     hoy 364x3   std  4,000    6000       510         10%   0.2
+     hoy 364x3  cons  3,000       0       631         25%   0.4
+     hoy 364x3  cons  3,000     500       631         25%   0.4
+     hoy 364x3  cons  3,000    1000       631         25%   0.4
+     hoy 364x3  cons  3,000    2000       631         25%   0.4
+     hoy 364x3  cons  3,000    3000       617         23%   0.3
+     hoy 364x3  cons  3,000    4000       577         17%   0.3
+     hoy 364x3  cons  3,000    6000       496         10%   0.2
+     hoy 364x3  cons  6,000       0       631         25%   0.4
+     hoy 364x3  cons  6,000     500       631         25%   0.4
+     hoy 364x3  cons  6,000    1000       632         25%   0.4
+     hoy 364x3  cons  6,000    2000       632         25%   0.4
+     hoy 364x3  cons  6,000    3000       618         23%   0.3
+     hoy 364x3  cons  6,000    4000       579         17%   0.3
+     hoy 364x3  cons  6,000    6000       509         10%   0.2
+   mejor 728x3   std  2,000       0       779         21%   0.5
+   mejor 728x3   std  2,000     500       779         21%   0.5
+   mejor 728x3   std  2,000    1000       779         21%   0.5
+   mejor 728x3   std  2,000    2000       777         20%   0.5
+   mejor 728x3   std  2,000    3000       775         19%   0.4
+   mejor 728x3   std  2,000    4000       762         18%   0.4
+   mejor 728x3   std  2,000    6000       708         14%   0.4
+   mejor 728x3   std  4,000       0       877         21%   0.4
+   mejor 728x3   std  4,000     500       877         21%   0.4
+   mejor 728x3   std  4,000    1000       877         21%   0.4
+   mejor 728x3   std  4,000    2000       877         20%   0.4
+   mejor 728x3   std  4,000    3000       879         19%   0.3
+   mejor 728x3   std  4,000    4000       866         18%   0.3
+   mejor 728x3   std  4,000    6000       843         14%   0.3
+   mejor 728x3  cons  3,000       0       702         17%   0.3
+   mejor 728x3  cons  3,000     500       702         17%   0.3
+   mejor 728x3  cons  3,000    1000       702         17%   0.3
+   mejor 728x3  cons  3,000    2000       703         17%   0.3
+   mejor 728x3  cons  3,000    3000       702         16%   0.3
+   mejor 728x3  cons  3,000    4000       703         16%   0.3
+   mejor 728x3  cons  3,000    6000       672         15%   0.2
+   mejor 728x3  cons  6,000       0       836         17%   0.3
+   mejor 728x3  cons  6,000     500       836         17%   0.3
+   mejor 728x3  cons  6,000    1000       836         17%   0.3
+   mejor 728x3  cons  6,000    2000       836         17%   0.3
+   mejor 728x3  cons  6,000    3000       836         16%   0.3
+   mejor 728x3  cons  6,000    4000       835         16%   0.2
+   mejor 728x3  cons  6,000    6000       821         15%   0.2
+
+--- (C) slip del stop (llenado en el extremo de la barra: 0 = exacto, 0.5, 1.0 = peor caso dentro de la barra), ruta Standard cap $2,000, retiro asap ---
+     geometria  slip mundo justo real CON oro real SIN oro
+     hoy 364x3   0.0         757          619          478
+     hoy 364x3   0.5         602          537          421
+     hoy 364x3   1.0         503          482          379
+   mejor 728x3   0.0         837          587          463
+   mejor 728x3   0.5         779          575          453
+   mejor 728x3   1.0         733          565          446
+
+--- (E) paquete DLL ($1,000 comprado con el Combine; la XFA hereda el DLL; tope Standard $4,000 = oferta temporal): geometria sin loteria bajo el DLL, mundo justo, slip 0.5 ---
+ nc_x TP/SLeff SLeff tk  TP tk riesgo $ E[payout] P(>=1 pago) pagos
+    2     1.25      498    622      996       772         35%   0.6
+    2     1.00      498    498      996       714         37%   0.6
+    3     1.25      331    414      993       671         27%   0.4
+    5     1.25      198    248      990       638         22%   0.4
+    4     1.25      248    310      992       617         24%   0.4
+    3     1.00      331    331      993       590         29%   0.4
+    4     1.00      248    248      992       587         27%   0.4
+    5     1.00      198    198      990       570         25%   0.4

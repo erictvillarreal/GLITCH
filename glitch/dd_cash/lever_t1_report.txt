@@ -1,0 +1,26 @@
+TAREA 1 — linea base y correcciones de reglas (neto anual POR CUENTA; filas 'legacy' = serie + ajuste -25 por ciento (convencion previa), filas 'corregidas' = liquidacion explicita de la XFA sin ajuste; fees completos incl. tarifa inicial, SIN costo compartido; 12 meses desde 19-oct-2026; T=20000)
+configuracion                                                media mediana     p10     p90   intentos/ano  dias-MLL  pagos/ano
+TP32 legacy (reglas del motor validado, slip 0) CON oro    3,674   3,192  -1,334   9,233       44.0      43.0     9.4
+TP32 legacy (reglas del motor validado, slip 0) SIN oro    2,010   1,563  -2,240   6,865       46.0      45.0     8.3
+TP32 reglas corregidas, slip 0                  CON oro    4,269   3,616  -1,602  10,990       49.5      48.5     7.5
+TP32 reglas corregidas, slip 0                  SIN oro    2,593   2,024  -2,452   8,327       50.9      49.9     6.7
+TP32 reglas corregidas, slip 0.5 (BASE)         CON oro    3,346   2,711  -2,224   9,763       51.6      50.6     6.9
+TP32 reglas corregidas, slip 0.5 (BASE)         SIN oro    1,841   1,269  -2,934   7,270       52.8      51.8     6.2
+TP32 reglas corregidas, slip 1.0                CON oro    2,631   2,049  -2,670   8,743       53.4      52.4     6.5
+TP32 reglas corregidas, slip 1.0                SIN oro    1,199     656  -3,386   6,463       54.7      53.7     5.8
+TP40 legacy (reglas del motor validado, slip 0) CON oro    2,901   2,389  -2,058   8,476       52.8      51.8     8.9
+TP40 legacy (reglas del motor validado, slip 0) SIN oro    1,323     855  -2,876   6,153       54.7      53.7     7.8
+TP40 reglas corregidas, slip 0                  CON oro    3,366   2,655  -2,390  10,012       58.9      57.9     7.0
+TP40 reglas corregidas, slip 0                  SIN oro    1,799   1,224  -3,162   7,540       60.1      59.1     6.3
+TP40 reglas corregidas, slip 0.5 (BASE)         CON oro    2,457   1,791  -2,977   8,780       61.2      60.2     6.4
+TP40 reglas corregidas, slip 0.5 (BASE)         SIN oro    1,061     517  -3,623   6,466       62.2      61.2     5.8
+TP40 reglas corregidas, slip 1.0                CON oro    1,753   1,123  -3,438   7,789       63.3      62.3     6.0
+TP40 reglas corregidas, slip 1.0                SIN oro      455     -59  -4,056   5,607       64.2      63.2     5.4
+
+MUNDO DE JUEGO JUSTO (barras con signo volteado al azar, misma volatilidad; sin deriva ni persistencia) — lo que es ESTRUCTURAL (sin edge ni ventana de oro):
+TP32 sintetico semilla 0 (slip 0.5)                                 9,178   8,218     740  18,899       49.8      48.8     9.5
+TP32 sintetico semilla 1 (slip 0.5)                                 5,928   5,183  -1,252  14,210       50.6      49.6     7.5
+TP32 sintetico semilla 2 (slip 0.5)                                 1,898   1,226  -3,332   7,953       58.2      57.2     5.7
+TP40 sintetico semilla 0 (slip 0.5)                                 8,041   7,024    -380  17,742       58.7      57.7     8.9
+TP40 sintetico semilla 1 (slip 0.5)                                 4,975   4,095  -2,087  13,248       59.2      58.2     7.0
+TP40 sintetico semilla 2 (slip 0.5)                                 1,137     503  -4,040   7,133       66.8      65.8     5.3
