@@ -335,15 +335,53 @@ def _resolve_account_id(client: ProjectXClient) -> int:
 
 # ── 3. resolve_contract_id ───────────────────────────────────────────────
 def resolve_contract_id(client: ProjectXClient, product_code: str) -> dict:
-    """Generaliza ProjectXClient.find_mes_contract() (que hardcodea "MES")
-    a cualquier product_code de CANDIDATES -- front month = vencimiento mas
-    cercano entre los contratos disponibles cuyo nombre contiene el codigo."""
+    """Generaliza ProjectXClient.find_mes_contract() (que hardcodea "MES") a cualquier product_code de CANDIDATES.
+
+    T4 (12-oct-2026, NEEDS HUMAN REVIEW): Topstep exige operar el FRONT MONTH = el vencimiento de mayor volumen (help.topstep.com/8284108), que NO es
+    siempre el de vencimiento mas cercano (oro: MGCV6 en mes de entrega se quedo sin barras el 1-oct-2026 mientras su vencimiento seguia siendo el mas
+    cercano). Orden de preferencia: (1) los contratos que la API marca `activeContract: true` (campo documentado por ProjectX; NO VERIFICADO en vivo en
+    esta cuenta), el de vencimiento mas cercano entre ellos; (2) si ninguno trae la marca, el vencimiento mas cercano (comportamiento anterior) con un
+    AVISO. Para MES (trimestral) ambos criterios coinciden salvo la semana de roll."""
     contracts = client.get_contracts(live=False)
     matches = [c for c in contracts if product_code in c.get("name", "")]
     if not matches:
         raise RuntimeError(f"No se encontro contrato para product_code={product_code!r} en ProjectX.")
-    matches.sort(key=lambda c: c.get("expirationDate", ""))
-    return matches[0]
+    active = [c for c in matches if c.get("activeContract") is True]
+    pool = active or matches
+    pool.sort(key=lambda c: c.get("expirationDate", ""))
+    chosen = pool[0]
+    if not active:
+        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano "
+                    f"({chosen.get('name')}), que puede NO ser el front month por volumen.")
+    else:
+        nearest = sorted(matches, key=lambda c: c.get("expirationDate", ""))[0]
+        if nearest.get("id") != chosen.get("id"):
+            log.info(f"resolve_contract_id({product_code}): front month activo {chosen.get('name')} (el vencimiento mas cercano, {nearest.get('name')}, no es el activo).")
+    _warn_if_contract_spec_differs(chosen)
+    return chosen
+
+
+_SPEC_WARNED: set = set()
+
+
+def _warn_if_contract_spec_differs(contract: dict) -> None:
+    """Chequeo SOLO INFORMATIVO (nunca bloquea ni lanza): compara tickSize/tickValue del contrato de ProjectX con strategies.geometry_pure.SPECS. Si difieren, el
+    P&L y los precios TP/SL calculados con CFG.spec serian incorrectos -- un aviso por Telegram (una vez por dia) lo hace visible antes de que cueste dinero."""
+    try:
+        ts, tv = contract.get("tickSize"), contract.get("tickValue")
+        bad = []
+        if ts is not None and abs(float(ts) - CFG.spec.tick_size) > 1e-9:
+            bad.append(f"tickSize API={ts} vs spec={CFG.spec.tick_size}")
+        if tv is not None and abs(float(tv) - CFG.spec.tick_value_usd) > 1e-6:
+            bad.append(f"tickValue API={tv} vs spec={CFG.spec.tick_value_usd}")
+        if bad and contract.get("id") not in _SPEC_WARNED:
+            _SPEC_WARNED.add(contract.get("id"))                 # un aviso por contrato y por arranque del proceso (no cada ciclo)
+            msg = (f"{PREFIX}\nSTATUS: ALERTA\nel contrato {contract.get('name')} no coincide con la spec local ({'; '.join(bad)}). "
+                   f"Verificar antes de dar luz verde a la ejecucion real.\n{utc_now_str()}")
+            send(msg)
+            log.warning(msg.replace("\n", " | "))
+    except Exception as e:                       # nunca debe romper el ciclo
+        log.warning(f"_warn_if_contract_spec_differs: {e}")
 
 
 def _reference_price(client: ProjectXClient, contract_id) -> float:

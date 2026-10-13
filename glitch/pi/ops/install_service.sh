@@ -3,6 +3,8 @@
 #
 #   bash pi/ops/install_service.sh            # instala + habilita (arranca solo al prender el Pi), NO lo arranca
 #   bash pi/ops/install_service.sh --start    # ademas lo arranca ahora (solo si NO hay un pi_executor.py suelto corriendo)
+#   bash pi/ops/install_service.sh --instance mgc [--start]   # SEGUNDA instancia (otro producto, p. ej. Cerebro 2 / MGC): unidad glitch-pi-executor-mgc.service,
+#                                             entorno ~/.glitch_pi_mgc.env, log pi_executor_mgc.log, estado ~/.glitch_pi_state_mgc (T4, 12-oct-2026)
 #
 # Que hace (y que NO):
 #   * Genera /etc/systemd/system/glitch-pi-executor.service desde la plantilla (pide sudo SOLO para eso
@@ -19,16 +21,32 @@
 set -euo pipefail
 
 START_NOW=0
-[ "${1:-}" = "--start" ] && START_NOW=1
+INSTANCE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --start) START_NOW=1; shift;;
+    --instance) INSTANCE="${2:-}"; shift 2;;
+    *) echo "ERROR: argumento desconocido: $1" >&2; exit 1;;
+  esac
+done
+[ -z "$INSTANCE" ] || [[ "$INSTANCE" =~ ^[a-z0-9]+$ ]] || { echo "ERROR: --instance solo admite minusculas y digitos (ej. mgc)." >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GLITCH_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"          # .../glitch (donde vive pi/pi_executor.py)
 PI_USER="$(id -un)"
 VENV="${PI_VENV:-$HOME/glitch-env}"
-ENV_FILE="${PI_ENV_FILE:-$HOME/.glitch_pi.env}"
 LOG_DIR="${PI_LOG_DIR:-$HOME/glitch-logs}"
-LOG_FILE="$LOG_DIR/pi_executor.log"
-UNIT_NAME="glitch-pi-executor.service"
+if [ -z "$INSTANCE" ]; then
+  ENV_FILE="${PI_ENV_FILE:-$HOME/.glitch_pi.env}"
+  LOG_FILE="$LOG_DIR/pi_executor.log"
+  UNIT_NAME="glitch-pi-executor.service"
+  STATE_DIR="${PI_STATE_DIR:-$HOME}"                    # default de pi_executor._state_dir(): el HOME del usuario del servicio
+else
+  ENV_FILE="${PI_ENV_FILE:-$HOME/.glitch_pi_$INSTANCE.env}"
+  LOG_FILE="$LOG_DIR/pi_executor_$INSTANCE.log"
+  UNIT_NAME="glitch-pi-executor-$INSTANCE.service"
+  STATE_DIR="${PI_STATE_DIR:-$HOME/.glitch_pi_state_$INSTANCE}"
+fi
 UNIT_DEST="/etc/systemd/system/$UNIT_NAME"
 TEMPLATE="$SCRIPT_DIR/glitch-pi-executor.service.template"
 
@@ -68,9 +86,23 @@ for v in $REQUIRED_VARS; do
 done
 [ -z "$MISSING" ] || die "En $ENV_FILE faltan valores para:$MISSING (completalos a mano y reintenta)."
 
+# --- Segunda instancia: NO puede compartir producto con otro archivo de entorno del Pi (los archivos del Gist se nombran por producto: dos ejecutores del mismo
+#     producto = dos lectores de la misma señal/estado, ver pi/ARCHITECTURE.md invariante 4). Solo se comparan NOMBRES de variable y el valor de GLITCH_PRODUCT. ---
+MY_PRODUCT="$(grep -E '^[[:space:]]*GLITCH_PRODUCT=' "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d "\"' ")"
+for OTHER in "$HOME"/.glitch_pi.env "$HOME"/.glitch_pi_*.env; do
+  [ -f "$OTHER" ] || continue
+  [ "$OTHER" = "$ENV_FILE" ] && continue
+  OTHER_PRODUCT="$(grep -E '^[[:space:]]*GLITCH_PRODUCT=' "$OTHER" | tail -1 | cut -d= -f2- | tr -d "\"' ")"
+  [ -n "$MY_PRODUCT" ] && [ "$OTHER_PRODUCT" = "$MY_PRODUCT" ] && die "$OTHER tambien fija GLITCH_PRODUCT=$MY_PRODUCT: dos ejecutores del mismo producto comparten señal y estado. Usa un producto distinto por instancia."
+done
+mkdir -p "$STATE_DIR"; chmod 700 "$STATE_DIR"
+
 # --- Detectar un pi_executor suelto (nohup) -- no se mata, se avisa ---
-SVC_PID="$(systemctl show -p MainPID --value "$UNIT_NAME" 2>/dev/null || echo 0)"   # el propio servicio (si ya existe) no cuenta como "suelto"
-LOOSE="$(pgrep -af 'pi_executor.py' | grep -v "install_service" | awk -v svc="${SVC_PID:-0}" '$1 != svc' || true)"
+SVC_PIDS="0"                                    # los PIDs de TODAS las instancias gestionadas por systemd (la por defecto y las --instance) no cuentan como "sueltos"
+for U in $(systemctl list-units --all --plain --no-legend 'glitch-pi-executor*.service' 2>/dev/null | awk '{print $1}') "$UNIT_NAME"; do
+  P="$(systemctl show -p MainPID --value "$U" 2>/dev/null || echo 0)"; SVC_PIDS="$SVC_PIDS ${P:-0}"
+done
+LOOSE="$(pgrep -af 'pi_executor.py' | grep -v "install_service" | awk -v pids="$SVC_PIDS" 'BEGIN{n=split(pids,a," "); for(i=1;i<=n;i++) ok[a[i]]=1} !($1 in ok)' || true)"
 if [ -n "$LOOSE" ]; then
   echo "Se encontro un pi_executor.py corriendo FUERA de systemd:"
   echo "$LOOSE"
@@ -87,6 +119,7 @@ sed -e "s|@PI_USER@|$PI_USER|g" \
     -e "s|@ENV_FILE@|$ENV_FILE|g" \
     -e "s|@VENV@|$VENV|g" \
     -e "s|@LOG_FILE@|$LOG_FILE|g" \
+    -e "s|@STATE_DIR@|$STATE_DIR|g" \
     "$TEMPLATE" > "$TMP"
 grep -q '@[A-Z_]*@' "$TMP" && { rm -f "$TMP"; die "Quedaron placeholders sin reemplazar en la unidad."; }
 

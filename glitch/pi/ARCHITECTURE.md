@@ -103,10 +103,15 @@ Detalle y comandos: `pi/ops/README.md`.
 
 ## Huecos conocidos (abiertos — no escondidos)
 
-* **Cerebro 2 (MGC XFA) no tiene handoff al Pi.** `scheduler/geometry_mgc_scheduler.py` (rama `cerebro2-dev`) solo
-  simula; no tiene la rama `DRY_RUN=false` que escribe `ORDER_FILE`. Hoy el Pi solo puede ejecutar lo que alimenta
-  `geometry_scheduler.py` (`GLITCH_PRODUCT=MES`). Además `CANDIDATES["MGC"]` en `main` (SL136/TP45, nc=30) **no** es la
-  geometría XFA de producción (SL=TP=364, nc=6).
+* **Cerebro 2 (MGC XFA): handoff y geometría en revisión (T4, 12-oct-2026).** Rama `feat/t4-mgc-handoff` (sobre `cerebro2-dev`): `geometry_mgc_scheduler.py`
+  con `DRY_RUN=false` escribe `orden_pendiente_mgc.json` (mismo contrato que MES; `signal["product"]` DEBE ser idéntico al `GLITCH_PRODUCT` del Pi o éste la trata
+  como señal de ensayo). Esta rama alinea `CANDIDATES["MGC"]` a la XFA 50K real (SL=TP=364, nc=3; antes SL136/TP45, nc=30, descartada) con alias `MGC_XFA_100K`/`MGC_XFA_150K`.
+  **Pendiente de revisión humana y de ensayo en Practice**; `geometry_scheduler.py` (MES) sigue sin poder correr MGC (exige `yf_ticker`).
+* **Front month = el de mayor volumen (Topstep), no el de vencimiento más cercano.** `resolve_contract_id` prefiere `activeContract: true` (campo de ProjectX, NO VERIFICADO en
+  vivo: correr `pi/ops/check_contracts.py` en el Pi) y avisa si cae al vencimiento más cercano; avisa (una vez por arranque) si `tickSize`/`tickValue` del contrato difieren de la spec local.
+* **Segunda instancia del Pi (otro producto).** `bash pi/ops/install_service.sh --instance mgc` crea `glitch-pi-executor-mgc.service` con su propio entorno (`~/.glitch_pi_mgc.env`),
+  log, `GLITCH_PI_STATE_DIR` y watchdog (`install_watchdog.sh --instance mgc`); se niega a instalar dos instancias con el mismo `GLITCH_PRODUCT` (los archivos del Gist se nombran por producto).
+  Las guardias de posición son por `contractId` y las de órdenes por id: una instancia MES y una MGC en la MISMA cuenta no se confunden (pero comparten el MLL de la cuenta).
 * **El Pi no maneja cierres anticipados.** `FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30` es fijo. En 27-nov y 24-dic
   (cierre 12:00 CT) el flatten debe ser 11:30 CT — ya existe para los schedulers de Railway
   (`execution/session_calendar.py`, commits locales `ba88626`/`d0d06ce`) pero **no está en `origin/main`** (la rama
