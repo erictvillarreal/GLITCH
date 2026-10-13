@@ -1664,3 +1664,7 @@ el esperado por diseño, con la causa exacta documentada para no
 tener que re-derivarla si se vuelve a auditar en el futuro.
 **Checkpoint del día 12/20 cerrado.**
 
+
+
+## 12-oct-2026 — T3: notificaciones por Telegram (rama `feat/t3-telegram-monitoring` desde origin/main, reporte `REPORT_T3_TELEGRAM_MONITORING_2026-10-12.md`)
+Nuevo paquete `monitoring/` (umbrales, fricción, margen, recordatorios, resumen semanal, envío stdlib) + `pi/ops/margin_alert.py`, `pi/ops/friction_collect.py`, `pi/ops/install_monitoring.sh` (Pi) + `scheduler/weekly_summary.py`, `scheduler/reminders_job.py` (Railway). Solo lectura; no toca `pi_executor.py` ni los schedulers; prueba estática (AST) de que ningún script coloca/cancela órdenes. 25 pruebas nuevas. NO VERIFICADO contra la API real: campos de Order/search y Trade/search, saldo en tiempo real, piso del MLL (libro propio de máximos EOD); se confirma en el ensayo de Practice (30-oct).
