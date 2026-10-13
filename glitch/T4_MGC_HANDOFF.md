@@ -1,0 +1,7 @@
+# T4 — Handoff real de Cerebro 2 (MGC) al Pi — rama `feat/t4-mgc-handoff` (desde `origin/cerebro2-dev`)
+El reporte completo (diagnóstico del feed, plan de ensayo, criterios) está en la rama `feat/t4-pi-mgc`: `REPORT_T4_MGC_PIPELINE_2026-10-12.md`. NEEDS HUMAN REVIEW (CLAUDE.md regla 4).
+Cambios en esta rama (todo con pruebas en `tests/test_mgc_handoff.py`, 20 pruebas; 156 pasan junto a las suites relacionadas):
+1. `scheduler/geometry_mgc_scheduler.py`: con `DRY_RUN=false` escribe `orden_pendiente_<GLITCH_PRODUCT>.json` (por defecto `orden_pendiente_mgc.json`) con el mismo contrato de campos que `geometry_scheduler.py` (MES) y termina; se niega a sobrescribir una señal sin consumir y a enviar después del flatten (con calendario de cierres anticipados). La geometría de la señal es la de la cuenta REAL (XFA 50K, nc 3, SL=TP=364), no la del paper de 150K. Los umbrales de intento pasan a los de la cuenta real en modo real; el paper no cambia.
+2. `strategies/geometry_pure.py`: una sola fuente de verdad — `CANDIDATES["MGC"]` = XFA 50K (SL=TP=364, nc 3); `MGC_XFA_100K` (nc 4), `MGC_XFA_150K` (nc 6, paper de Railway); el candidato de Combine anterior queda como `MGC_COMBINE_LEGACY` (sin uso).
+3. `execution/contracts.py`: regla determinista de roll para el oro (descarta el contrato a 2 días hábiles de su primer día de aviso): `MGCV6` deja de ser front el 28-sep-2026, `MGCZ6` lo es hasta ~26-nov.
+Invariante que el Pi exige: `signal["product"]` idéntico a su `GLITCH_PRODUCT` (si no, la trata como señal de ENSAYO: ≤ 2 contratos y sin marcador at-most-once).

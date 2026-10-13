@@ -150,8 +150,29 @@ CANDIDATES = {
     # condicional, estable en 3 sub-periodos temporales independientes).
     # Clave deliberadamente DISTINTA de "MGC" -- NO sobrescribir el
     # candidato de Combine ya validado.
-    "MGC_XFA_150K": GeometryConfig(SPECS["MGC"], sl_ticks=364, tp_ticks=364, max_holding_bars=100, nc=6, direction="alternate"),
 }
+
+# ── Cerebro 2 (MGC, XFA): UNA sola fuente de verdad (T4, 12-oct-2026; NEEDS HUMAN REVIEW -- cambia que geometria usa el Pi) ──
+# Antes habia DOS geometrias para "MGC": CANDIDATES["MGC"] (SL136/TP45, nc=30: candidato de Combine ya descartado) y
+# CANDIDATES["MGC_XFA_150K"] (SL=TP=364, nc=6: la XFA de produccion, pero solo para la 150K). La cuenta real de Eric es
+# 50K, cuya XFA opera nc=3 (GLITCH_RESEARCH_LOG.md, "Pipelines: A = MGC 364/364 ... nc 3/4/6 para 50K/100K/150K").
+# El bracket de 728 ticks de REPORT_STRUCTURAL_LEVERS sigue siendo PROPUESTA (no aprobada): aqui se mantiene 364.
+XFA_MGC_BRACKET_TICKS = 364
+XFA_MGC_NC = {"50K": 3, "100K": 4, "150K": 6}      # tope oficial de MGC en Combine/XFA: 30 micros (help.topstep.com, Risk Adjustments)
+
+
+def xfa_mgc_config(size: str) -> "GeometryConfig":
+    if size not in XFA_MGC_NC:
+        raise ValueError(f"tamano de XFA invalido {size!r}; opciones: {sorted(XFA_MGC_NC)}")
+    return GeometryConfig(SPECS["MGC"], sl_ticks=XFA_MGC_BRACKET_TICKS, tp_ticks=XFA_MGC_BRACKET_TICKS, max_holding_bars=100,
+                          nc=XFA_MGC_NC[size], direction="alternate")
+
+
+# Candidato de Combine anterior de MGC, conservado SOLO como referencia historica (nada lo usa).
+CANDIDATES["MGC_COMBINE_LEGACY"] = CANDIDATES["MGC"]
+CANDIDATES["MGC"] = xfa_mgc_config("50K")           # lo que ejecuta el Pi con GLITCH_PRODUCT=MGC y la cuenta XFA 50K real
+CANDIDATES["MGC_XFA_100K"] = xfa_mgc_config("100K")
+CANDIDATES["MGC_XFA_150K"] = xfa_mgc_config("150K")  # paper de Railway (geometry_mgc_scheduler.py con DRY_RUN=true)
 
 # NOTA (max_holding_bars): viene del backtest en barras de 5min. En vivo,
 # el flatten obligatorio de fin de sesion de Topstep casi siempre llega
