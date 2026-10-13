@@ -103,8 +103,8 @@ from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E4
 from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
 from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
-from core.prop_firm import TOPSTEP_150K  # noqa: E402
-from core.funded_account import XFA_150K  # noqa: E402
+from core.prop_firm import TOPSTEP_150K, TOPSTEP_SPECS  # noqa: E402
+from core.funded_account import XFA_150K, XFA_SPECS  # noqa: E402
 
 CT = ZoneInfo("America/Chicago")
 # Logging con timestamp SIEMPRE en America/Chicago -- mismo fix del
@@ -132,6 +132,20 @@ CFG = CANDIDATES[PRODUCT_KEY]
 # como Cerebro 2/XFA de un vistazo, sin ambiguedad con Cerebro 1/COMBINE
 # (geometry_scheduler.py) ni con COMBO2D.
 PREFIX = f"S10GLITCH - XFA - {CFG.spec.product_code}"
+
+# ── Modo real (DRY_RUN=false): handoff al Pi (T4, 12-oct-2026; NEEDS HUMAN REVIEW) ──
+# Con DRY_RUN=false este scheduler YA NO simula: escribe la señal de hoy a ORDER_FILE (mismo Gist, mismo contrato que geometry_scheduler.py para
+# MES) y termina; el Pi (GLITCH_PRODUCT=<REAL_PRODUCT_KEY>) coloca la orden y escribe el resultado REAL en LOG_FILE. La geometria de la señal es la de
+# la cuenta REAL (REAL_CFG, XFA 50K = nc 3), NO la del candidato paper de 150K (CFG).
+# INVARIANTE (pi_executor._is_test_signal): signal["product"] debe ser IDENTICO a GLITCH_PRODUCT del Pi; si no, el Pi la trata como señal de
+# ENSAYO (<= 2 contratos, sin marcador at-most-once ni ventana horaria). Por eso REAL_PRODUCT_KEY sale de la misma variable que usa el Pi.
+REAL_PRODUCT_KEY = os.getenv("GLITCH_PRODUCT", "MGC")
+if not DRY_RUN and REAL_PRODUCT_KEY not in CANDIDATES:
+    print(f"FATAL: GLITCH_PRODUCT={REAL_PRODUCT_KEY!r} no esta en CANDIDATES ({sorted(CANDIDATES)}).", file=sys.stderr)
+    sys.exit(1)
+REAL_CFG = CANDIDATES[REAL_PRODUCT_KEY] if REAL_PRODUCT_KEY in CANDIDATES else CFG
+ORDER_FILE = f"orden_pendiente_{REAL_PRODUCT_KEY.lower()}.json"
+REAL_ACCOUNT_SIZE = {"MGC": "50K", "MGC_XFA_100K": "100K", "MGC_XFA_150K": "150K"}.get(REAL_PRODUCT_KEY, "50K")
 
 LOG_FILE = "geometry_mgc_log.json"  # namespace nuevo y separado, ver docstring
 # Estado volatil de "posicion actualmente abierta, si hay una" (09-sep-2026,
@@ -190,6 +204,11 @@ DIAS_ESPERADOS = 13.9
 # candidato antes de reusar estos numeros en un candidato nuevo.
 PROFIT_TARGET = TOPSTEP_150K.profit_target      # $9,000
 MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500
+if not DRY_RUN:
+    # En modo real los umbrales son los de la cuenta REAL (no los del paper de 150K): de lo contrario _current_intento() / el piso trailing
+    # juzgarian la cuenta 50K con $9,000 / $4,500. Paper (DRY_RUN=true) no cambia.
+    PROFIT_TARGET = TOPSTEP_SPECS[REAL_ACCOUNT_SIZE].profit_target
+    MLL_THRESHOLD = -TOPSTEP_SPECS[REAL_ACCOUNT_SIZE].mll_distance
 
 # Elegibilidad de payout REAL de Topstep (distinta de PASE/QUIEBRE de arriba,
 # que son los umbrales de Combine reusados aqui como limite de "intento" --
@@ -198,8 +217,8 @@ MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500
 # resolvio TP/SL/FLATTEN -- criterio DISTINTO de "balance/equity acumulado
 # positivo" (22-sep-2026, pedido explicito del usuario de no confundir
 # ambos). Fuente unica: XFA_150K (core/funded_account.py), no hardcodeado.
-MIN_WINNING_DAY_USD = XFA_150K.min_winning_day_usd     # $150
-WINNING_DAYS_REQUIRED = XFA_150K.winning_days_required  # 5
+MIN_WINNING_DAY_USD = (XFA_150K if DRY_RUN else XFA_SPECS[REAL_ACCOUNT_SIZE]).min_winning_day_usd     # $150
+WINNING_DAYS_REQUIRED = (XFA_150K if DRY_RUN else XFA_SPECS[REAL_ACCOUNT_SIZE]).winning_days_required  # 5
 
 _front_month_cache: dict[str, tuple[str, str]] = {}
 
@@ -241,6 +260,60 @@ def load_log():
 
 def save_log(l):
     _gist_save_log(LOG_FILE, l)
+
+
+ENTRY_GATE_MINUTES = RTH_OPEN_HOUR * 60 + RTH_OPEN_MINUTE + ENTRY_WAIT_MINUTES   # 7:13 CT: misma hora de entrada que el backtest de Cerebro 2
+
+
+def load_order_signal() -> dict:
+    """Señal pendiente para el Pi (mismo Gist). {} si no hay ninguna sin consumir."""
+    return _gist_load_state(ORDER_FILE)
+
+
+def save_order_signal(d: dict):
+    _gist_save_state(ORDER_FILE, d)
+
+
+def _wait_for_entry_gate():
+    while ct_now().hour * 60 + ct_now().minute < ENTRY_GATE_MINUTES:
+        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando la hora de entrada ({ENTRY_GATE_MINUTES // 60}:{ENTRY_GATE_MINUTES % 60:02d} CT)...")
+        time.sleep(15)
+
+
+def _hand_off_to_pi(side: int, direction_str: str, intento: int, today_str: str) -> bool:
+    """Escribe la señal real. Devuelve True si la escribio. Mismo contrato de campos que geometry_scheduler.py (MES): date, side, direction, ticker, product_code,
+    nc, sl_ticks, tp_ticks, product, intento, dry_run. Se niega a sobrescribir una señal sin consumir y a enviar despues del flatten de hoy (calendario de cierres
+    anticipados incluido)."""
+    _wait_for_entry_gate()
+    now = ct_now()
+    flatten_min = flatten_minutes_ct(dt.date.today())
+    if now.hour * 60 + now.minute >= flatten_min:
+        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
+               f"ERROR: el scheduler llego despues del cierre de sesion ({now.strftime('%H:%M')} CT >= {flatten_min // 60}:{flatten_min % 60:02d}) "
+               f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
+        send(msg); log.error(msg.replace("\n", " | "))
+        return False
+    existing = load_order_signal()
+    if existing:
+        msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
+               f"ERROR: ya hay una señal de {existing.get('date')} sin consumir por el Pi -- no se sobreescribe (evita perder o duplicar una orden real). "
+               f"Verificar que pi_executor.py (GLITCH_PRODUCT={REAL_PRODUCT_KEY}) este corriendo en el Pi. No se envia señal nueva hoy.\n{utc_now_str()}")
+        send(msg); log.error(msg.replace("\n", " | "))
+        return False
+    save_order_signal({
+        "date": today_str, "side": side, "direction": direction_str,
+        "ticker": REAL_CFG.spec.yf_ticker, "product_code": REAL_CFG.spec.product_code,
+        "nc": REAL_CFG.nc, "sl_ticks": REAL_CFG.sl_ticks, "tp_ticks": REAL_CFG.tp_ticks,
+        "product": REAL_PRODUCT_KEY, "intento": intento, "dry_run": False,
+    })
+    real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+                f"Direction: {direction_str}\nContracts: {REAL_CFG.nc}\n"
+                f"SL/TP: {REAL_CFG.sl_ticks}/{REAL_CFG.tp_ticks} ticks\n"
+                f"Intento #{intento}\n"
+                f"Ejecucion real delegada a pi_executor.py -- este scheduler no coloca la orden ni monitorea el resultado en este modo.\n"
+                f"{utc_now_str()}")
+    send(real_msg); log.info(real_msg.replace("\n", " | "))
+    return True
 
 
 def load_pending() -> dict:
@@ -663,7 +736,9 @@ def run():
     #        abierto, que puede diferir del front-month de HOY si hubo
     #        un roll de por medio) -- no hace falta resolver el
     #        front-month de hoy para esto. ──
-    pending = load_pending()
+    pending = load_pending() if DRY_RUN else {}
+    if not DRY_RUN and load_pending():
+        log.warning("Hay una posicion pendiente del paper (geometry_mgc_pending.json); en modo real se IGNORA (el Pi lleva su propio estado).")
     if pending:
         log.info(f"Posicion pendiente encontrada de {pending.get('date')} -- reconciliando antes de continuar...")
         recon_price, recon_age = fetch_latest_price(pending["ticker"])
@@ -694,7 +769,9 @@ def run():
         intento_actual = _current_intento(paper_log)
         attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
 
-    # ── 1. Resuelve el contrato en uso ──
+    # ── 1. Resuelve el contrato en uso (en modo real es solo informativo: el Pi resuelve su propio contrato en ProjectX; un fallo aqui NO debe
+    #        impedir la señal) ──
+    ticker = None
     try:
         ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
         log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
@@ -702,7 +779,8 @@ def run():
     except Exception as e:
         log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
         send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
-        return
+        if DRY_RUN:
+            return
 
     # ── 2. Señal: sin predictiva, funcion pura de la fecha ──
     day_idx = trading_day_index(dt.date.today())
@@ -733,6 +811,11 @@ def run():
                f"{utc_now_str()}")
     send(kickoff)
     log.info(kickoff.replace("\n", " | "))
+
+    # ── 2c. Modo real (DRY_RUN=false): delega la ejecucion al Pi y termina (T4, 12-oct-2026) ──
+    if not DRY_RUN:
+        _hand_off_to_pi(side, direction_str, intento_actual, today_str)
+        return
 
     # ── 3. Espera apertura (7:00 CT) + margen de propagacion de Massive ──
     while ct_now().hour * 60 + ct_now().minute < RTH_OPEN_HOUR * 60 + RTH_OPEN_MINUTE:
