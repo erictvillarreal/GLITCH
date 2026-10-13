@@ -67,6 +67,7 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None)
     n_b0 = np.zeros(T, np.int64); n_b1 = np.zeros(T, np.int64); n_pay = np.zeros(T, np.int64); n_pass = np.zeros(T, np.int64)
     n_trades_c = np.zeros(T, np.int64); n_trades_cmax = np.zeros(T, np.int64); n_trades_c80 = np.zeros(T, np.int64)
     n_xtrades = np.zeros(T, np.int64); n_xmax = np.zeros(T, np.int64)
+    n_liq = np.zeros(T, np.int64); n_slhit = np.zeros(T, np.int64); n_ctr = np.zeros(T, np.int64)   # dias de Combine con trade; dias con stop; dias en que la distancia al MLL < SL nominal y hubo stop
     pass_day = np.zeros(T, np.int64); stopped = np.zeros(T, bool)
     fee_c_tot = np.zeros(T); fee_a_tot = np.zeros(T)
     if start is not None:
@@ -100,6 +101,7 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None)
         pnl = np.where(m0, pnl, 0.0)
         if sk: pnl = np.zeros(T)
         trade0 = m0 & (not sk)
+        n_ctr += trade0; n_slhit += trade0 & sl_hit; n_liq += trade0 & sl_hit & (kliq < S.sl)
         n_trades_c += trade0
         n_trades_cmax += trade0 & (S.nc >= S.cap_micros)
         n_trades_c80 += trade0 & (S.nc >= 0.8 * S.cap_micros)
@@ -197,4 +199,4 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None)
         take_d[:, day] = take; fee_d[:, day] += fee_today
         cum[:, day] = cash
     return dict(take_d=take_d, fee_d=fee_d, cum=cum, blow_d=blow_d, n_att=n_att, n_b0=n_b0, n_b1=n_b1, n_pay=n_pay, n_pass=n_pass, pass_day=pass_day, stopped=stopped,
-                fee_c=fee_c_tot, fee_a=fee_a_tot, n_trades_c=n_trades_c, n_trades_cmax=n_trades_cmax, n_trades_c80=n_trades_c80, n_xtrades=n_xtrades, n_xmax=n_xmax, mode_end=mode, mode_d=mode_d)
+                fee_c=fee_c_tot, fee_a=fee_a_tot, n_trades_c=n_trades_c, n_trades_cmax=n_trades_cmax, n_trades_c80=n_trades_c80, n_xtrades=n_xtrades, n_xmax=n_xmax, mode_end=mode, mode_d=mode_d, n_liq=n_liq, n_slhit=n_slhit, n_ctr=n_ctr)
