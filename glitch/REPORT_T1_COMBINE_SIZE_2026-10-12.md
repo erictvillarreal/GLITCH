@@ -62,3 +62,6 @@ Con la XFA propuesta (728×3, pendiente de aprobación) el orden es idéntico: n
 - "Días a pase" y "liq<SL" se midieron en el mundo justo; en historia real los pases por intento difieren ≤ 1.7 puntos.
 - No se modelan CPI/FOMC ni límites por producto del Combine (NO VERIFICADO si el máximo es por producto o total).
 - Neto = media de 20,000 trayectorias; la historia real es una sola de 497 días.
+
+## 6. Anexo — hora de entrada real (9:35) vs. la del modelo (9:45)
+El scheduler de producción (`origin/main`, `ENTRY_GATE_MINUTES = 9:35 CT`) deja entrar al Pi desde las 9:35; todo el modelo (tablas first-touch, `structural-levers`, esta tabla) entra a las 9:45. Sensibilidad con nc = 40 (`scripts/t1_entry_time_check.py`, `dd_cash/t1_entry_time_report.txt`): pase por intento TP32 en el mundo justo = 30.6% (9:35), 30.3% (9:40), 31.0% (9:45), 30.0% (9:50), 29.3% (10:00); neto anual justo $3,058 / $2,915 / $3,040 / $2,915 / $2,825. En historia real el pase oscila 29–36% (ruido de una sola historia, sin patrón). **Conclusión: la diferencia 9:35 vs 9:45 no cambia nada material**; la hora exacta de entrada del Pi (hasta el límite de 10:00 CT) no es una palanca.
