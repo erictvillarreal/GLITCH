@@ -43,6 +43,7 @@ class Spec:
     lock_gain: float | None = None    # dejar de comprar si la caja acumulada >= lock_gain
     fee_scale: float = 1.0; pay_scale: float = 1.0
     haircut: float = 1.0              # el -25% se aplica fuera del motor (en el reporte)
+    static_c: bool = False; static_x: bool = False   # piso del MLL ESTATICO (Combine / XFA): no se arrastra con el balance (Topstep Labs #001/#006: 'Static Max Loss Limit'); en la XFA pasa a $0 tras un pago, igual que la trailing
     entry_slip: int = 0               # slippage de ENTRADA adverso en ticks (llenado de mercado peor que el cierre de la barra de referencia), ambos stages
     tp_fill_extra: int = 0            # el TP limite solo se considera lleno si el precio lo cruza este numero de ticks (sensibilidad de colocacion)
     p_up: float = 0.0; p_dn: float = 0.0; seed: int = 0   # palanca EXOGENA de elasticidad: prob. de convertir un quiebre del Combine en pase (p_up) o un pase en quiebre (p_dn); NO es una estrategia
@@ -106,7 +107,7 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None)
         n_trades_cmax += trade0 & (S.nc >= S.cap_micros)
         n_trades_c80 += trade0 & (S.nc >= 0.8 * S.cap_micros)
         cb = cb + pnl
-        ratchet = m0 & (cb - S.mll > cfl)
+        ratchet = m0 & (cb - S.mll > cfl) & (not S.static_c)
         cfl = np.where(ratchet, np.minimum(cb - S.mll, 0.0), cfl)
         blown0 = m0 & (cb <= cfl)
         alive0 = m0 & ~blown0
@@ -141,7 +142,7 @@ def simulate(S: Spec, D: np.ndarray, lag=2, skip=None, start_mode=0, start=None)
         n_xtrades += xtr; n_xmax += xtr & (nc_t >= xfa_cap_micros(xb, S.mgc_restricted))
         xb = xb + p1
         cand = xb - S.xmll
-        xfl = np.where(m1 & (cand > xfl), np.minimum(cand, 0.0), xfl)
+        xfl = np.where(m1 & (cand > xfl) & (not S.static_x), np.minimum(cand, 0.0), xfl)
         blown1 = m1 & (xb <= xfl)
         still = m1 & ~blown1
         xdays = xdays + still

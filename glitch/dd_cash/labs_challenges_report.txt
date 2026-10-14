@@ -1,0 +1,42 @@
+TOPSTEP LABS — retos de dos rondas con MLL estatico (politica: TP = objetivo restante, stop = liquidacion; slip 0.5; comision incluida; 60 dias de trading por ronda)
+reto                                         prod  nc | P(ronda) justo   real  dias |  P(2 rondas) j / r  EV por compra j / r | teorico M/(M+T)
+#003 $3K Challenge                            MNQ  10 |          24.8%  25.9%   1.4 |    6.14% /  6.72%           135 /    153 | 25.0%
+#003 $3K Challenge                            MES  10 |          24.0%  26.1%   2.8 |    5.74% /  6.79%           123 /    155 | 25.0%
+#003 $3K Challenge                            MGC   6 |          26.9%  19.0%   2.3 |    7.25% /  3.60%           168 /     59 | 25.0%
+#004 $1.5K Challenge                          MNQ   2 |          25.1%  23.9%   4.0 |    6.29% /  5.70%            55 /     46 | 25.0%
+#004 $1.5K Challenge                          MES   2 |          23.3%  23.6%  11.8 |    5.42% /  5.56%            42 /     44 | 25.0%
+#004 $1.5K Challenge                          MGC   1 |          25.4%  15.9%   8.0 |    6.44% /  2.54%            58 /     -1 | 25.0%
+#005 $6K Challenge                            MNQ  10 |          25.0%  24.2%   2.9 |    6.26% /  5.86%           227 /    202 | 25.0%
+#005 $6K Challenge                            MES  10 |          23.6%  24.7%   8.1 |    5.58% /  6.12%           186 /    218 | 25.0%
+#005 $6K Challenge                            MGC   6 |          25.8%  17.0%   4.7 |    6.68% /  2.90%           252 /     25 | 25.0%
+#007 $1.5K Challenge (precio NO publicado; o  MNQ  20 |          29.2%  30.7%   1.0 |    8.53% /  9.44%  (precio?) pago esperado 128 / 142 | 33.3%
+#007 $1.5K Challenge (precio NO publicado; o  MES  20 |          31.3%  34.4%   1.0 |    9.81% / 11.85%  (precio?) pago esperado 147 / 178 | 33.3%
+#007 $1.5K Challenge (precio NO publicado; o  MGC   6 |          34.8%  32.5%   1.3 |   12.10% / 10.58%  (precio?) pago esperado 181 / 159 | 33.3%
+
+Sensibilidad (reto #003, MNQ x10): dias por ronda, TP limitado al rango mediano diario, slip
+  60 dias (base)                   P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+  30 dias                          P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+  90 dias                          P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+  TP <= rango mediano diario       P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+  slip 1.0                         P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+  slip 0.0                         P(ronda) justo 25.1% real 26.1%  -> EV/compra justo    140 real    155
+
+RESULTADO DE COMPRAR n retos #003 (MNQ x10), cada uno gana $3,000 con prob. p2 = P(ronda)^2 (binomial, independientes)
+  n=  5 (justo, p2=6.14%): costo $  245 | neto medio $     678 mediana $    -245 | P(<0) 72.8% P(>=$10k)  0.0% p5 $   -245
+  n=  5 (real , p2=6.72%): costo $  245 | neto medio $     767 mediana $    -245 | P(<0) 70.5% P(>=$10k)  0.0% p5 $   -245
+  n= 20 (justo, p2=6.14%): costo $  980 | neto medio $   2,713 mediana $   2,020 | P(<0) 28.0% P(>=$10k)  3.1% p5 $   -980
+  n= 20 (real , p2=6.72%): costo $  980 | neto medio $   3,052 mediana $   2,020 | P(<0) 24.9% P(>=$10k)  4.1% p5 $   -980
+  n= 50 (justo, p2=6.14%): costo $2,450 | neto medio $   6,774 mediana $   6,550 | P(<0)  4.3% P(>=$10k) 19.4% p5 $    550
+  n= 50 (real , p2=6.72%): costo $2,450 | neto medio $   7,623 mediana $   6,550 | P(<0)  3.1% P(>=$10k) 24.4% p5 $    550
+  n=100 (justo, p2=6.14%): costo $4,900 | neto medio $  13,539 mediana $  13,100 | P(<0)  1.3% P(>=$10k) 74.2% p5 $  1,100
+  n=100 (real , p2=6.72%): costo $4,900 | neto medio $  15,246 mediana $  16,100 | P(<0)  0.8% P(>=$10k) 80.9% p5 $  4,100
+
+#006 $50K STATIC Trading Combine ($149 pago unico, sin reinicios): objetivo $4,000, MLL estatico $2,000, DLL obligatorio $1,000 (suave: al tocarlo se liquida y se bloquea la sesion, no es falla), consistencia 55%, 4 minis/40 micros;
+XFA: tope de pago $8,000 (supuesto: 50% del balance, 5 dias >= $150), MLL estatico $2,000 -> $0 tras el 1er pago, DLL $1,000. Etapa 1 con politica 'audaz' (TP = objetivo restante limitado a 55% del objetivo por dia, stop = min(distancia al piso, DLL)); etapa 2 con el motor de palancas.
+  justo          Combine en MNQ x40: P(pasar) 12.5% (3.3 dias) | pago medio por XFA $864 (P(>=1 pago) 47%) | EV por compra = P x pago - $149 = $-41
+  justo          Combine en MES x40: P(pasar) 20.0% (4.1 dias) | pago medio por XFA $864 (P(>=1 pago) 47%) | EV por compra = P x pago - $149 = $24
+  real           Combine en MNQ x40: P(pasar) 14.5% (3.4 dias) | pago medio por XFA $590 (P(>=1 pago) 48%) | EV por compra = P x pago - $149 = $-63
+  real (sin oro) Combine en MNQ x40: P(pasar) 14.5% (3.4 dias) | pago medio por XFA $505 (P(>=1 pago) 45%) | EV por compra = P x pago - $149 = $-76
+  real           Combine en MES x40: P(pasar) 24.5% (4.2 dias) | pago medio por XFA $590 (P(>=1 pago) 48%) | EV por compra = P x pago - $149 = $-4
+  real (sin oro) Combine en MES x40: P(pasar) 24.5% (4.2 dias) | pago medio por XFA $505 (P(>=1 pago) 45%) | EV por compra = P x pago - $149 = $-25
+  (control) bracket FIJO tipo G2 en el motor completo (MNQ x40, TP 105 ticks): P(pasar) 13.7%, EV por compra $-60 -> la politica importa: la 'audaz' es la comparable con el techo de juego justo (M/(M+T) = 33.3%)
