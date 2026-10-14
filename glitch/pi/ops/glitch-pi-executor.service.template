@@ -21,6 +21,8 @@
 #   + time-sync.target                -> ni antes de sincronizar la hora: el Pi no tiene RTC y tras un corte arranca
 #                                       con la hora vieja; con ella el chequeo de señal vieja/futura y el flatten de
 #                                       las 14:30 se evaluarian contra un reloj equivocado.
+#   GLITCH_PI_STATE_DIR             -> marcador at-most-once y spool locales. Instancia por defecto: el HOME (como antes). Segunda instancia
+#                                       (--instance <nombre>, T4 12-oct-2026): su propio directorio, para que dos productos no compartan estado.
 #   NoNewPrivileges                  -> el proceso no puede escalar privilegios.
 [Unit]
 Description=GLITCH Pi Executor (ejecucion real de ordenes contra ProjectX)
@@ -35,6 +37,7 @@ User=@PI_USER@
 WorkingDirectory=@GLITCH_DIR@
 EnvironmentFile=@ENV_FILE@
 Environment=PYTHONUNBUFFERED=1
+Environment=GLITCH_PI_STATE_DIR=@STATE_DIR@
 ExecStart=@VENV@/bin/python -u pi/pi_executor.py
 Restart=always
 RestartSec=30
