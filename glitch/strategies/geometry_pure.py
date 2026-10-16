@@ -137,7 +137,7 @@ SPECS = {
 # CANDIDATES["MGC"] o CANDIDATES["M2K"] es la unica accion necesaria para
 # rotar de producto.
 CANDIDATES = {
-    "MES": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=40, max_holding_bars=100, nc=40, direction="alternate"),
+    "MES": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=32, max_holding_bars=100, nc=40, direction="alternate"),
     "MGC": GeometryConfig(SPECS["MGC"], sl_ticks=136, tp_ticks=45, max_holding_bars=100, nc=30, direction="alternate"),
     "M2K": GeometryConfig(SPECS["M2K"], sl_ticks=200, tp_ticks=80, max_holding_bars=100, nc=50, direction="alternate"),
 }

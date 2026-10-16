@@ -545,12 +545,12 @@ class TestSignalIsValidatedAgainstLocalConfig:
         assert pe._validate_signal(_signal(side=side)) is not None
 
     @pytest.mark.parametrize("key,val", [("sl_ticks", 0), ("sl_ticks", 401), ("sl_ticks", True), ("sl_ticks", "100"),
-                                         ("tp_ticks", 0), ("tp_ticks", 161), ("tp_ticks", None)])
+                                         ("tp_ticks", 0), ("tp_ticks", 4 * 32 + 1), ("tp_ticks", None)])
     def test_ticks_must_be_sane(self, key, val):
         assert pe._validate_signal(_signal(**{key: val})) is not None
 
     def test_ticks_up_to_4x_config_are_allowed(self):
-        assert pe._validate_signal(_signal(sl_ticks=400, tp_ticks=160)) is None
+        assert pe._validate_signal(_signal(sl_ticks=400, tp_ticks=4 * pe.CFG.tp_ticks)) is None
         assert pe._validate_signal(_signal(sl_ticks=4, tp_ticks=4)) is None            # ensayos con TP/SL a ~4 ticks
 
     def test_product_code_must_match_the_service_product(self):
