@@ -25,9 +25,9 @@ class TestGeometry:
             assert geo.CANDIDATES[k].nc <= geo.CANDIDATES[k].spec.nc_cap == 30
         assert geo.CANDIDATES["MGC_XFA_150K"].nc == 6 and geo.CANDIDATES["MGC_XFA_100K"].nc == 4
 
-    def test_mes_untouched(self):
+    def test_mes_is_tp32(self):
         c = geo.CANDIDATES["MES"]
-        assert (c.sl_ticks, c.tp_ticks, c.nc) == (100, 40, 40)
+        assert (c.sl_ticks, c.tp_ticks, c.nc) == (100, 32, 40)
 
 
 class FakeClient:
