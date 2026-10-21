@@ -88,3 +88,13 @@ Ningún P(TP-primero), ninguna regla, ningún control ni ningún bloque se ha ca
 Procedimiento de la Enmienda 1 §7 aplicado a la muestra de evaluación (443 días, 2024-11-04 → 2026-08-25, `series.py::dominant_window`):
 **2025-04-09 → 2025-07-08** (60 días de evaluación consecutivos; Δ del cierre ajustado = +1,124.8 puntos). Ningún resultado de reglas, controles o P(TP-primero)
 se había calculado al registrar esta enmienda.
+
+### Enmienda 3 — 20-oct-2026, ANTES de calcular reglas (cómo se comparan días saltados y cómo se hace el puente a la Parte A)
+1. **R3 y días saltados.** Una regla que salta días (R3) se compara contra `alternate` y contra "siempre LONG" **sobre los mismos días en que R3 sí opera** (comparación pareada día a día).
+   En D2(a) y D2(c) un bloque cuenta como "victoria" solo si P(TP-primero) de la regla es **estrictamente mayor** que la del control en ese bloque; un empate no cuenta como victoria ni como pérdida;
+   un bloque sin ningún día operado no cuenta como victoria ni como pérdida (el umbral "≥ 7 de 10" se evalúa sobre los 10 bloques, así que un bloque vacío resta).
+   En D2(b) y D2(d) la diferencia media se calcula sobre los días operados de la regla.
+2. **Puente a P(pase) (§3.6).** Repetición histórica ("M2h"): para cada fecha de inicio de la muestra de evaluación se corre un intento completo (máx. 60 días de evaluación consecutivos, estado de partida del
+   encargo §1, MLL con ratchet, slippage {1,3} aleatorio con semilla fija) usando el lado que la regla/control habría elegido cada día y los resultados reales de ese día. Políticas de tamaño: P0 (40 fijo) y P3 (finish-line);
+   R3 usa nc=0 los días saltados. Se reporta el porcentaje de intentos que pasan (IC por bootstrap de bloques de fechas de inicio, bloque 20). Esto traduce "ventaja direccional" a P(pase) con la misma mecánica de la Parte A.
+3. Nada de lo anterior modifica H, los parámetros de R1–R3 ni los criterios D1/D2 del texto original.
