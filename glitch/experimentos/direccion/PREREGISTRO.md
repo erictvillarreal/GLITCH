@@ -83,3 +83,8 @@ Ningún P(TP-primero), ninguna regla, ningún control ni ningún bloque se ha ca
 9. **Lectura de hoy (§3.7).** El parquet termina el 25-ago-2026. Para el cierre del 20-oct se intentará Yahoo (`MES=F`), marcado como menor calidad; si falla, "no disponible".
 10. **Comparaciones múltiples.** Se contarán todas las reglas/controles evaluados en este documento (3 reglas candidatas; 4 controles). No se agregan reglas ni parámetros
     sin una enmienda fechada y sin una ventana de datos nueva.
+
+### Enmienda 2 — 20-oct-2026, ventana dominante de MES (calculada SOLO con precio, antes de correr reglas)
+Procedimiento de la Enmienda 1 §7 aplicado a la muestra de evaluación (443 días, 2024-11-04 → 2026-08-25, `series.py::dominant_window`):
+**2025-04-09 → 2025-07-08** (60 días de evaluación consecutivos; Δ del cierre ajustado = +1,124.8 puntos). Ningún resultado de reglas, controles o P(TP-primero)
+se había calculado al registrar esta enmienda.
