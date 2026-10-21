@@ -54,4 +54,32 @@ Solo **paper forward en sombra ≥ 30 días hábiles** (registrar qué haría la
 ---
 
 ## Registro de enmiendas
-(ninguna al momento del registro)
+
+### Enmienda 1 — 20-oct-2026, ANTES de calcular cualquier resultado de reglas (aclaraciones operativas que el texto no define)
+Ningún P(TP-primero), ninguna regla, ningún control ni ningún bloque se ha calculado al escribir esto. Lo que falta definir
+(y que NO cambia ningún criterio D1/D2, solo fija cómo se mide):
+
+1. **Serie diaria.** A partir de `mes_5min_2y.parquet` (barras de 5 min RTH, hora CT): cierre diario = close de la última barra RTH;
+   high/low diarios = extremos RTH. Los 8 cambios de contrato (MESU4→…→MESU6) introducen saltos de carry de +30 a +150 puntos que NO son
+   movimiento de mercado: el cambio diario del cierre ajustado es `close_t − close_{t−1}` si el contrato no cambió, y `close_t − open_t`
+   (dentro del día) el día del roll. SMA20/SMA50/ATR14 se calculan sobre esa serie ajustada (suma acumulada de cambios). ATR14 = media simple
+   de 14 rangos verdaderos (TR = max(H−L, |H−C_prev|, |L−C_prev|); el día del roll TR = H−L).
+2. **Información disponible.** Para decidir el día d solo se usan días < d (cierre de ayer = cierre ajustado del día hábil previo de la muestra).
+   Calentamiento: los primeros 50 días de la muestra no se evalúan.
+3. **Medida base.** Para cada día de evaluación y cada lado se usa `daydata.sim_day` con nc=40, colchón $2,000 (piso MLL a 40 ticks), TP 32, SL 100,
+   flatten 14:30 CT, referencia = close de la barra 9:30 CT, orden intra-barra "adverso primero", y slippage de entrada empírico {1,3} ticks
+   (50/50, N=2 mediciones: lun 19-oct = 1, mar 20-oct ≈ 3 inferido) promediando ambos. TP-primero = el resultado del día es TP;
+   liq = resultado LIQ; ticks netos = (pnl neto / (40 × $1.25)).
+4. **Bloques D1/D2.** 10 bloques consecutivos de igual tamaño de días de evaluación (el resto, si lo hay, se agrega al último bloque).
+5. **Control `alternate`.** Lado = `decide_side(trading_day_index(fecha), "alternate")` con la fecha real del día (igual que producción). Control aleatorio:
+   1,000 corridas, semillas 0..999, lado ±1 con prob. 1/2 por día. Oráculo: el mejor lado ex post (referencia informativa, no candidato).
+6. **Bootstrap D2(b).** Bootstrap por bloques de 5 días consecutivos, PAREADO (misma remuestra de fechas para la regla y para `alternate`), 10,000 remuestras, semilla 20261020,
+   IC percentil al 98.3% de la diferencia media de P(TP-primero) por día (regla − alternate). "Estrictamente > 0" = límite inferior > 0.
+7. **Ventana dominante (MES).** El encargo la define para MGC (oro, nov-2025→ene-2026) pero no para MES. Definición fijada ANTES de ver resultados de reglas y
+   usando SOLO el precio: la ventana de 60 días hábiles consecutivos de la muestra de evaluación con mayor |Δ del cierre ajustado|. Sus fechas se registran en
+   la Enmienda 2 antes de correr reglas. D2(d) y la parte "sin la ventana dominante" de D1 se evalúan excluyendo esos 60 días.
+8. **Las 8 sesiones en vivo (D1, anécdota).** Los datos por sesión viven en el Gist (`geometry_mestest_log.json`), que requiere un token que este agente no maneja:
+   NO DISPONIBLE localmente. La tabla se marca "no disponible" salvo que Eric exporte el JSON; no se rellena de memoria.
+9. **Lectura de hoy (§3.7).** El parquet termina el 25-ago-2026. Para el cierre del 20-oct se intentará Yahoo (`MES=F`), marcado como menor calidad; si falla, "no disponible".
+10. **Comparaciones múltiples.** Se contarán todas las reglas/controles evaluados en este documento (3 reglas candidatas; 4 controles). No se agregan reglas ni parámetros
+    sin una enmienda fechada y sin una ventana de datos nueva.
