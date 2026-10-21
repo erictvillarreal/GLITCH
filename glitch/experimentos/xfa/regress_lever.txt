@@ -1,2 +1,2 @@
-lock oficial $0: referencia (30k vidas) pago medio $616, P(>=1) 0.320, vida 9.2 | xfa_engine (200000 vidas) pago medio $618 (EE $3.4), P(>=1) 0.317 (EE 0.001), vida 9.2
-lock del codigo +MLL: referencia (30k vidas) pago medio $480, P(>=1) 0.294, vida 8.2 | xfa_engine (200000 vidas) pago medio $481 (EE $2.6), P(>=1) 0.291 (EE 0.001), vida 8.2
+lock oficial $0: referencia (30k vidas) pago medio $616, P(>=1) 0.320, vida 9.2 | xfa_engine (100000 vidas) pago medio $621 (EE $4.8), P(>=1) 0.318 (EE 0.001), vida 9.2
+lock del codigo +MLL: referencia (30k vidas) pago medio $480, P(>=1) 0.294, vida 8.2 | xfa_engine (100000 vidas) pago medio $490 (EE $3.7), P(>=1) 0.294 (EE 0.001), vida 8.2

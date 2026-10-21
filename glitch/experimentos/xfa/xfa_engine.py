@@ -47,6 +47,7 @@ class Rules:
     scaling: bool = True              # 1.6/1.7: tope de contratos por saldo
     product: str = "MGC"              # "MGC": 12/18/31 micros (restringido); "MES": 20/30/50
     idle_close_days: int = 30         # 1.10
+    win_gross: bool = False           # escenario W2: el dia ganador se mide BRUTO de comision (base: neto)
 
 
 def plan_cap(b, product="MGC"):
@@ -61,8 +62,8 @@ class BarDays:
     """Replay de barras reales con sim_day (mecanica exacta). Cache perezoso por (lado, nc, sl) y bin de colchon ($10, redondeo ABAJO = conservador)."""
 
     def __init__(self, dd: DayData, tick_usd: float, fee: float, sl: int, tp: int, slip=(0.0,), slip_p=None, exit_slip: float = 0.0, order: str = "adverse",
-                 cush_max: float = 9000.0, step: float = 10.0, mask=None):
-        self.dd, self.tick_usd, self.fee, self.sl, self.tp, self.exit_slip, self.order = dd, tick_usd, fee, sl, tp, exit_slip, order
+                 cush_max: float = 9000.0, step: float = 10.0, mask=None, drift: float = 0.0, stop_frac: float = 0.0):
+        self.dd, self.tick_usd, self.fee, self.sl, self.tp, self.exit_slip, self.order, self.drift, self.stop_frac = dd, tick_usd, fee, sl, tp, exit_slip, order, drift, stop_frac
         self.slips = tuple(slip); self.slip_p = np.full(len(self.slips), 1.0 / len(self.slips)) if slip_p is None else np.asarray(slip_p, float)
         self.step, self.nb = step, int(cush_max / step) + 1
         self.pool = np.arange(dd.D) if mask is None else np.nonzero(mask)[0]
@@ -74,7 +75,7 @@ class BarDays:
             K = np.empty((self.nb, self.dd.D), np.int8); Pn = np.empty((self.nb, self.dd.D))
             for b in range(self.nb):
                 k, p = sim_day(self.dd, side, nc, max(b * self.step, 1e-9), slip=self.slips[si], exit_slip=self.exit_slip, sl=sl, tp=self.tp, order=self.order,
-                               fee=self.fee, tick_usd=self.tick_usd)
+                               fee=self.fee, tick_usd=self.tick_usd, drift=self.drift, stop_frac=self.stop_frac)
                 K[b], Pn[b] = k, p
             self._c[key] = (K, Pn)
         return self._c[key]
@@ -96,6 +97,45 @@ class BarDays:
                         K, Pn = self.table(sd, int(ncv), int(slv), s_i)
                         kind[m] = K[bins[m], idx[m]]; pnl[m] = Pn[bins[m], idx[m]]
         return kind, pnl
+
+
+class SeqDays(BarDays):
+    """Replay SECUENCIAL: cada vida arranca en un dia al azar y recorre dias consecutivos (para reglas que usan el dia previo, p. ej. H6)."""
+    sequential = True
+
+    def draw(self, rng, n, t):
+        if t == 0:
+            self._start = rng.integers(0, len(self.pool), n)
+        idx = self.pool[(self._start + t) % len(self.pool)]
+        self._last = idx                                   # indice del dia que se acaba de jugar: la politica del dia t+1 lo lee como 'dia previo'
+        return idx, rng.choice(len(self.slips), size=n, p=self.slip_p)
+
+
+class BinaryDays:
+    """W4 pesimista: dias decididos con WR fijo entre TP y SL (SL = TP en ticks); la fraccion de dias decididos y el P&L de los dias FLATTEN salen de un DayData real.
+    Slippage de entrada anclado a la referencia: el TP paga (tp - slip) y el SL pierde (sl + slip)."""
+
+    def __init__(self, ref_days: BarDays, wr: float, slip: float = 0.0):
+        K, Pn = ref_days.table(1, 3, ref_days.sl, 0)         # nc = 3, colchon grande -> sin liquidacion: da la fraccion decidida y el pnl de los FLATTEN
+        kk = K[-1]; pp = Pn[-1]
+        self.p_dec = float(np.mean(kk != 3)); self.flat_pnl = pp[kk == 3]
+        self.tick_usd, self.fee, self.sl, self.tp, self.wr, self.slip = ref_days.tick_usd, ref_days.fee, ref_days.sl, ref_days.tp, wr, slip
+        self.pool = np.arange(1)
+
+    def draw(self, rng, n):
+        return rng.random((n, 3)), np.zeros(n, int)
+
+    def resolve(self, idx, si, side, nc, cush, sl):
+        u = idx[:, 0]; w = idx[:, 1]; v = idx[:, 2]
+        decided = u < self.p_dec; win = w < self.wr
+        gain = (self.tp - self.slip) * nc * self.tick_usd - nc * self.fee
+        loss = (sl + self.slip) * nc * self.tick_usd + nc * self.fee
+        flat = self.flat_pnl[np.minimum((v * len(self.flat_pnl)).astype(int), len(self.flat_pnl) - 1)] * (np.maximum(nc, 1) / 3.0)
+        pnl = np.where(decided, np.where(win, gain, -loss), flat)
+        kind = np.where(decided, np.where(win, 0, 1), 3).astype(np.int8)
+        liq = (pnl <= -cush) & (nc > 0)
+        kind = np.where(liq, 2, kind).astype(np.int8); pnl = np.where(liq, -cush, pnl)
+        return kind, np.where(nc > 0, pnl, 0.0)
 
 
 class TableDays:
@@ -145,7 +185,7 @@ def pol_fixed(nc, sl=364, tp=364, pay="max", name=None):
 
 
 # ── motor ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=756, start_parity=None):
+def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=756, start_parity=None, record_k=0):
     """Vida de UNA XFA hasta liquidacion o max_days. Devuelve dict de arrays (n,)."""
     rng = np.random.default_rng(seed)
     b = np.zeros(n); f = np.full(n, -rules.mll); b_ref = np.zeros(n)
@@ -153,6 +193,7 @@ def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=
     paid = np.zeros(n); gross_paid = np.zeros(n); life = np.zeros(n, int); dtrade = np.zeros(n, int); best = np.zeros(n); idle = np.zeros(n, int)
     first_pay_day = np.full(n, -1); liq_events = np.zeros(n, int); sl_events = np.zeros(n, int); tp_events = np.zeros(n, int); flat_events = np.zeros(n, int)
     paid_first = np.zeros(n); cd = np.zeros(n, int)
+    pay_day = np.full((n, max(record_k, 1)), -1); pay_net = np.zeros((n, max(record_k, 1))); pay_i = np.zeros(n, int)
     par0 = rng.integers(0, 2, n) if start_parity is None else np.full(n, start_parity)
     for t in range(max_days):
         a = alive
@@ -167,7 +208,7 @@ def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=
             tick_usd = days.tick_usd if hasattr(days, "tick_usd") else 1.0
             fee = days.fee if hasattr(days, "fee") else 0.0
             sl = np.minimum(sl, np.maximum(np.floor((rules.dll - fee * nc) / (np.maximum(nc, 1) * tick_usd)), 1)).astype(int)
-        idx, si = days.draw(rng, n)
+        idx, si = days.draw(rng, n, t) if getattr(days, "sequential", False) else days.draw(rng, n)
         kind, pnl = days.resolve(idx, si, side, nc, np.maximum(b - f, 0.0), sl)
         traded = a & (nc > 0)
         liq = traded & (kind == 2)
@@ -184,7 +225,8 @@ def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=
         dead = a & ((b <= f + 1e-9) | liq | (idle > rules.idle_close_days))
         alive = alive & ~dead
         # dias ganadores / ruta Consistency
-        wd = np.where(alive & traded & (pnl >= rules.win_usd), wd + 1, wd)
+        gfee = (days.fee * nc) if (rules.win_gross and hasattr(days, "fee")) else 0.0
+        wd = np.where(alive & traded & (pnl + gfee >= rules.win_usd), wd + 1, wd)
         best = np.where(alive & traded, np.maximum(best, pnl), best)
         prof = b - b_ref
         if rules.path == "std":
@@ -210,6 +252,10 @@ def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=
             r100 = np.maximum(rules.first100 - gross_paid, 0.0)
             net = np.minimum(g, r100) + (g - np.minimum(g, r100)) * rules.split - np.where(do, rules.wire_fee, 0.0)
             paid += np.where(do, net, 0.0); gross_paid += g
+            if record_k:
+                rows = np.nonzero(do & (pay_i < record_k))[0]
+                pay_day[rows, pay_i[rows]] = t; pay_net[rows, pay_i[rows]] = net[rows]
+                pay_i = pay_i + do
             paid_first = np.where(do & first, net, paid_first)
             first_pay_day = np.where(do & first, t, first_pay_day)
             b = b - g
@@ -217,4 +263,4 @@ def simulate_life(days, rules: Rules, policy: Policy, n=50000, seed=1, max_days=
             wd = np.where(do, 0, wd); best = np.where(do, 0.0, best); b_ref = np.where(do, b, b_ref)
             first = first & ~do; npay += do; cd = np.where(do, 0, cd)
     return dict(paid=paid, gross=gross_paid, npay=npay, life=life, alive=alive, first_pay_day=first_pay_day, paid_first=paid_first, liq=liq_events, sl=sl_events, tp=tp_events,
-                flat=flat_events, dtrade=dtrade, bal=b)
+                flat=flat_events, dtrade=dtrade, bal=b, pay_day=pay_day, pay_net=pay_net)

@@ -102,7 +102,7 @@ def load_days(path: str = DEFAULT_PARQUET, ref_hm: int = REF_BAR_HM, last_hm: in
 
 
 def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, exit_slip: float = 0.0,
-            sl: int = SL_TICKS, tp: int = TP_TICKS, order: str = "adverse", fee: float = FEE_RT, drift: float = 0.0, tick_usd: float = TICK_USD):
+            sl: int = SL_TICKS, tp: int = TP_TICKS, order: str = "adverse", fee: float = FEE_RT, drift: float = 0.0, tick_usd: float = TICK_USD, stop_frac: float = 0.0):
     """Simula el engine un dia para TODOS los dias de dd a la vez.
 
     Devuelve (kind, pnl) arrays (D,). kind: 0=TP, 1=SL, 2=LIQ (cuenta liquidada), 3=FLATTEN.
@@ -147,9 +147,15 @@ def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, 
     liq_first = am & (i_liq <= i_sl)
     kind[liq_first] = 2; pnl[liq_first] = -cushion
     sl_only = am & ~liq_first
-    loss_sl = (sl + slip + exit_slip) * nc * tick_usd + nc * fee
+    if stop_frac > 0:   # convencion del motor de caja: el stop se llena a una fraccion del camino entre el stop y el extremo adverso de la barra que lo toco
+        ext = adv[np.arange(D), np.clip(i_sl, 0, K - 1)]
+        extra = stop_frac * np.maximum(-ext - sl, 0.0)
+    else:
+        extra = 0.0
+    loss_sl = (sl + slip + exit_slip + extra) * nc * tick_usd + nc * fee
+    loss_sl = np.broadcast_to(loss_sl, (D,))
     sl_liq = sl_only & (loss_sl >= cushion)           # el gap a traves del stop (o las comisiones) toca el piso
-    kind[sl_only] = 1; pnl[sl_only] = -loss_sl
+    kind[sl_only] = 1; pnl[sl_only] = -loss_sl[sl_only]
     kind[sl_liq] = 2; pnl[sl_liq] = -cushion
     # flatten que termina bajo el piso por comisiones
     fl = kind == 3

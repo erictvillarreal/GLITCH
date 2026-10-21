@@ -19,6 +19,18 @@ Ordenadas por **valor para el objetivo** (pasar el Combine → XFA/payouts, con 
 | 9 | **Corregir `core/prop_firm.py` en main (consistencia 50 % → 55 % que sube el objetivo)** | El código sigue con la regla vieja; el log del 24-sep ya la corrigió solo en ramas de investigación. | — | Parche trivial + revisión | Cero en el pipeline actual (no usa consistencia); evita errores futuros si se usa para decidir pase/fallo | — |
 | 10 | **Archivar `geometry_mestest_log.json` y exportarlo al repo de investigación** | La Parte B pide la tabla de las 8 sesiones y el slippage de 19/20-oct; hoy solo está en el Gist (token). | El JSON | Que Eric lo pegue; 0 | Permite validar con datos propios los supuestos más importantes (slip, orden, horas) | — |
 
+## Propuestas de la Parte D (etapa fondeada; 20-oct noche) — ver `xfa/REPORTE_D.md`
+
+| # | Propuesta | Hipótesis / mecanismo | Costo de probarla | Impacto estimado | Qué la haría fallar |
+|---|---|---|---|---|---|
+| D1 | **Corregir/sustituir el cargador de MGC** (`dd_wr/product_sweep.load_sessions` y `tables_generic.build` ignoran la etiqueta del contrato; el parquet intercala dos contratos en 44 % de los días) | Saltos de ≈ 250 ticks son artefactos y inflan 14 % los días TP/SL | parche pequeño + pruebas; **y volver a correr** los análisis de MGC | Corrige la base de TODO resultado de MGC (P(≥1 pago) +3.5 pp con datos limpios; elimina la banda “sin oro”) | Que la serie de ProjectX en vivo ya traiga un solo contrato (entonces solo afecta el histórico) |
+| D2 | **Preguntas a Topstep** (13 en `PREGUNTAS_TOPSTEP.md`) — sobre todo RTP, compras masivas, $10k, saldo mínimo, `accountId` | Define escenarios de reglas | 1 ticket | Fija si el negocio sobrevive al RTP ($1.4–2.1k/año) y suma +$0.6–0.8k por el beneficio de $10k | Respuesta ambigua |
+| D3 | **Cerebro 2: 728×3 o 4→1 micros** en lugar de 3×364 | +$100 por XFA (+14 %) con 728×3; +$70 (+10 %) con 4→1 micros (sin lotería) | decisión + Practice; cambia parámetros de capital (regla 4) | +$1.0–1.5k/año por cuenta | Que el WR real esté bajo el equilibrio (≈ 46 %): ambos pierden igual |
+| D4 | **Detección de PASE oficial** (`extras/PASE_guard_NO_DESPLEGAR/combine_state_pure.py`): P&L neto, consistencia 55 %, piso | El scheduler usa P&L bruto sin consistencia: puede declarar PASE antes/después que Topstep | revisión humana; integración pequeña | Evita desincronizar el sizing finish-line y el número de intento | — |
+| D5 | **Medición mínima de Cerebro 2** (C3 + registro del día completo) y **no** esperar WR | El WR no se mide a tiempo (≈ 1,400 sesiones); las 3 sesiones vivas = 1 trade decidido | las sesiones mismas | Convierte la decisión de “apostar al WR” en una decisión con costo acotado | — |
+| D6 | **Procedimiento para actualizar `TOPSTEP_ACCOUNT_ID` tras cada reset** (≈ 40–55 veces al año) | Es una tarea manual con riesgo de error; hoy el Pi se detiene seguro si el id es viejo | diseño humano: el invariante de “nunca adivinar la cuenta” es deliberado | Reduce errores operativos | — |
+| D7 | **Instancia por producto + listas de denegación cruzadas** (MES vs XFA) | Re-apuntar la instancia MES a la XFA ejecutaría 40 micros en la XFA | configuración (env), 0 código | Elimina el riesgo operativo más grave tras el PASE | — |
+
 ## Qué NO propongo (y por qué)
 
 - **Más reglas de dirección:** Parte B, 0 de 3 pasa D2; la hora y la dirección no tienen estructura que explotar con esta muestra.
