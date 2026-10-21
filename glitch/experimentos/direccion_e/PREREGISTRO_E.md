@@ -45,4 +45,11 @@ Motor de la Parte D: WR de 47 % a 56 % (paso 1 pp) fijado con deriva calibrada e
 Prueba de inversión de régimen por año; diseño del kill-switch con prueba determinista (NO DESPLEGAR); mezcla segura (la regla decide en señal fuerte, `alternate` en el resto).
 
 ## Enmiendas
-(ninguna al momento del registro)
+
+### Enmienda 1 — 21-oct-2026, ANTES de calcular cualquier resultado de reglas (aclaraciones tras la auditoría G1 de datos)
+La auditoría G1 (`RESULTADOS_E_G1.md`) corrió solo propiedades de los datos (contratos, husos, rolls, P(subir) incondicional), no ninguna regla. Resultado y decisiones:
+1. **`GC=F` se descarta como serie secundaria de E1**: su “Open” de Yahoo no es comparable (P(apertura→cierre > 0) = 44.0 % frente a 50.2 % de `GLD`; el cierre es el de liquidación de COMEX, no el de las 16:00 ET) y trae 418 días con volumen cero. Instrumentos de E1: **MGC → `GLD`** (2004-11-18 →) y **MES → `^GSPC`** (1990 →); `SPY` solo como robustez (no cuenta como comparación).
+2. **Observación incondicional (solo para interpretar):** `GLD` sube el 53.2 % de los días cierre→cierre pero **solo 50.2 % apertura→cierre**: casi toda la deriva del oro ocurre fuera del horario de EE. UU. La ventana real de MGC (7:15–14:30 CT) cubre el horario de EE. UU. y no la deriva nocturna; por eso el resultado primario es **apertura→cierre**. En `^GSPC`, 53.4 % (a/c) y 53.6 % (c/c): “siempre LARGO” es un control duro en índices.
+3. **Potencia (aclaración de §5):** con n = 488 días, SE de una exactitud = 0.5/√488 = 2.3 pp; el IC95 % tiene semi-ancho ≈ ±4.5 pp. Para que el p-valor ajustado por Holm (18 pruebas) contra 51 % sea < 0.05 hace falta una exactitud puntual ≳ 56–57 % en las series de 5 min. Se reporta como “sin potencia”.
+4. G2(3) “últimas 3 ventanas anuales” **no es evaluable** en las series de 5 min (2 años): las hipótesis intradía (E2, E3, E5) solo pueden generar hipótesis para una ventana nueva, no un hallazgo.
+5. **El calendario macro (E3) y las fechas del FOMC (E4)**: BLS bloquea la descarga automática (HTTP 403) y el calendario completo del FOMC desde 1994 requiere ~30 páginas históricas; si no se reconstruye con una fuente pública verificable, E3 se omite y E4 se prueba solo con las fechas que sí se verifiquen. Esto se declara aquí; el total de comparaciones se mantiene en 18.
