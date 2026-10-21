@@ -31,6 +31,16 @@ Ordenadas por **valor para el objetivo** (pasar el Combine → XFA/payouts, con 
 | D6 | **Procedimiento para actualizar `TOPSTEP_ACCOUNT_ID` tras cada reset** (≈ 40–55 veces al año) | Es una tarea manual con riesgo de error; hoy el Pi se detiene seguro si el id es viejo | diseño humano: el invariante de “nunca adivinar la cuenta” es deliberado | Reduce errores operativos | — |
 | D7 | **Instancia por producto + listas de denegación cruzadas** (MES vs XFA) | Re-apuntar la instancia MES a la XFA ejecutaría 40 micros en la XFA | configuración (env), 0 código | Elimina el riesgo operativo más grave tras el PASE | — |
 
+
+## Propuestas de la Parte E (ventaja direccional; 21-oct) — ver `direccion_e/REPORTE_E.md`
+
+| # | Propuesta | Hipótesis / mecanismo | Costo de probarla | Impacto estimado | Qué la haría fallar |
+|---|---|---|---|---|---|
+| E1 | **No cambiar la dirección (`alternate`)**: 0 de 16 reglas pasa G2 (`direccion_e/REPORTE_E.md`) | Las 3 que pasan G2(1) son el sesgo largo del S&P (no superan a «siempre LARGO»); MGC sin señal | ninguna | evita riesgo sin evidencia | — |
+| E2 | **Historia intradía larga (≥ 5 años de 5 min vía `retrieveBars`)** y repetir E2/E5/E3 pre-registrados | Con 2 años no hay potencia (±4.5 pp) | credenciales de Eric/Pi; exportar CSV | única forma de evaluar ventajas de 1–2 pp | Que la historia no exista |
+| E3 | **Línea base de G2 en índices = «siempre LARGO» + traducir exactitud → μ/σ → WR (tabla A) antes de G3** | 53.5 % de días alcistas ≈ μ/σ 0.024 ≈ WR 51 % ≈ +$170/año | enmienda al Protocolo (Claude/Eric) | evita falsos candidatos | — |
+| E4 | **Kill-switch con ventana 200 y piso 44 %** (no 60/45 %) si alguna vez se despliega una regla direccional (`killswitch_NO_DESPLEGAR.py`) | 60/45 % dispara en 68 % de los años aun con WR real 52 % | revisión humana (regla 4) | protege sin descartar por ruido | — |
+
 ## Qué NO propongo (y por qué)
 
 - **Más reglas de dirección:** Parte B, 0 de 3 pasa D2; la hora y la dirección no tienen estructura que explotar con esta muestra.

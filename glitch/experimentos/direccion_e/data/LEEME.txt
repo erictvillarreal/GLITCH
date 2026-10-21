@@ -1,0 +1,10 @@
+Descarga 2026-10-20 23:30 (hora local); yfinance auto_adjust=False
+GLD: 5514 dias 2004-11-18 -> 2026-10-20 (GLD.csv)
+GC=F: 6560 dias 2000-08-30 -> 2026-10-20 (GC_F.csv)
+^GSPC: 9268 dias 1990-01-02 -> 2026-10-20 (GSPC.csv)
+SPY: 8489 dias 1993-01-29 -> 2026-10-20 (SPY.csv)
+ES=F: 6587 dias 2000-09-18 -> 2026-10-20 (ES_F.csv)
+DX-Y.NYB: 9377 dias 1990-01-01 -> 2026-10-20 (DX-Y_NYB.csv)
+CL=F: 6568 dias 2000-08-23 -> 2026-10-20 (CL_F.csv)
+EURUSD=X: 5939 dias 2003-12-01 -> 2026-10-21 (EURUSD_X.csv)
+ZN=F: 6549 dias 2000-09-21 -> 2026-10-20 (ZN_F.csv)

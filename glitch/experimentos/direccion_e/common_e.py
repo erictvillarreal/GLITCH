@@ -121,5 +121,31 @@ def holm(pvals: dict, m_total: int, alpha=0.05):
 
 
 def blocks10(n):
+    """10 bloques cronologicos contiguos (el ultimo absorbe el resto)."""
     size = n // 10
     return [(i * size, (i + 1) * size if i < 9 else n) for i in range(10)]
+
+
+# ── señales de 5 min (E2 / E5): solo informacion disponible hasta la barra de referencia ──────────────────────────────────
+def intraday_signals(df: pd.DataFrame, ref_hm: int) -> pd.DataFrame:
+    """df: barras de 5 min (indice UTC; columnas open, high, low, close, volume, contract). Por fecha CT: contrato dominante, open0 (primer open), p_ref (close de la barra que empieza en ref_hm),
+    close_last (ultimo close). R = ln(p_ref/close_last de la sesion previa) y gap = ln(open0/close_last previo); NaN si el contrato dominante cambio. Para el dia t solo usa barras de t hasta ref_hm y la sesion previa."""
+    d = df.tz_convert("America/Chicago").copy()
+    d["date"] = d.index.date; d["hm"] = d.index.hour * 60 + d.index.minute
+    rows = []
+    for dtt, x in d.groupby("date"):
+        vol = x.groupby("contract")["volume"].sum(); c = vol.idxmax(); x = x[x.contract == c]
+        xr = x[x.hm == ref_hm]
+        rows.append((dtt, c, float(x["open"].iloc[0]), float(xr["close"].iloc[0]) if len(xr) else np.nan, float(x["close"].iloc[-1])))
+    t = pd.DataFrame(rows, columns=["date", "contract", "open0", "p_ref", "close_last"]).set_index("date")
+    prev_close = t["close_last"].shift(1); same = t["contract"].shift(1) == t["contract"]
+    t["R"] = np.where(same, np.log(t["p_ref"] / prev_close), np.nan)
+    t["gap"] = np.where(same, np.log(t["open0"] / prev_close), np.nan)
+    return t
+
+
+def prior_stat(series: pd.Series, window: int, fn: str, q: float = 0.5) -> pd.Series:
+    """Estadistico movil de |serie| sobre los `window` valores disponibles PREVIOS (excluye el actual)."""
+    r = series.abs().dropna()
+    s = r.rolling(window, min_periods=window).median() if fn == "median" else r.rolling(window, min_periods=window).quantile(q)
+    return s.shift(1).reindex(series.index, method="ffill")

@@ -18,10 +18,10 @@ from sim import (FLOOR_CAP, MLL, NC_MAX, TARGET, OutcomeTable, side_of, tp_net_p
 H = 252; LAG_CASH = 5; ACT_DAYS = 1; OPS = 714.0
 
 
-def combine_bank(dd_mes, n, policy="P0", slips=(1.0, 3.0), slip_p=(0.5, 0.5), seed=1, maxdays=60, exit_slip=3.0):
+def combine_bank(dd_mes, n, policy="P0", slips=(1.0, 3.0), slip_p=(0.5, 0.5), seed=1, maxdays=60, exit_slip=3.0, drift=0.0):
     """Intentos de Combine desde cuenta nueva (50,000/50,000, meta 3,000): devuelve passed (bool) y days (dias de trading consumidos)."""
     rng = np.random.default_rng(seed)
-    tabs = {s: OutcomeTable(dd_mes, s, exit_slip, "adverse", 100, 32, step=10.0) for s in slips}
+    tabs = {s: OutcomeTable(dd_mes, s, exit_slip, "adverse", 100, 32, step=10.0, drift=drift) for s in slips}
     D = dd_mes.D
     bal = np.zeros(n); peak = np.zeros(n); best = np.zeros(n)                # relativo: ganancia del intento
     alive = np.ones(n, bool); passed = np.zeros(n, bool); days = np.zeros(n, int); cdays = np.zeros(n, int)
