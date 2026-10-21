@@ -58,7 +58,7 @@ class DayData:
         return fav, adv, cl, adverse_first_ohlc
 
 
-def load_days(path: str = DEFAULT_PARQUET, ref_hm: int = REF_BAR_HM, last_hm: int = LAST_BAR_HM) -> DayData:
+def load_days(path: str = DEFAULT_PARQUET, ref_hm: int = REF_BAR_HM, last_hm: int = LAST_BAR_HM, tick: float = TICK, fill_gaps: bool = False, dominant_contract: bool = False) -> DayData:
     """ref_hm = minuto-CT de INICIO de la barra cuyo close es la referencia; last_hm = inicio de la ultima barra monitoreada (flatten a su close).
     Los valores por defecto replican scheduler/Pi (ref 9:30, flatten 14:30 CT). Otros valores solo para validacion cruzada contra el motor de caja (entrada 9:45)."""
     bar_hms = list(range(ref_hm + 5, last_hm + 5, 5))
@@ -69,21 +69,40 @@ def load_days(path: str = DEFAULT_PARQUET, ref_hm: int = REF_BAR_HM, last_hm: in
     dates, refs, ops, his, los, cls, dropped = [], [], [], [], [], [], []
     for dt, x in d.groupby("date"):
         if x.contract.nunique() > 1:
-            dropped.append((dt, "cambio de contrato dentro del dia")); continue
+            if not dominant_contract:
+                dropped.append((dt, "cambio de contrato dentro del dia")); continue
+            # el archivo MGC intercala barras de DOS contratos simultaneos (p. ej. MGCV4 y MGCZ4, ~$25 de diferencia): se queda el de mayor volumen del dia (el front month de Topstep)
+            vol = x.groupby("contract")["volume"].sum()
+            x = x[x.contract == vol.idxmax()]
         have = set(x.hm)
+        if fill_gaps:
+            # barras sin operaciones (productos poco liquidos, p. ej. MGC antes de las 8:30 CT): precio plano = ultimo cierre; el dia debe llegar hasta last_hm
+            if int(x.hm.max()) < last_hm or int(x.hm.min()) > ref_hm:
+                dropped.append((dt, "dia sin cobertura hasta el flatten o sin barras antes de la referencia")); continue
+            x = x.sort_values("hm").drop_duplicates("hm").set_index("hm")
+            full = sorted(set(x.index) | need)
+            cl = x["close"].reindex(full).ffill()
+            x = x.reindex(full)
+            for c in ("open", "high", "low"):
+                x[c] = x[c].fillna(cl)
+            x["close"] = cl
+            if x.loc[sorted(need), "close"].isna().any():
+                dropped.append((dt, "sin precio de referencia")); continue
+            have = set(x.index)
+            x = x.reset_index()
         if not need.issubset(have):
             dropped.append((dt, f"dia incompleto ({len(x)} barras, ultima {int(x.hm.max()) // 60}:{int(x.hm.max()) % 60:02d} CT)")); continue
         x = x.set_index("hm")
         ref = float(x.loc[ref_hm, "close"])
         b = x.loc[bar_hms]
         dates.append(dt); refs.append(ref)
-        ops.append(((b.open - ref) / TICK).to_numpy()); his.append(((b.high - ref) / TICK).to_numpy())
-        los.append(((b.low - ref) / TICK).to_numpy()); cls.append(((b.close - ref) / TICK).to_numpy())
+        ops.append(((b.open - ref) / tick).to_numpy()); his.append(((b.high - ref) / tick).to_numpy())
+        los.append(((b.low - ref) / tick).to_numpy()); cls.append(((b.close - ref) / tick).to_numpy())
     return DayData(dates, np.array(refs), np.array(ops), np.array(his), np.array(los), np.array(cls), dropped)
 
 
 def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, exit_slip: float = 0.0,
-            sl: int = SL_TICKS, tp: int = TP_TICKS, order: str = "adverse", fee: float = FEE_RT, drift: float = 0.0):
+            sl: int = SL_TICKS, tp: int = TP_TICKS, order: str = "adverse", fee: float = FEE_RT, drift: float = 0.0, tick_usd: float = TICK_USD):
     """Simula el engine un dia para TODOS los dias de dd a la vez.
 
     Devuelve (kind, pnl) arrays (D,). kind: 0=TP, 1=SL, 2=LIQ (cuenta liquidada), 3=FLATTEN.
@@ -94,7 +113,7 @@ def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, 
     D, K = fav.shape
     if nc <= 0:
         return np.full(D, 3), np.zeros(D)
-    liq_ticks = cushion / (nc * TICK_USD)               # perdida en ticks (desde el fill) que toca el piso
+    liq_ticks = cushion / (nc * tick_usd)               # perdida en ticks (desde el fill) que toca el piso
     liq_trig = -(liq_ticks - slip)                      # nivel de adv (desde la referencia) donde se toca el piso
     cum_adv = np.minimum.accumulate(adv, axis=1)
     BIG = 10 ** 6
@@ -118,17 +137,17 @@ def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, 
     kind = np.full(D, 3); pnl = np.zeros(D)
     # flatten
     flat_ticks = cl[:, -1] - slip
-    pnl_flat = flat_ticks * nc * TICK_USD - nc * fee
+    pnl_flat = flat_ticks * nc * tick_usd - nc * fee
     kind[:] = 3; pnl[:] = pnl_flat
     # TP
     tp_mask = (i_tp < BIG) & ~(adv_wins & (i_adv < BIG))
-    kind[tp_mask] = 0; pnl[tp_mask] = (tp - slip) * nc * TICK_USD - nc * fee
+    kind[tp_mask] = 0; pnl[tp_mask] = (tp - slip) * nc * tick_usd - nc * fee
     # adverso primero
     am = adv_wins & (i_adv < BIG)
     liq_first = am & (i_liq <= i_sl)
     kind[liq_first] = 2; pnl[liq_first] = -cushion
     sl_only = am & ~liq_first
-    loss_sl = (sl + slip + exit_slip) * nc * TICK_USD + nc * fee
+    loss_sl = (sl + slip + exit_slip) * nc * tick_usd + nc * fee
     sl_liq = sl_only & (loss_sl >= cushion)           # el gap a traves del stop (o las comisiones) toca el piso
     kind[sl_only] = 1; pnl[sl_only] = -loss_sl
     kind[sl_liq] = 2; pnl[sl_liq] = -cushion
