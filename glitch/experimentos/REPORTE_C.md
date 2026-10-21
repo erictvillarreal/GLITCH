@@ -57,7 +57,7 @@ Con ancla a la referencia el motor reproduce el desplome de la Parte A (±3 pp; 
 
 ### RTP (nuevo) — modelado como régimen alterno, no como probabilidad
 
-Fuente (`help.topstep.com/13620045`, **leído 20-oct-2026**, “Updated this week”): se dispara por “multiple accounts hit the MLL in one day”, “max position a majority of trades”, “don’t keep losers smaller than winners”, “don’t use stops”…; sin umbrales numéricos. Bajo RTP: todo Combine/XFA nuevo con **DLL** ($1,000 en 50K); si se resetea un Combine pasa a **Consistency Trading Combine con DLL**; las XFA nuevas son **solo Consistency (40 %)**; las XFA Standard existentes no se tocan. Resultado del régimen puro (slip 1): **CON oro $539 (vs $2,381), SIN oro −$517 (vs $900), justo $780 (vs $2,861)**. No hay base para estimar P(entrar al RTP); por el patrón de G2 (≈80 % del máximo, pérdidas 2.5× las ganancias nominales) varios criterios se tocan. El modelo cubre DLL + ruta Consistency de la XFA, **no** las reglas del “Consistency Trading Combine” (NO VERIFICADO: la página no las detalla).
+Fuente (`help.topstep.com/13620045`, **leído 20-oct-2026**): entre los criterios que menciona están varias cuentas tocando el MLL el mismo día, operar el tamaño máximo en la mayoría de los trades, perdedores mayores que ganadores y no usar stops; sin umbrales numéricos. Bajo RTP: todo Combine/XFA nuevo con **DLL** ($1,000 en 50K); si se resetea un Combine pasa a **Consistency Trading Combine con DLL**; las XFA nuevas son **solo Consistency (40 %)**; las XFA Standard existentes no se tocan. Resultado del régimen puro (slip 1): **CON oro $539 (vs $2,381), SIN oro −$517 (vs $900), justo $780 (vs $2,861)**. No hay base para estimar P(entrar al RTP); por el patrón de G2 (≈80 % del máximo, pérdidas 2.5× las ganancias nominales) varios criterios se tocan. El modelo cubre DLL + ruta Consistency de la XFA, **no** las reglas del “Consistency Trading Combine” (NO VERIFICADO: la página no las detalla).
 
 ### Reglas de pago vigentes (leídas 20-oct-2026, `help.topstep.com/8284233`)
 
@@ -65,7 +65,7 @@ Mínimo $125 · 90/10 · Standard: 5 días ≥ $150 de P&L neto y ganancia neta 
 
 ### Qué NO está resuelto en C1
 
-Riesgo de que Topstep considere el patrón (varios Combines seguidos que se pierden, 44–53 intentos/año) “excessive purchases of Combines or Resets” (sin umbral). Cuentas correlacionadas (no modeladas aquí). Tabla de escalado XFA (imagen, sin texto). Todo sigue siendo **una historia de 515 días, un solo producto de Combine y otro de XFA**.
+Riesgo de que Topstep considere el patrón (varios Combines seguidos que se pierden, 44–53 intentos/año) como compras excesivas de Combines o Resets (conducta prohibida; sin umbral). Cuentas correlacionadas (no modeladas aquí). Tabla de escalado XFA (imagen, sin texto). Todo sigue siendo **una historia de 515 días, un solo producto de Combine y otro de XFA**.
 
 ---
 
