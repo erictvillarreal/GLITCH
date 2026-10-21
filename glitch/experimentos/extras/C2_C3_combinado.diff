@@ -1,0 +1,171 @@
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 916ecff..8937c55 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -141,6 +141,8 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
+ from execution.gist_store import load_state as _gist_load_state
+ from execution.gist_store import save_log as _gist_save_log
+ from execution.gist_store import save_state as _gist_save_state
++from pi.liquidation_pure import classify_unknown_exit, liq_pnl
++from pi.slippage_pure import slippage_ticks
+ from scheduler.telegram_bot import send
+ from strategies.geometry_pure import CANDIDATES
+ 
+@@ -876,17 +878,53 @@ def reconcile_if_needed():
+     _finalize_cycle(client, account_id, state, outcome)
+ 
+ 
++def _classify_unknown(client: ProjectXClient, account_id: int, signal: dict) -> dict:
++    """PROPUESTA (NO DESPLEGAR): intenta clasificar un cierre UNKNOWN como liquidacion por MLL. Mejor esfuerzo: nunca lanza.
++    Devuelve {"result": "LIQ"|"UNKNOWN", "evidence": ..., "suspected": bool, "pnl": float|None}."""
++    out = {"result": "UNKNOWN", "evidence": None, "suspected": False, "pnl": None}
++    try:
++        active = client.get_accounts(only_active=True)
++    except Exception as e:
++        log.warning(f"_classify_unknown: Account/search (activas) fallo -- {e}")
++        return out
++    all_accounts = None
++    if not active:
++        try:
++            all_accounts = client.get_accounts(only_active=False)
++        except Exception as e:
++            log.warning(f"_classify_unknown: Account/search (todas) fallo -- {e}")
++    floor_abs = None
++    pnl = liq_pnl(signal.get("attempt_pnl_before"), signal.get("attempt_floor"))
++    verdict = classify_unknown_exit(account_id=account_id, active_accounts=active, all_accounts=all_accounts, floor_abs=floor_abs)
++    out.update(verdict)
++    if verdict["result"] == "LIQ":
++        if pnl is None:     # sin el estado previo del intento no se puede registrar un P&L que dispare el QUIEBRE: no se convierte a ciegas
++            out.update(result="UNKNOWN", suspected=True, evidence=(verdict["evidence"] or "") + " | la señal no trae attempt_pnl_before/attempt_floor")
++        else:
++            out["pnl"] = pnl
++    return out
++
++
+ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcome: dict):
+     signal = state["signal"]
+ 
+     entry_price = state["entry_price"]
+     entry_estimated = True
++    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
+     rec = _lookup_order(client, account_id, state["entry_order_id"])
+     fill = _extract_fill_price(rec) if rec else None
++    if fill is None:
++        fill = state.get("fill_price")
+     if fill is not None:
+         entry_price, entry_estimated = fill, False
+ 
+     outcome = dict(outcome)
++    if outcome["result"] == "UNKNOWN":
++        verdict = _classify_unknown(client, account_id, signal)
++        if verdict["result"] == "LIQ":
++            outcome["result"] = "LIQ"; outcome["liq_evidence"] = verdict["evidence"]; outcome["pnl_override"] = verdict["pnl"]
++        elif verdict["suspected"]:
++            outcome["liq_suspected"] = verdict["evidence"] or "cuenta ausente con lista de cuentas vacia"
+     if outcome["result"] == "FLATTEN" and outcome["exit_price"] is None and not outcome.get("flatten_failed"):
+         flat_fill = _find_flatten_fill(client, account_id, state)
+         if flat_fill is not None:
+@@ -894,6 +932,8 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+ 
+     exit_price = outcome["exit_price"] if outcome["exit_price"] is not None else entry_price
+     pnl = _compute_pnl(signal["side"], entry_price, exit_price, signal["nc"])
++    if outcome.get("pnl_override") is not None:
++        pnl = outcome["pnl_override"]            # LIQ: P&L estimado que deja el intento en el piso (ver liquidation_pure.py)
+     entry = {
+         "date": signal["date"], "signal": True, "side": signal["side"],
+         "direction": signal["direction"], "entry": entry_price, "exit": exit_price,
+@@ -907,12 +947,21 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
+         if outcome.get(flag):
+             entry[flag] = True
++    if not entry_estimated:
++        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
++        if slip is not None:
++            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
+     if signal.get("nc_signal") is not None:
+         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
+     if outcome.get("orphan_orders"):
+         entry["orphan_orders"] = outcome["orphan_orders"]
+     if outcome["result"] == "UNKNOWN":
+         entry["needs_review"] = True
++    if outcome["result"] == "LIQ":
++        entry["pnl_estimated"] = True
++        entry["liq_evidence"] = outcome["liq_evidence"]
++    if outcome.get("liq_suspected"):
++        entry["liq_suspected"] = outcome["liq_suspected"]
+     append_to_historic_log(signal["product"], entry)
+     save_order_signal({})
+     save_pi_state({})
+@@ -921,6 +970,9 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+            f"{signal['direction']}: {entry_price:,.4f} → {exit_price:,.4f}\n"
+            f"PnL: ${pnl:+,.2f}  |  Contracts: {_nc_label(signal)}\n"
+            f"Intento #{signal['intento']}\n"
++           + (f"LIQUIDACION por MLL detectada ({outcome['liq_evidence']}). El PnL de arriba es una ESTIMACION que deja el intento "
++              f"en el piso; el intento se da por QUEBRADO. Verifica en TopstepX y crea la cuenta de reset.\n" if outcome["result"] == "LIQ" else "")
++           + (f"SOSPECHA de liquidacion ({outcome['liq_suspected']}) -- NO clasificada. Revisa TopstepX YA.\n" if outcome.get("liq_suspected") else "")
+            + ("ATENCION: resultado NO determinado -- ambas patas desaparecieron (cierre manual, liquidacion por MLL "
+               "o error de lectura). El PnL $0.00 de arriba NO es real: revisar el P&L en TopstepX. "
+               "Este dia queda marcado needs_review y fuera del WR.\n" if outcome["result"] == "UNKNOWN" else "")
+@@ -1235,9 +1287,17 @@ def run_once():
+                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
+                  f"invertido.\n{utc_now_str()}")
+ 
++        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
++        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
++        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
++        if open_slip is not None:
++            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
++            save_pi_state(state)
+         msg = (f"{PREFIX}\n[OPEN]\n"
+                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
+-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
++               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
++                  else "Fill de entrada no leido aun (se registra al cierre)\n")
++               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
+                + utc_now_str())
+         send(msg)
+diff --git a/glitch/scheduler/geometry_scheduler.py b/glitch/scheduler/geometry_scheduler.py
+index d060307..c1121ac 100644
+--- a/glitch/scheduler/geometry_scheduler.py
++++ b/glitch/scheduler/geometry_scheduler.py
+@@ -184,6 +184,11 @@ def utc_now_str():
+     return datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M UTC")
+ 
+ 
++# "LIQ" (PROPUESTA, NO DESPLEGAR): liquidacion por MLL detectada por el Pi (pi/liquidation_pure.py). Cuenta como ciclo
++# resuelto (no gana: pass_rate la trata como no-TP) y su P&L estimado deja el intento en el piso -> QUIEBRE.
++RESOLVED_RESULTS = ("TP", "SL", "FLATTEN", "LIQ")
++
++
+ def _current_intento(paper_log: list) -> int:
+     """
+     Numero de intento de Combine actual -- derivado de paper_log, SIN
+@@ -236,7 +241,7 @@ def _current_intento(paper_log: list) -> int:
+ def _attempt_entries(paper_log: list, intento: int) -> list:
+     """Ciclos resueltos que pertenecen a un intento especifico."""
+     return [e for e in paper_log
+-            if e.get("result") in ("TP", "SL", "FLATTEN") and e.get("intento", 1) == intento]
++            if e.get("result") in RESOLVED_RESULTS and e.get("intento", 1) == intento]
+ 
+ 
+ def _attempt_pnl(paper_log: list, intento: int) -> float:
+@@ -394,7 +399,7 @@ def _paper_progress(paper_log: list, today_str: str) -> dict:
+     fecha de la primera entrada en paper_log ES el dia 1, no hay que
+     llevar un contador aparte que se pueda desincronizar del log real.
+     """
+-    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
++    resolved = [e for e in paper_log if e.get("result") in RESOLVED_RESULTS]
+     dates_seen = sorted({e["date"] for e in paper_log if e.get("date")})
+ 
+     if dates_seen:
+@@ -655,6 +660,9 @@ def run():
+             "ticker": CFG.spec.yf_ticker, "product_code": CFG.spec.product_code,
+             "nc": CFG.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+             "product": PRODUCT_KEY, "intento": intento_actual, "dry_run": False,
++            # estado del intento para que el Pi pueda estimar el P&L de una liquidacion (PROPUESTA, NO DESPLEGAR)
++            "attempt_pnl_before": round(attempt_pnl_before, 2),
++            "attempt_floor": round(_attempt_trailing_floor(paper_log, intento_actual), 2),
+         })
+         real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+                     f"Direction: {direction_str}\nContracts: {CFG.nc}\n"

@@ -222,7 +222,9 @@ def run_mc(policy, tables, n=50000, seed=1, bal0=51401.2, peak0=None, start_idx=
             cons_ok = True
         elif consistency_mode == "abs":          # dashboard de Eric (encargo §1): mejor dia < 55% de la meta = $1,650
             cons_ok = best < CONSIST_CAP
-        else:                                    # core/prop_firm.py: mejor dia < 50% del beneficio acumulado
+        elif consistency_mode == "pct55":        # regla OFICIAL (log 24-sep, help.topstep.com): el objetivo sube a mejor_dia/0.55 -> pase si ganancia >= 3000 y mejor_dia <= 55% de la ganancia
+            cons_ok = best <= 0.55 * np.maximum(bal - 50000.0, 1e-9) + 1e-9
+        else:                                    # core/prop_firm.py (desactualizado): mejor dia < 50% del beneficio acumulado
             cons_ok = best < 0.5 * np.maximum(bal - 50000.0, 1e-9)
         newly = ok & (bal >= target) & cons_ok
         passed |= newly; day_pass = np.where(newly, t + 1, day_pass)

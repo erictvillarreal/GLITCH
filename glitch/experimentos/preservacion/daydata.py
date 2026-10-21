@@ -58,11 +58,14 @@ class DayData:
         return fav, adv, cl, adverse_first_ohlc
 
 
-def load_days(path: str = DEFAULT_PARQUET) -> DayData:
+def load_days(path: str = DEFAULT_PARQUET, ref_hm: int = REF_BAR_HM, last_hm: int = LAST_BAR_HM) -> DayData:
+    """ref_hm = minuto-CT de INICIO de la barra cuyo close es la referencia; last_hm = inicio de la ultima barra monitoreada (flatten a su close).
+    Los valores por defecto replican scheduler/Pi (ref 9:30, flatten 14:30 CT). Otros valores solo para validacion cruzada contra el motor de caja (entrada 9:45)."""
+    bar_hms = list(range(ref_hm + 5, last_hm + 5, 5))
     d = pd.read_parquet(path).tz_convert("America/Chicago")
     d["date"] = d.index.date
     d["hm"] = d.index.hour * 60 + d.index.minute
-    need = set([REF_BAR_HM] + BAR_HMS)
+    need = set([ref_hm] + bar_hms)
     dates, refs, ops, his, los, cls, dropped = [], [], [], [], [], [], []
     for dt, x in d.groupby("date"):
         if x.contract.nunique() > 1:
@@ -71,8 +74,8 @@ def load_days(path: str = DEFAULT_PARQUET) -> DayData:
         if not need.issubset(have):
             dropped.append((dt, f"dia incompleto ({len(x)} barras, ultima {int(x.hm.max()) // 60}:{int(x.hm.max()) % 60:02d} CT)")); continue
         x = x.set_index("hm")
-        ref = float(x.loc[REF_BAR_HM, "close"])
-        b = x.loc[BAR_HMS]
+        ref = float(x.loc[ref_hm, "close"])
+        b = x.loc[bar_hms]
         dates.append(dt); refs.append(ref)
         ops.append(((b.open - ref) / TICK).to_numpy()); his.append(((b.high - ref) / TICK).to_numpy())
         los.append(((b.low - ref) / TICK).to_numpy()); cls.append(((b.close - ref) / TICK).to_numpy())

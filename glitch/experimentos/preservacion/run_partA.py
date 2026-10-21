@@ -91,7 +91,6 @@ def main():
     Vs, pols_dp = DP.solve(H, LIQ, START_IDX, horizon=60)
     pi0, bi0 = DP.idx_state(round(START["bal"] / 25) * 25, round(START["peak"] / 25) * 25)
     log(f"DP (value iteration, horizonte 60 dias, M2 iid): P(pase) optimo desde estado de partida = {Vs[0, pi0, bi0] * 100:.1f}%  (techo teorico {(START['bal'] - 49401.2) / (TARGET - 49401.2) * 100:.1f}%); nc optimo dia 1 = {pols_dp[0, pi0, bi0]}\n")
-    np.save("pols_dp.npy", pols_dp)
     rows_by_model = {}
     for mi, (mname, (d, tabs, blk)) in enumerate(models.items()):
         log(f"\n## A1 - {mname}: politicas desde el estado de partida (n={N}, maximo 60 dias)\n")

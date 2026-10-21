@@ -1,0 +1,54 @@
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 916ecff..7fc1b27 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -141,6 +141,7 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
+ from execution.gist_store import load_state as _gist_load_state
+ from execution.gist_store import save_log as _gist_save_log
+ from execution.gist_store import save_state as _gist_save_state
++from pi.slippage_pure import slippage_ticks
+ from scheduler.telegram_bot import send
+ from strategies.geometry_pure import CANDIDATES
+ 
+@@ -881,8 +882,11 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+ 
+     entry_price = state["entry_price"]
+     entry_estimated = True
++    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
+     rec = _lookup_order(client, account_id, state["entry_order_id"])
+     fill = _extract_fill_price(rec) if rec else None
++    if fill is None:
++        fill = state.get("fill_price")
+     if fill is not None:
+         entry_price, entry_estimated = fill, False
+ 
+@@ -907,6 +911,10 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
+         if outcome.get(flag):
+             entry[flag] = True
++    if not entry_estimated:
++        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
++        if slip is not None:
++            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
+     if signal.get("nc_signal") is not None:
+         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
+     if outcome.get("orphan_orders"):
+@@ -1235,9 +1243,17 @@ def run_once():
+                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
+                  f"invertido.\n{utc_now_str()}")
+ 
++        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
++        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
++        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
++        if open_slip is not None:
++            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
++            save_pi_state(state)
+         msg = (f"{PREFIX}\n[OPEN]\n"
+                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
+-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
++               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
++                  else "Fill de entrada no leido aun (se registra al cierre)\n")
++               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
+                + utc_now_str())
+         send(msg)

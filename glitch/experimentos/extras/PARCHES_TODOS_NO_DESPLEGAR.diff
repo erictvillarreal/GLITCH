@@ -1,0 +1,735 @@
+diff --git a/glitch/pi/liquidation_pure.py b/glitch/pi/liquidation_pure.py
+new file mode 100644
+index 0000000..69d5416
+--- /dev/null
++++ b/glitch/pi/liquidation_pure.py
+@@ -0,0 +1,61 @@
++"""PROPUESTA -- NO DESPLEGAR (NEEDS HUMAN REVIEW, CLAUDE.md regla 4: toca el registro de resultados del intento).
++
++Deteccion DETERMINISTA de liquidacion por MLL (cuenta terminada por TopstepX) cuando el Pi ve "ambas patas ausentes y
++cuenta plana" (hoy: result="UNKNOWN", pnl 0, el intento no avanza -- caso real del 19-oct-2026).
++
++Evidencia aceptada (ninguna requiere un endpoint nuevo; solo Account/search, que el Pi ya usa en _resolve_account_id):
++  E1  la cuenta operada YA NO aparece entre las cuentas activas pero la lista NO esta vacia (descarta un glitch de la API
++      que devuelva []), o
++  E2  la cuenta aparece con canTrade == False.
++Con E1 o E2 -> "LIQ". Si solo hay una pista debil (balance <= piso + tolerancia) -> "UNKNOWN" + liq_suspected (alerta fuerte,
++sigue needs_review). Sin pistas -> "UNKNOWN" como hoy. Nunca se infiere LIQ solo por el balance ni solo por tiempo.
++
++P&L de un LIQ: SIEMPRE estimado y marcado (pnl_estimated). Se fija en  piso_relativo - pnl_acumulado_previo  para que el
++acumulado del intento quede EXACTAMENTE en el piso (la cuenta termina en el piso: el MLL liquida al tocarlo) y
++_check_attempt_reset() devuelva "QUIEBRE". Si la señal no trae esos dos campos, no se convierte a LIQ (queda UNKNOWN).
++
++Campos Account/search que se leen (`id`, `balance`, `canTrade`): segun la documentacion publica de ProjectX; `canTrade`
++NO VERIFICADO en vivo contra esta cuenta -- por eso E2 es solo una de dos vias y los tests usan registros sinteticos.
++"""
++from __future__ import annotations
++
++from typing import Optional
++
++LIQ_BALANCE_TOLERANCE_USD = 50.0
++
++
++def _find(accounts, account_id):
++    for a in accounts or []:
++        if a.get("id") == account_id:
++            return a
++    return None
++
++
++def classify_unknown_exit(*, account_id, active_accounts: Optional[list], all_accounts: Optional[list] = None,
++                          floor_abs: Optional[float] = None, tol_usd: float = LIQ_BALANCE_TOLERANCE_USD) -> dict:
++    """Devuelve {"result": "LIQ"|"UNKNOWN", "evidence": str|None, "suspected": bool}. Pura: no toca la red."""
++    if active_accounts is None:
++        return {"result": "UNKNOWN", "evidence": None, "suspected": False}
++    rec = _find(active_accounts, account_id)
++    if rec is None and active_accounts:
++        return {"result": "LIQ", "evidence": "E1: la cuenta ya no figura entre las cuentas activas de Account/search", "suspected": False}
++    if rec is None:
++        # lista vacia: puede ser un glitch de la API o que esta era la unica cuenta. Se consulta el listado completo.
++        rec = _find(all_accounts, account_id)
++        if rec is None:
++            return {"result": "UNKNOWN", "evidence": None, "suspected": True}   # ambiguo: se alerta, no se clasifica
++    if rec.get("canTrade") is False:
++        return {"result": "LIQ", "evidence": "E2: canTrade=false en Account/search", "suspected": False}
++    bal = rec.get("balance")
++    if floor_abs is not None and isinstance(bal, (int, float)) and not isinstance(bal, bool) and bal <= floor_abs + tol_usd:
++        return {"result": "UNKNOWN", "evidence": f"balance {bal:,.2f} <= piso {floor_abs:,.2f} + {tol_usd:.0f}, pero la cuenta sigue operable",
++                "suspected": True}
++    return {"result": "UNKNOWN", "evidence": None, "suspected": False}
++
++
++def liq_pnl(attempt_pnl_before, attempt_floor) -> Optional[float]:
++    """P&L estimado del dia de la liquidacion (<= 0): deja el acumulado del intento exactamente en el piso. None si faltan datos."""
++    for v in (attempt_pnl_before, attempt_floor):
++        if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
++            return None
++    return round(float(attempt_floor) - float(attempt_pnl_before), 2)
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 916ecff..8937c55 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -141,6 +141,8 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
+ from execution.gist_store import load_state as _gist_load_state
+ from execution.gist_store import save_log as _gist_save_log
+ from execution.gist_store import save_state as _gist_save_state
++from pi.liquidation_pure import classify_unknown_exit, liq_pnl
++from pi.slippage_pure import slippage_ticks
+ from scheduler.telegram_bot import send
+ from strategies.geometry_pure import CANDIDATES
+ 
+@@ -876,17 +878,53 @@ def reconcile_if_needed():
+     _finalize_cycle(client, account_id, state, outcome)
+ 
+ 
++def _classify_unknown(client: ProjectXClient, account_id: int, signal: dict) -> dict:
++    """PROPUESTA (NO DESPLEGAR): intenta clasificar un cierre UNKNOWN como liquidacion por MLL. Mejor esfuerzo: nunca lanza.
++    Devuelve {"result": "LIQ"|"UNKNOWN", "evidence": ..., "suspected": bool, "pnl": float|None}."""
++    out = {"result": "UNKNOWN", "evidence": None, "suspected": False, "pnl": None}
++    try:
++        active = client.get_accounts(only_active=True)
++    except Exception as e:
++        log.warning(f"_classify_unknown: Account/search (activas) fallo -- {e}")
++        return out
++    all_accounts = None
++    if not active:
++        try:
++            all_accounts = client.get_accounts(only_active=False)
++        except Exception as e:
++            log.warning(f"_classify_unknown: Account/search (todas) fallo -- {e}")
++    floor_abs = None
++    pnl = liq_pnl(signal.get("attempt_pnl_before"), signal.get("attempt_floor"))
++    verdict = classify_unknown_exit(account_id=account_id, active_accounts=active, all_accounts=all_accounts, floor_abs=floor_abs)
++    out.update(verdict)
++    if verdict["result"] == "LIQ":
++        if pnl is None:     # sin el estado previo del intento no se puede registrar un P&L que dispare el QUIEBRE: no se convierte a ciegas
++            out.update(result="UNKNOWN", suspected=True, evidence=(verdict["evidence"] or "") + " | la señal no trae attempt_pnl_before/attempt_floor")
++        else:
++            out["pnl"] = pnl
++    return out
++
++
+ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcome: dict):
+     signal = state["signal"]
+ 
+     entry_price = state["entry_price"]
+     entry_estimated = True
++    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
+     rec = _lookup_order(client, account_id, state["entry_order_id"])
+     fill = _extract_fill_price(rec) if rec else None
++    if fill is None:
++        fill = state.get("fill_price")
+     if fill is not None:
+         entry_price, entry_estimated = fill, False
+ 
+     outcome = dict(outcome)
++    if outcome["result"] == "UNKNOWN":
++        verdict = _classify_unknown(client, account_id, signal)
++        if verdict["result"] == "LIQ":
++            outcome["result"] = "LIQ"; outcome["liq_evidence"] = verdict["evidence"]; outcome["pnl_override"] = verdict["pnl"]
++        elif verdict["suspected"]:
++            outcome["liq_suspected"] = verdict["evidence"] or "cuenta ausente con lista de cuentas vacia"
+     if outcome["result"] == "FLATTEN" and outcome["exit_price"] is None and not outcome.get("flatten_failed"):
+         flat_fill = _find_flatten_fill(client, account_id, state)
+         if flat_fill is not None:
+@@ -894,6 +932,8 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+ 
+     exit_price = outcome["exit_price"] if outcome["exit_price"] is not None else entry_price
+     pnl = _compute_pnl(signal["side"], entry_price, exit_price, signal["nc"])
++    if outcome.get("pnl_override") is not None:
++        pnl = outcome["pnl_override"]            # LIQ: P&L estimado que deja el intento en el piso (ver liquidation_pure.py)
+     entry = {
+         "date": signal["date"], "signal": True, "side": signal["side"],
+         "direction": signal["direction"], "entry": entry_price, "exit": exit_price,
+@@ -907,12 +947,21 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
+         if outcome.get(flag):
+             entry[flag] = True
++    if not entry_estimated:
++        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
++        if slip is not None:
++            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
+     if signal.get("nc_signal") is not None:
+         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
+     if outcome.get("orphan_orders"):
+         entry["orphan_orders"] = outcome["orphan_orders"]
+     if outcome["result"] == "UNKNOWN":
+         entry["needs_review"] = True
++    if outcome["result"] == "LIQ":
++        entry["pnl_estimated"] = True
++        entry["liq_evidence"] = outcome["liq_evidence"]
++    if outcome.get("liq_suspected"):
++        entry["liq_suspected"] = outcome["liq_suspected"]
+     append_to_historic_log(signal["product"], entry)
+     save_order_signal({})
+     save_pi_state({})
+@@ -921,6 +970,9 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+            f"{signal['direction']}: {entry_price:,.4f} → {exit_price:,.4f}\n"
+            f"PnL: ${pnl:+,.2f}  |  Contracts: {_nc_label(signal)}\n"
+            f"Intento #{signal['intento']}\n"
++           + (f"LIQUIDACION por MLL detectada ({outcome['liq_evidence']}). El PnL de arriba es una ESTIMACION que deja el intento "
++              f"en el piso; el intento se da por QUEBRADO. Verifica en TopstepX y crea la cuenta de reset.\n" if outcome["result"] == "LIQ" else "")
++           + (f"SOSPECHA de liquidacion ({outcome['liq_suspected']}) -- NO clasificada. Revisa TopstepX YA.\n" if outcome.get("liq_suspected") else "")
+            + ("ATENCION: resultado NO determinado -- ambas patas desaparecieron (cierre manual, liquidacion por MLL "
+               "o error de lectura). El PnL $0.00 de arriba NO es real: revisar el P&L en TopstepX. "
+               "Este dia queda marcado needs_review y fuera del WR.\n" if outcome["result"] == "UNKNOWN" else "")
+@@ -1235,9 +1287,17 @@ def run_once():
+                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
+                  f"invertido.\n{utc_now_str()}")
+ 
++        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
++        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
++        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
++        if open_slip is not None:
++            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
++            save_pi_state(state)
+         msg = (f"{PREFIX}\n[OPEN]\n"
+                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
+-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
++               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
++                  else "Fill de entrada no leido aun (se registra al cierre)\n")
++               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
+                + utc_now_str())
+         send(msg)
+diff --git a/glitch/pi/slippage_pure.py b/glitch/pi/slippage_pure.py
+new file mode 100644
+index 0000000..99ec22f
+--- /dev/null
++++ b/glitch/pi/slippage_pure.py
+@@ -0,0 +1,18 @@
++"""PROPUESTA -- NO DESPLEGAR (NEEDS HUMAN REVIEW, CLAUDE.md regla 4: toca el registro de ejecucion).
++
++C3: slippage REAL de entrada en ticks. Convencion: positivo = ADVERSO (peor que la referencia pre-trade con la que se anclan TP/SL).
++  LONG compra en `fill` > `ref` -> adverso; SHORT vende en `fill` < `ref` -> adverso.   slip_ticks = side * (fill - ref) / tick_size
++Calculo manual para cualquier dia (lun 19 / mar 20-oct): side * (precio de fill de TopstepX - referencia del mensaje [OPEN] del Pi) / 0.25.
++"""
++from __future__ import annotations
++
++from typing import Optional
++
++
++def slippage_ticks(side: int, ref_price: Optional[float], fill_price: Optional[float], tick_size: float) -> Optional[float]:
++    if side not in (1, -1) or ref_price is None or fill_price is None or tick_size <= 0:
++        return None
++    for v in (ref_price, fill_price):
++        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
++            return None
++    return round(side * (fill_price - ref_price) / tick_size, 2)
+diff --git a/glitch/scheduler/geometry_scheduler.py b/glitch/scheduler/geometry_scheduler.py
+index d060307..1bc7568 100644
+--- a/glitch/scheduler/geometry_scheduler.py
++++ b/glitch/scheduler/geometry_scheduler.py
+@@ -51,6 +51,7 @@ producto elegido y su horario RTH real).
+ """
+ import os
+ import sys
++import dataclasses
+ import logging
+ import time
+ from datetime import datetime, date
+@@ -76,12 +77,16 @@ require_env(
+ 
+ from scheduler.telegram_bot import send
+ from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
++from strategies.sizing_pure import MODES as _NC_MODES, nc_for_day
+ from execution.contracts import get_front_month, check_expiry_alerts
+ from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
+ from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state
+ from core.prop_firm import TOPSTEP_50K
+ 
+ CT = ZoneInfo("America/Chicago")
++# PROPUESTA (NO DESPLEGAR, NEEDS HUMAN REVIEW): sizing diario. "fixed" (default) = comportamiento actual, CFG.nc todos los dias.
++# "finish_line" = se achica solo cuando un TP ya cubre el faltante a la meta (ver experimentos/preservacion/REPORTE_A.md).
++ADAPTIVE_NC_MODE = os.getenv("GLITCH_ADAPTIVE_NC", "fixed").strip().lower()
+ # Logging con timestamp SIEMPRE en America/Chicago -- fix del
+ # 07-sep-2026, ver execution/ct_logging.py para el por que (el patron
+ # anterior, format="%(asctime)s CT" via basicConfig, dependia
+@@ -184,6 +189,11 @@ def utc_now_str():
+     return datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M UTC")
+ 
+ 
++# "LIQ" (PROPUESTA, NO DESPLEGAR): liquidacion por MLL detectada por el Pi (pi/liquidation_pure.py). Cuenta como ciclo
++# resuelto (no gana: pass_rate la trata como no-TP) y su P&L estimado deja el intento en el piso -> QUIEBRE.
++RESOLVED_RESULTS = ("TP", "SL", "FLATTEN", "LIQ")
++
++
+ def _current_intento(paper_log: list) -> int:
+     """
+     Numero de intento de Combine actual -- derivado de paper_log, SIN
+@@ -236,7 +246,7 @@ def _current_intento(paper_log: list) -> int:
+ def _attempt_entries(paper_log: list, intento: int) -> list:
+     """Ciclos resueltos que pertenecen a un intento especifico."""
+     return [e for e in paper_log
+-            if e.get("result") in ("TP", "SL", "FLATTEN") and e.get("intento", 1) == intento]
++            if e.get("result") in RESOLVED_RESULTS and e.get("intento", 1) == intento]
+ 
+ 
+ def _attempt_pnl(paper_log: list, intento: int) -> float:
+@@ -394,7 +404,7 @@ def _paper_progress(paper_log: list, today_str: str) -> dict:
+     fecha de la primera entrada en paper_log ES el dia 1, no hay que
+     llevar un contador aparte que se pueda desincronizar del log real.
+     """
+-    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
++    resolved = [e for e in paper_log if e.get("result") in RESOLVED_RESULTS]
+     dates_seen = sorted({e["date"] for e in paper_log if e.get("date")})
+ 
+     if dates_seen:
+@@ -561,6 +571,19 @@ def run():
+         intento_actual = _current_intento(paper_log)
+         attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
+ 
++    # ── 0b. Sizing de HOY (PROPUESTA). Funcion pura y determinista; solo REDUCE respecto a CFG.nc. Con el modo "fixed"
++    #        cfg_today == CFG y nada cambia. `attempt_pnl_before` usa el P&L del log (puede diferir del neto de TopstepX
++    #        por comisiones: el error hace que se opere un poco menos, no mas).
++    if ADAPTIVE_NC_MODE not in _NC_MODES:
++        log.error(f"GLITCH_ADAPTIVE_NC={ADAPTIVE_NC_MODE!r} invalido ({_NC_MODES}) -- se usa 'fixed'")
++        _mode = "fixed"
++    else:
++        _mode = ADAPTIVE_NC_MODE
++    nc_today = nc_for_day(_mode, CFG.nc, need_usd=PROFIT_TARGET - attempt_pnl_before, tp_ticks=CFG.tp_ticks,
++                          tick_value_usd=CFG.spec.tick_value_usd, commission_roundturn=CFG.spec.commission_roundturn)
++    cfg_today = dataclasses.replace(CFG, nc=nc_today)
++    log.info(f"Sizing hoy: modo={_mode} nc={nc_today} (config {CFG.nc}), faltante=${PROFIT_TARGET - attempt_pnl_before:,.2f}")
++
+     # ── 1. Resuelve el contrato en uso (para logging/alertas de vencimiento --
+     #        ver docstring de arriba: el feed de precio en vivo usa el simbolo
+     #        continuo de yfinance, no requiere el ticker exacto de Massive) ──
+@@ -653,11 +676,14 @@ def run():
+         save_order_signal({
+             "date": today_str, "side": side, "direction": direction_str,
+             "ticker": CFG.spec.yf_ticker, "product_code": CFG.spec.product_code,
+-            "nc": CFG.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
++            "nc": cfg_today.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+             "product": PRODUCT_KEY, "intento": intento_actual, "dry_run": False,
++            # estado del intento para que el Pi pueda estimar el P&L de una liquidacion (PROPUESTA, NO DESPLEGAR)
++            "attempt_pnl_before": round(attempt_pnl_before, 2),
++            "attempt_floor": round(_attempt_trailing_floor(paper_log, intento_actual), 2),
+         })
+         real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+-                    f"Direction: {direction_str}\nContracts: {CFG.nc}\n"
++                    f"Direction: {direction_str}\nContracts: {cfg_today.nc}\n"
+                     f"SL/TP: {CFG.sl_ticks}/{CFG.tp_ticks} ticks\n"
+                     f"Intento #{intento_actual}\n"
+                     f"Ejecucion real delegada a pi_executor.py -- este scheduler no coloca la "
+@@ -720,10 +746,10 @@ def run():
+ 
+     entry_price = float(entry_bars.iloc[-1]['close'])
+     tp_price, sl_price = CFG.barrier_prices(entry_price, side)
+-    tp_usd, sl_usd = CFG.dollar_tp_sl()
++    tp_usd, sl_usd = cfg_today.dollar_tp_sl()
+ 
+     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
+-    log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
++    log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={cfg_today.nc}")
+ 
+     # Estado durable ANTES de la notificacion -- si el proceso muere en
+     # cualquier punto desde aqui hasta el cierre normal, la PROXIMA
+@@ -735,7 +761,7 @@ def run():
+     # necesita el mismo simbolo que el monitoreo en vivo habria usado.
+     save_pending(_build_pending_record(
+         side, direction_str, entry_price, tp_price, sl_price, CFG.spec.yf_ticker,
+-        today_str, intento_actual, CFG.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
++        today_str, intento_actual, cfg_today.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
+     ))
+ 
+     pct_target_before = attempt_pnl_before / PROFIT_TARGET * 100
+@@ -744,7 +770,7 @@ def run():
+            f"Symbol: {CFG.spec.label} ({ticker})\n"
+            f"Direction: {direction_str}\n"
+            f"Entry: {entry_price:,.4f}\n"
+-           f"Contracts: {CFG.nc}\n"
++           f"Contracts: {cfg_today.nc}\n"
+            f"TP: {tp_price:,.4f}\n"
+            f"SL: {sl_price:,.4f}\n"
+            f"Progreso a Target: ${attempt_pnl_before:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_before:.1f}%)\n"
+@@ -775,7 +801,7 @@ def run():
+             continue
+ 
+         price = float(bars.iloc[-1]['close'])
+-        unreal = (price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
++        unreal = (price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * cfg_today.nc
+ 
+         if side == 1:
+             if price <= sl_price:
+@@ -793,7 +819,7 @@ def run():
+         time.sleep(POLL_INTERVAL)
+ 
+     # ── 5. PnL y notificacion ──────────────────────────────────────────────
+-    pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
++    pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * cfg_today.nc
+     log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
+ 
+     attempt_pnl_after = attempt_pnl_before + pnl
+@@ -802,7 +828,7 @@ def run():
+            f"[CLOSE] [{result}]\n"
+            f"Symbol: {CFG.spec.label} ({ticker})\n"
+            f"PnL: ${pnl:+,.2f}\n"
+-           f"Contracts: {CFG.nc}\n"
++           f"Contracts: {cfg_today.nc}\n"
+            f"Progreso a Target: ${attempt_pnl_after:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_acumulado:.1f}%)\n"
+            f"Dia de paper: {progress['days_elapsed']}\n"
+            f"Pass Rate: {pass_rate_line}\n"
+@@ -814,7 +840,7 @@ def run():
+         "direction": direction_str, "entry": entry_price,
+         "exit": exit_price, "result": result,
+         "pnl": round(pnl, 2), "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+-        "nc": CFG.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
++        "nc": cfg_today.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
+         "intento": intento_actual,
+     })
+     save_log(paper_log)
+diff --git a/glitch/strategies/sizing_pure.py b/glitch/strategies/sizing_pure.py
+new file mode 100644
+index 0000000..7d76133
+--- /dev/null
++++ b/glitch/strategies/sizing_pure.py
+@@ -0,0 +1,37 @@
++"""PROPUESTA -- NO DESPLEGAR (NEEDS HUMAN REVIEW, CLAUDE.md regla 4: toca sizing de capital).
++
++Sizing diario determinista de Camino B para el Combine ("finish-line"): usa todos los contratos configurados
++mientras falta mucho para la meta y se achica solo cuando un TP del tamano configurado ya cubriria el faltante.
++
++Reglas del fondo respetadas: funcion PURA y determinista (regla 1: nada de LLM en el camino de riesgo); solo REDUCE
++el tamano respecto a CFG.nc (nunca lo aumenta, el cap sigue siendo la config validada); no toca SL/TP en ticks;
++apagada por defecto (modo "fixed" = comportamiento actual).
++
++Destino sugerido si Eric lo aprueba: glitch/strategies/sizing_pure.py (junto a geometry_pure.py).
++"""
++from __future__ import annotations
++
++import math
++
++MODES = ("fixed", "finish_line")
++
++
++def tp_net_per_contract(tp_ticks: int, tick_value_usd: float, commission_roundturn: float, slip_ticks: float) -> float:
++    """$ netos de un TP por contrato, con slippage de entrada adverso supuesto (el TP se ancla a la referencia, el fill entra peor)."""
++    return (tp_ticks - slip_ticks) * tick_value_usd - commission_roundturn
++
++
++def nc_for_day(mode: str, nc_cap: int, *, need_usd: float, tp_ticks: int, tick_value_usd: float,
++               commission_roundturn: float, slip_assumed_ticks: float = 3.0) -> int:
++    """Contratos para HOY. need_usd = profit_target - pnl acumulado del intento (puede ser <= 0 si ya paso: se opera 1)."""
++    if mode not in MODES:
++        raise ValueError(f"modo invalido: {mode!r}")
++    if nc_cap < 1:
++        raise ValueError("nc_cap debe ser >= 1")
++    if mode == "fixed":
++        return int(nc_cap)
++    per = tp_net_per_contract(tp_ticks, tick_value_usd, commission_roundturn, slip_assumed_ticks)
++    if per <= 0:
++        return int(nc_cap)              # TP no cubre costos: no hay base para achicar, se conserva la config validada
++    n = math.ceil(max(need_usd, 0.0) / per - 1e-9)
++    return int(min(max(n, 1), nc_cap))
+diff --git a/glitch/tests/test_liquidation_detection.py b/glitch/tests/test_liquidation_detection.py
+new file mode 100644
+index 0000000..c9753da
+--- /dev/null
++++ b/glitch/tests/test_liquidation_detection.py
+@@ -0,0 +1,158 @@
++"""PROPUESTA (NO DESPLEGAR) -- C2: deteccion determinista de liquidacion por MLL en el Pi.
++
++Reproduce el caso del 19-oct-2026: ambas patas ausentes + cuenta plana -> hoy result=UNKNOWN, pnl 0 y el intento NO avanza.
++Sin red: FakeClient + gist en memoria de tests/test_pi_executor.py.
++"""
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++import scheduler.geometry_scheduler as sched
++from pi.liquidation_pure import classify_unknown_exit, liq_pnl
++from tests.test_pi_executor import FakeClient, _signal, fake_gist, sent  # noqa: F401
++
++MES = "CON.MES.Z26"
++
++
++# ── pura ──────────────────────────────────────────────────────────────────────────────────────────────────────────
++def test_cuenta_ausente_con_otras_cuentas_activas_es_liq():
++    v = classify_unknown_exit(account_id=555, active_accounts=[{"id": 999, "canTrade": True}])
++    assert v["result"] == "LIQ" and v["evidence"].startswith("E1")
++
++
++def test_canTrade_false_es_liq():
++    v = classify_unknown_exit(account_id=555, active_accounts=[{"id": 555, "canTrade": False, "balance": 49400}])
++    assert v["result"] == "LIQ" and v["evidence"].startswith("E2")
++
++
++def test_lista_vacia_es_ambigua_no_liq():
++    v = classify_unknown_exit(account_id=555, active_accounts=[], all_accounts=[])
++    assert v == {"result": "UNKNOWN", "evidence": None, "suspected": True}
++
++
++def test_lista_vacia_pero_cuenta_inactiva_en_el_listado_completo_con_canTrade_false():
++    v = classify_unknown_exit(account_id=555, active_accounts=[], all_accounts=[{"id": 555, "canTrade": False}])
++    assert v["result"] == "LIQ"
++
++
++def test_cuenta_operable_con_balance_cerca_del_piso_solo_es_sospecha():
++    v = classify_unknown_exit(account_id=555, active_accounts=[{"id": 555, "canTrade": True, "balance": 49420.0}], floor_abs=49401.2)
++    assert v["result"] == "UNKNOWN" and v["suspected"] is True
++
++
++def test_cuenta_normal_sigue_unknown_sin_sospecha():
++    v = classify_unknown_exit(account_id=555, active_accounts=[{"id": 555, "canTrade": True, "balance": 51000.0}], floor_abs=49401.2)
++    assert v == {"result": "UNKNOWN", "evidence": None, "suspected": False}
++
++
++def test_lectura_fallida_no_clasifica():
++    assert classify_unknown_exit(account_id=555, active_accounts=None)["result"] == "UNKNOWN"
++
++
++def test_liq_pnl_deja_el_intento_en_el_piso():
++    assert liq_pnl(1401.2, -598.8) == -2000.0
++    assert liq_pnl(0.0, -2000.0) == -2000.0
++    assert liq_pnl(None, -2000.0) is None and liq_pnl(0.0, None) is None
++
++
++# ── Pi: _finalize_cycle ─────────────────────────────────────────────────────────────────────────────────────────
++def _state(**sig_over):
++    sig = _signal(); sig.update({"attempt_pnl_before": 1401.2, "attempt_floor": -598.8}); sig.update(sig_over)
++    return {"phase": "bracket_open", "signal": sig, "entry_price": 6000.0, "entry_order_id": 100,
++            "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
++            "contract_id": MES, "account_id": 555, "opened_at": "x"}
++
++
++UNKNOWN = {"result": "UNKNOWN", "exit_price": None, "exit_price_estimated": True}
++
++
++def test_unknown_con_cuenta_terminada_se_registra_como_liq_con_pnl_en_el_piso(fake_gist, monkeypatch):
++    msgs = []
++    monkeypatch.setattr(pe, "send", lambda m: msgs.append(m))
++    c = FakeClient(); c.accounts = [{"id": 999, "canTrade": True}]           # la 555 ya no figura (cuenta liquidada)
++    pe._finalize_cycle(c, 555, _state(), dict(UNKNOWN))
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["result"] == "LIQ" and e["pnl"] == -2000.0 and e["pnl_estimated"] is True and "needs_review" not in e
++    assert any("LIQUIDACION" in m for m in msgs)
++
++
++def test_la_liquidacion_hace_avanzar_el_intento_y_dispara_quiebre(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); c.accounts = [{"id": 999}]
++    log_ = [{"date": "2026-10-19", "result": "TP", "pnl": 1401.2, "intento": 2}]
++    st = _state(); st["signal"]["date"] = "2026-10-20"; st["signal"]["intento"] = 2
++    fake_gist["geometry_mes_log.json"] = list(log_)
++    pe._finalize_cycle(c, 555, st, dict(UNKNOWN))
++    lg = fake_gist["geometry_mes_log.json"]
++    assert sched._attempt_pnl(lg, 2) == pytest.approx(-598.8)
++    assert sched._check_attempt_reset(sched._attempt_pnl(lg, 2), sched.PROFIT_TARGET, sched._attempt_trailing_floor(lg, 2)) == "QUIEBRE"
++    assert sched._current_intento(lg) == 3                     # el intento YA avanza solo, sin editar el Gist a mano
++
++
++def test_unknown_con_cuenta_presente_no_cambia(fake_gist, monkeypatch):
++    """Compatibilidad: con la cuenta aun activa y sin canTrade=false, sigue exactamente como antes."""
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    pe._finalize_cycle(FakeClient(), 555, _state(), dict(UNKNOWN))     # FakeClient.accounts = [{"id": 555}]
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["result"] == "UNKNOWN" and e["needs_review"] is True and e["pnl"] == 0.0 and "liq_suspected" not in e
++
++
++def test_unknown_con_lista_vacia_se_alerta_pero_no_se_clasifica(fake_gist, monkeypatch):
++    msgs = []
++    monkeypatch.setattr(pe, "send", lambda m: msgs.append(m))
++    c = FakeClient(); c.accounts = []
++    pe._finalize_cycle(c, 555, _state(), dict(UNKNOWN))
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["result"] == "UNKNOWN" and e["needs_review"] is True and "liq_suspected" in e
++    assert any("SOSPECHA" in m for m in msgs)
++
++
++def test_sin_estado_previo_en_la_senal_no_se_convierte_a_liq(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); c.accounts = [{"id": 999}]
++    st = _state(); del st["signal"]["attempt_pnl_before"]; del st["signal"]["attempt_floor"]
++    pe._finalize_cycle(c, 555, st, dict(UNKNOWN))
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["result"] == "UNKNOWN" and e["needs_review"] is True and "liq_suspected" in e
++
++
++def test_error_de_la_api_de_cuentas_no_rompe_el_cierre(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); c.get_accounts = lambda only_active=True: (_ for _ in ()).throw(RuntimeError("API caida"))
++    pe._finalize_cycle(c, 555, _state(), dict(UNKNOWN))
++    assert fake_gist["geometry_mes_log.json"][-1]["result"] == "UNKNOWN"
++
++
++def test_un_tp_normal_no_consulta_cuentas(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); calls = []
++    c.get_accounts = lambda only_active=True: calls.append(1) or []
++    pe._finalize_cycle(c, 555, _state(), {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    assert calls == [] and fake_gist["geometry_mes_log.json"][-1]["result"] == "TP"
++
++
++# ── scheduler ─────────────────────────────────────────────────────────────────────────────────────────────────────
++def test_liq_no_cuenta_como_victoria_en_el_pass_rate():
++    lg = [{"date": "2026-10-19", "result": "TP", "pnl": 1401.2, "intento": 2},
++          {"date": "2026-10-20", "result": "LIQ", "pnl": -2000.0, "intento": 2}]
++    prog = sched._paper_progress(lg, "2026-10-21")
++    assert prog["n_cycles"] == 2 and prog["pass_rate_empirico"] == 0.5
++
++
++def test_unknown_sigue_excluido_del_intento():
++    lg = [{"date": "2026-10-20", "result": "UNKNOWN", "pnl": 0.0, "intento": 2, "needs_review": True}]
++    assert sched._attempt_entries(lg, 2) == []
+diff --git a/glitch/tests/test_sizing_pure.py b/glitch/tests/test_sizing_pure.py
+new file mode 100644
+index 0000000..3e4e70b
+--- /dev/null
++++ b/glitch/tests/test_sizing_pure.py
+@@ -0,0 +1,45 @@
++"""Pruebas de la PROPUESTA de sizing (NO DESPLEGAR). Correr:  python -m pytest -q test_sizing_pure.py"""
++import math
++import os
++import sys
++
++import pytest
++
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++from strategies.sizing_pure import nc_for_day, tp_net_per_contract  # noqa: E402
++from strategies.geometry_pure import CANDIDATES  # noqa: E402
++
++CFG = CANDIDATES["MES"]
++KW = dict(tp_ticks=CFG.tp_ticks, tick_value_usd=CFG.spec.tick_value_usd, commission_roundturn=CFG.spec.commission_roundturn)
++
++
++def test_fixed_es_el_comportamiento_actual():
++    for need in (-50.0, 0.0, 100.0, 3000.0):
++        assert nc_for_day("fixed", CFG.nc, need_usd=need, **KW) == CFG.nc
++
++
++def test_finish_line_no_excede_el_cap_ni_baja_de_1():
++    for need in (-500.0, 0.0, 1.0, 100.0, 1598.8, 3000.0, 10 ** 6):
++        n = nc_for_day("finish_line", CFG.nc, need_usd=need, **KW)
++        assert 1 <= n <= CFG.nc
++
++
++def test_finish_line_formula():
++    per = tp_net_per_contract(CFG.tp_ticks, CFG.spec.tick_value_usd, CFG.spec.commission_roundturn, 3.0)
++    assert per == pytest.approx(29 * 1.25 - 1.22)
++    assert nc_for_day("finish_line", CFG.nc, need_usd=100.0, **KW) == math.ceil(100.0 / per) == 3
++    assert nc_for_day("finish_line", CFG.nc, need_usd=1598.8, **KW) == CFG.nc          # 46 contratos > cap 40 -> cap
++    n = nc_for_day("finish_line", CFG.nc, need_usd=700.0, **KW)
++    assert n * per >= 700.0 and (n - 1) * per < 700.0
++
++
++def test_modo_invalido_y_cap_invalido():
++    with pytest.raises(ValueError):
++        nc_for_day("martingala", 40, need_usd=1.0, **KW)
++    with pytest.raises(ValueError):
++        nc_for_day("fixed", 0, need_usd=1.0, **KW)
++
++
++def test_tp_que_no_cubre_costos_no_achica():
++    assert nc_for_day("finish_line", 40, need_usd=100.0, tp_ticks=2, tick_value_usd=1.25, commission_roundturn=1.22) == 40
+diff --git a/glitch/tests/test_slippage_logging.py b/glitch/tests/test_slippage_logging.py
+new file mode 100644
+index 0000000..4a530ad
+--- /dev/null
++++ b/glitch/tests/test_slippage_logging.py
+@@ -0,0 +1,90 @@
++"""PROPUESTA (NO DESPLEGAR) -- C3: registrar slippage REAL de entrada (ref_price, fill_price, slip_ticks)."""
++import datetime as dt
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++from pi.slippage_pure import slippage_ticks
++from tests.test_pi_executor import FakeClient, _entry_deadline_off, _signal, fake_gist, sent  # noqa: F401
++
++TICK = 0.25
++
++
++@pytest.mark.parametrize("side,ref,fill,exp", [
++    (1, 6000.00, 6000.25, 1.0),      # LONG compra 1 tick por encima de la referencia -> adverso
++    (1, 6000.00, 5999.75, -1.0),     # LONG mejora
++    (-1, 6000.00, 5999.25, 3.0),     # SHORT vende 3 ticks por debajo -> adverso
++    (-1, 6000.00, 6000.50, -2.0),    # SHORT mejora
++    (1, 6000.00, 6000.00, 0.0),
++])
++def test_slippage_ticks_convencion(side, ref, fill, exp):
++    assert slippage_ticks(side, ref, fill, TICK) == exp
++
++
++@pytest.mark.parametrize("args", [(0, 6000.0, 6000.25, TICK), (1, None, 6000.25, TICK), (1, 6000.0, None, TICK),
++                                  (1, 6000.0, 0.0, TICK), (1, 6000.0, 6000.25, 0.0), (1, True, 6000.25, TICK)])
++def test_slippage_ticks_entradas_invalidas_dan_none(args):
++    assert slippage_ticks(*args) is None
++
++
++def _state(**over):
++    st = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 100,
++          "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
++          "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "x"}
++    st.update(over); return st
++
++
++def test_finalize_registra_ref_fill_y_slip(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); c.order_records[100] = {"id": 100, "side": 9, "filledPrice": 6000.75}   # LONG: 3 ticks adversos
++    pe._finalize_cycle(c, 555, _state(), {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["ref_price"] == 6000.0 and e["fill_price"] == 6000.75 and e["slip_ticks"] == 3.0
++    assert e["entry"] == 6000.75 and e["entry_price_estimated"] is False
++
++
++def test_finalize_sin_fill_no_inventa_slippage(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    pe._finalize_cycle(FakeClient(), 555, _state(), {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert not ({"ref_price", "fill_price", "slip_ticks"} & set(e)) and e["entry_price_estimated"] is True
++
++
++def test_finalize_usa_el_fill_guardado_al_abrir_si_la_consulta_posterior_falla(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    st = _state(ref_price=6000.0, fill_price=5999.5, slip_ticks=-2.0)
++    pe._finalize_cycle(FakeClient(), 555, st, {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["fill_price"] == 5999.5 and e["slip_ticks"] == -2.0
++
++
++def test_run_once_incluye_slippage_en_el_mensaje_open_y_en_el_estado(fake_gist, sent, _entry_deadline_off, monkeypatch):
++    class FillingClient(FakeClient):
++        def place_order(self, account_id, contract_id, order_type, side, size, price=None, stop_price=None):
++            oid = super().place_order(account_id, contract_id, order_type, side, size, price=price, stop_price=stop_price)
++            if order_type == pe.OrderType.MARKET:
++                self.order_records[oid]["filledPrice"] = 6000.25      # referencia 6000.0 (FakeClient.bars) -> +1 tick
++            return oid
++    client = FillingClient()
++    monkeypatch.setattr(pe, "authenticate", lambda: client)
++    monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
++    monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 9, "SELL_SIDE_INT": 7})
++    monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(2026, 9, 29, 14, 31, tzinfo=pe.CT))
++    fake_gist[pe.ORDER_FILE] = _signal()
++    pe.run_once()
++    opens = [m for m in sent if "[OPEN]" in m]
++    assert opens and "slippage de entrada: +1.00 ticks" in opens[0]
++    assert fake_gist["geometry_mes_log.json"][-1]["slip_ticks"] == 1.0
