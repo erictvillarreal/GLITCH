@@ -37,8 +37,8 @@ Ordenadas por **valor para el objetivo** (pasar el Combine → XFA/payouts, con 
 | # | Propuesta | Hipótesis / mecanismo | Costo de probarla | Impacto estimado | Qué la haría fallar |
 |---|---|---|---|---|---|
 | E1 | **No cambiar la dirección (`alternate`)**: 0 de 16 reglas pasa G2 (`direccion_e/REPORTE_E.md`) | Las 3 que pasan G2(1) son el sesgo largo del S&P (no superan a «siempre LARGO»); MGC sin señal | ninguna | evita riesgo sin evidencia | — |
-| E2 | **Historia intradía larga (≥ 5 años de 5 min vía `retrieveBars`)** y repetir E2/E5/E3 pre-registrados | Con 2 años no hay potencia (±4.5 pp) | credenciales de Eric/Pi; exportar CSV | única forma de evaluar ventajas de 1–2 pp | Que la historia no exista |
-| E3 | **Línea base de G2 en índices = «siempre LARGO» + traducir exactitud → μ/σ → WR (tabla A) antes de G3** | 53.5 % de días alcistas ≈ μ/σ 0.024 ≈ WR 51 % ≈ +$170/año | enmienda al Protocolo (Claude/Eric) | evita falsos candidatos | — |
+| E2 | ~~Historia intradía larga de 5 min~~ **RETIRADA (21-oct)**: con ≈ 1,250 días el IC95 es ±2.8 pp y no detecta 1–2 pp; solo con una hipótesis concreta pre-registrada | Con 2 años no hay potencia (±4.5 pp) | — | — | Que la historia no exista |
+| E3 | **Línea base de G2 en índices = «siempre LARGO» + traducir exactitud → μ/σ → WR (tabla A) antes de G3** | 53.5 % de días alcistas ≈ μ/σ 0.024 ≈ WR 51 % ≈ +$180/año | enmienda al Protocolo (Claude/Eric) | evita falsos candidatos | — |
 | E4 | **Kill-switch con ventana 200 y piso 44 %** (no 60/45 %) si alguna vez se despliega una regla direccional (`killswitch_NO_DESPLEGAR.py`) | 60/45 % dispara en 68 % de los años aun con WR real 52 % | revisión humana (regla 4) | protege sin descartar por ruido | — |
 
 ## Qué NO propongo (y por qué)

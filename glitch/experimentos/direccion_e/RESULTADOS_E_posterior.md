@@ -1,5 +1,7 @@
 # RESULTADOS_E_posterior — EXPLORACIÓN POSTERIOR (post-hoc; no es hallazgo; no cuenta para G2)
 
+> **Nota 21-oct:** las cifras de la sección 2 usan bancos de 60,000 (ruido ≈ ±$100 en el nivel). Las cifras convergidas (bancos de 200,000: base $1,331, solo Combine +$182) y el desglose por etapa están en `resultados_E_desglose.md`, que las reemplaza.
+
 ## 1. ¿Es estable el sesgo LARGO de los índices? P(apertura→cierre > 0) por década
 
 | serie | 1990s | 2000s | 2010s | 2020s | todo |
