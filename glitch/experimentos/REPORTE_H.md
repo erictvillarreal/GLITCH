@@ -1,5 +1,7 @@
 # REPORTE H — Mapa de probabilidades, descomposición del equilibrio y palancas exhaustivas — sábado 24-oct-2026
 
+> **ACTUALIZACIÓN 24-oct (tarde): la cascada de §1(b), el top-5 de §1(c) y las confianzas de §3 sobre costos operativos y finish-line quedaron reemplazadas por `REPORTE_H1b.md`** (slippage empírico de 7 obs., costos A/B/C, sin el paso «costos → $0»). Las líneas afectadas abajo llevan «[REEMPLAZADO]».
+
 Rama `experimentos-research` (local; el `git push` sigue denegado: entregables en `auditoria_experimentos/`). **No se tocó `main`, el Pi, Railway ni credenciales; ningún parche está aplicado.** Pre-registros firmados **antes** de los resultados: `direccion_e/PREREGISTRO_G2.md` (5ca5252) y `PREREGISTRO_H3.md` (6e2cd85). Todo se reproduce con un comando de `experimentos/direccion_e/` (semillas fijas). **MEDIDO** = datos reales; **MODELADO** = sale del motor de las Partes A/D con supuestos declarados; **SUPUESTO** = número puesto a mano; **DESCONOCIDO** = no hay forma de saberlo hoy.
 
 ## 1. Una página
@@ -18,32 +20,35 @@ Rama `experimentos-research` (local; el `git push` sigue denegado: entregables e
 | XFA (3×364), por WR_dec 45 / **47.4** / 48.5 / **50** / 52 / 55 % | P(≥1 pago) 18 / **25.7** / 29.9 / **33.0** / 38.6 / 49.8 %; cobrado por XFA $244 / **$406** / $508 / **$647** / $911 / $1,905; P($0 en la vida) = 1 − P(≥1 pago); mediana al 1.er pago 7–8 días de trading | 40k vidas; 60 remuestras | MODELADO (WR = hipótesis) | el WR de cada escenario es una hipótesis, no un dato |
 | Dependencia de régimen | con / sin la ventana de oro: $638 / $647 por XFA; solo la ventana: $632, P(≥1 pago) 27 % | 488 / 443 / 45 días | MEDIDO | casi nula tras limpiar contratos |
 | Costos | comisión round-turn MES/MNQ/M2K/MYM $1.22, MGC $1.92; reset/mensualidad $49 por intento, activación $149, wire $30 | Help Center (24-oct / 20-oct) | MEDIDO (fuente primaria) | — |
-| Slippage de entrada medido | +1 y +3 ticks adversos | **N = 2** | MEDIDO **sin información** | σ de ruido por demora ≈ ±1.4 a ±2.4 ticks a 1–3 s (MODELADO): ambos son compatibles con ruido puro |
+| Slippage de entrada medido | [ACTUALIZADO] 7 obs.: 0, +1, 0, +3, −1, +1, +3 ticks (media +1.0, IC95 [−0.41, +2.41]); antes: +1 y +3 | **N = 7** (antes 2) | **NO VERIFICADO** (dado por Eric en el chat; sin CSV) · sin potencia | σ de ruido por demora ≈ ±1.4 a ±2.4 ticks a 1–3 s (MODELADO): ambos son compatibles con ruido puro |
 | Experiencia viva | MES real: 3 TP de 7 decididos = 43 % [10, 82] vs modelo 55 % (P(≤3 de 7) = 39 %); MGC Practice: 1 decidido | 8 + 3 | MEDIDO **sin información** | hacen falta **620** decididos para 55 % vs 50 %, **2,306** para 47.4 % vs 50 % (≈ 2.5 y ≈ 9 años en MES) |
 
-**(b) Cascada del equilibrio** (WR_dec en que el neto anual por cuenta = 0; `direccion_e/resultados_H1.md`, gráfico `direccion_e/cascada_H1.svg`):
+**(b) Cascada del equilibrio [REEMPLAZADO por `REPORTE_H1b.md` §2]** (WR_dec en que el neto anual por cuenta = 0; slippage de entrada empírico de 7 obs., **NO VERIFICADO**; `direccion_e/resultados_H1b.md`, gráfico `direccion_e/cascada_H1b.svg`):
 ```
-hoy (P0, 3×364, slip {1,3}, ops $714)   48.55 %  ████████████████████████████████████████
-+ finish-line                            47.72 %  −0.83 pp  (+$972/año a WR 50 %)
-+ 728×3                                  47.00 %  −0.72 pp  (+$1,311 ya sin finish-line; acumulado $3,833/año)
-+ costos operativos $714 → $0            46.44 %  −0.56 pp  (+$714; es una decisión de qué servicios se pausan)
-+ slip de entrada ≤ 1 tick (hipotético)  46.20 %  −0.24 pp
-             El equilibrio baja de 47.4 % (el WR medido) con finish-line + 728×3 (47.00 %) y de 46.5 % (margen de error) con el tercer paso (46.44 %)
+                                          costos A ($240)   costos B ($827)
+hoy (P0, 3×364, slip empírico-7)          47.47 %           48.03 %
++ finish-line                             47.11 %  −0.36 pp 47.65 %   (+$480/año a WR 50 %)
++ 728×3                                   46.47 %  −0.63 pp 46.92 %
++ slip adverso acotado ≤ 1 (hipotético)   46.35 %  −0.12 pp 46.78 %
+Sensibilidad, mezcla {1,3}, costos A:     48.05 → 47.26 → 46.63 %
+Escenario C (facturas): +0.10 pp por cada $100/año sobre A.
 ```
-Idea en tres líneas: el equilibrio no es la puntería sino la cuota del volado. **Cada costo que baja baja el listón.** El 47.4 % medido no distingue de 50 % (0.8 EE) y el listón de la cadena es 48.55 %: cerrar ese hueco de ≈ 1 pp vale **≈ $945–1,277 por punto** (pendiente local), o sea **$1.0–1.3k/año/cuenta**, y se consigue con estructura, no con puntería.
+Se **eliminó** el paso «costos operativos → $0» (no es palanca: es escenario). El WR medido (47.4 %) queda **en** el equilibrio de hoy con costos A (47.47 %), no por debajo; baja del WR medido con la finish-line (A) o con el 728×3 (B). El «−0.72 pp» del 728×3 (versión anterior) era el paso de la cascada con mezcla {1,3}; con slippage empírico es −0.63 (cascada) o −0.67 (aislado). **El WR no se remidió con la geometría 728×3** (eje = etiqueta de la deriva en 364/364): ver `REPORTE_H1b.md` §5.
 
-**(c) Las 5 palancas con más $/año/cuenta** (a WR 50 %, ninguna requiere ventaja direccional):
-1. **Más cuentas** (G4): +$1.4k / +$2.4k / +$3.9k por cuenta añadida (hoy / con finish-line / + 728×3) — MODELADO; ρ entre cuentas **supuesta**; riesgo de reglas (RTP «varias cuentas tocando el MLL el mismo día»).
-2. **728×3**: +$1,311 (−0.83 pp) — MODELADO; toca criterios de RTP/«conducta prohibida» sin respuesta.
-3. **Slippage de entrada del Combine a 0 ticks fijos** (en lugar de la mezcla 1/3): +$1,535 (−1.15 pp) — MODELADO con parámetro SUPUESTO; solo es palanca si el slippage es **sistemático y reducible**: **DESCONOCIDO** hasta C3.
-4. **Finish-line**: +$972 (−0.83 pp) — MODELADO (parche C1 listo, `NEEDS HUMAN REVIEW`).
-5. **Costos operativos $714 → $0**: +$714 (−0.76 pp) — decisión; la cifra de $714 es heredada: **SUPUESTO sin verificar**.
-(4→1 micros: +$587. Anclar al fill: +$55 a +$657 según σ y política — SUPUESTO/MODELADO. Volatilidad, noticias, producto, horario: ninguna ≥ $500 en el escenario central.)
+Idea en tres líneas: el equilibrio no es la puntería sino la cuota del volado. **Cada costo que baja baja el listón.** El 47.4 % medido no distingue de 50 % (0.8 EE) y el listón de la cadena es 47.5–48.0 % (A–B): cerrar ese hueco vale **≈ $1.0k por punto** (pendiente local $1,038), y se consigue con estructura, no con puntería.
+
+**(c) Las 5 palancas con más $/año/cuenta [REEMPLAZADO]** (Δ a WR 50 %, slippage empírico-7, costos A; `resultados_H1b.md` §2; ninguna requiere ventaja direccional):
+1. **Más cuentas** (G4b): cada cuenta añadida suma ≈ su neto ($2.6k hoy / $3.2k con finish-line / $4.7k con finish-line + 728×3, **a WR 50 %**; a WR 47.4 % ≈ $0) — MODELADO; ρ entre cuentas **supuesta**; riesgo de reglas (RTP).
+2. **728×3**: +$1,476 (−0.67 pp aislado) — MODELADO; mecanismo: pagos mayores, no WR; toca RTP/«conducta prohibida».
+3. **Stop exacto en lugar de llenado a 0.5**: +$828 (−0.44 pp) — es un supuesto de llenado del modelo; palanca solo si el stop real se puede acercar al exacto (**DESCONOCIDO**).
+4. **Slippage de entrada del Combine a 0 ticks fijos / acotado ≤ 1**: +$744 / +$699 — solo es palanca si es sistemático y reducible: **DESCONOCIDO** (N = 7, NO VERIFICADO).
+5. **4→1 micros**: +$627 (−0.95 pp). La **finish-line** vale +$480 (−0.36 pp): **bajo el umbral de $500** con este slippage (+$972 con la mezcla {1,3}).
+Los **costos operativos ya no son palanca** (escenarios A $240 / B $827 / C pendiente de facturas). Cotas teóricas no accionables: reset $49 → $0 (+$2,351), activación → $0 (+$1,771), comisión MES → $0 (+$535). Anclar al fill: +$55 a +$657 según σ y política — SUPUESTO/MODELADO. Volatilidad, noticias, producto, horario: ninguna ≥ $500 en el escenario central.
 
 ## 2. Por palanca: efecto en puntos de equilibrio y en $/año/cuenta por escenario de WR; esfuerzo; riesgo; qué medir y cuánto tardaría
 
 ### 2.1 Ejecución (`resultados_H2.md`, `resultados_G1.md`, `resultados_H1.md`)
-- **Lo que el slippage es (derivado, no medido):** con σ(5 min) ≈ 24 ticks en la franja de entrada de MES, **una demora de 1–3 s produce ±1.4–2.4 ticks (1σ)** y 10 s ±4.4; el sondeo de 120 s no se paga (la referencia se toma al actuar). Los +1 y +3 observados caben en ruido puro; el costo sistemático esperado (medio spread ≈ 0.5 tick) es menor que la dispersión. **N = 2 ⇒ sin potencia.**
+- **Lo que el slippage es (derivado, no medido):** con σ(5 min) ≈ 24 ticks en la franja de entrada de MES, **una demora de 1–3 s produce ±1.4–2.4 ticks (1σ)** y 10 s ±4.4; el sondeo de 120 s no se paga (la referencia se toma al actuar). Los +1 y +3 observados (ahora 7 obs.: 0, +1, 0, +3, −1, +1, +3; NO VERIFICADAS) caben en ruido puro; el costo sistemático esperado (medio spread ≈ 0.5 tick) es menor que la dispersión. **N = 7 ⇒ sin potencia** (antes N = 2).
 - **Valor de un tick sistemático (P0):** 0 → 4 ticks fijos: neto $2,900 / $2,791 / **$837** / $681 / $455 (equilibrio 47.40 / 47.46 / **49.06** / 49.22 / 49.47 %). El escalón 1→2 ticks vale **−$1,954**. Con finish-line el escalón casi desaparece (−$377 por tick).
 - **Anclar al fill** (envío de TP/SL tras el fill, o brackets nativos): si el slippage fuera ruido de media cero con σ 1.4 / 2.4 / 4.4 ticks vale **+$237 / +$472 / +$657 (P0)** y **+$55 / +$153 / +$304 (con finish-line)** por cuenta y año; si fuera un costo fijo de 2–3 ticks, +$1.5k (G1c). **Corrección a G:** el +$1.5k suponía slippage adverso fijo; con ruido simétrico el valor es 3–10× menor. Efecto en el equilibrio: ≈ −0.1 a −0.5 pp. Esfuerzo alto, riesgo medio-alto (ventana de 1–5 s sin TP, o `errorCode 2`). **Brackets nativos:** la doc de ProjectX los trae (`stopLossBracket`/`takeProfitBracket`, ticks, solo con la cuenta en «Auto OCO Brackets»); en el modo por defecto se rechazan con `errorCode 2` **y la orden rechazada igual se crea**; la doc no dice desde dónde se miden los ticks. **Ensayo en Practice: 1 sesión.**
 - **Tolerancia / límite marketable:** +$224 a +$344 con una distribución supuesta (σ 1–2): bajo el piso.
@@ -90,14 +95,14 @@ Aplicables y ya usados: triple barrera con empate bien tratado (cotas adversa/fa
 - **`economia_historial_cifras_24oct2026.md`: no tengo el archivo** (vive en el Project); pásalo para marcar fila por fila. Mis cifras son reproducibles (47.4 %, fracciones, pass rates, equilibrios, pagos por XFA); el «+7.1 pp del TP 32» y la tabla «17–29 %» provienen del motor `dd_cash`/`dd_wr` (empate ⇒ adverso, conservador); no los recalculé aquí.
 
 ## 3. Declaraciones de confianza (formato fijo; ninguna prueba demuestra que algo no existe)
-- **Ejecución — anclar al fill / tolerancia:** *Dado lo probado, la probabilidad de que exista un efecto ≥ $500/año/cuenta es **MEDIA** porque* con slippage de ruido σ ≥ 2.4 ticks y sin finish-line el modelo da +$472–657, y con un componente sistemático ≥ 2 ticks da +$1.5k; pero con finish-line ya adoptado baja a +$55–304, y el parámetro que decide (σ, parte sistemática) tiene **N = 2** (potencia ≈ 0).
+- **Ejecución — anclar al fill / tolerancia:** *Dado lo probado, la probabilidad de que exista un efecto ≥ $500/año/cuenta es **MEDIA** porque* con slippage de ruido σ ≥ 2.4 ticks y sin finish-line el modelo da +$472–657, y con un componente sistemático ≥ 2 ticks da +$1.5k; pero con finish-line ya adoptado baja a +$55–304, y el parámetro que decide (σ, parte sistemática) tiene **N = 7** (antes 2; potencia ≈ 0).
 - **Ejecución — hora de entrada, polling, partir en bloques:** **BAJA** porque H3-P5/P6 no ven efecto en P(pasar) (IC95 de ±2 pp con 492 días: no descarta ±2 pp), el sondeo no entra en el slippage y 40 micros no mueven el libro de MES; la potencia solo excluye efectos grandes.
 - **Volatilidad — filtro / ATR / tamaño:** **BAJA** porque tres usos con prueba de dinero en cuatro escenarios de WR dan −$558 a +$328 en el escenario central (el único > $500, el tamaño a WR 52 %, supone una ventaja que no tenemos); el pronóstico es real (R² 33–55 %) pero no se traduce en dólares; con 323 días de base el IC de cada diferencia es ±$300 aprox. (sin potencia para < $300).
 - **Noticias (FOMC):** **BAJA** porque el techo aritmético es ≈ 3 % de los días (< $110/año) y en MES el 99 % de los días ya está resuelto a las 13:00; con n = 16 no hay potencia para detectar un sesgo del FOMC.
 - **Producto:** **BAJA** como fuente de dólares por cuenta (sin geometría validada, sin fills, costos < 1.6 % del rango); **MEDIA** como reducción de riesgo conjunto (ρ MES–MGC 0.17 medida).
 - **Geometría — horario de flatten:** **BAJA** (efecto ≤ $160/año, ruido de 215 decididos). **Razón TP:SL:** **BAJA a MEDIA** (+$340–390 a deriva 0 pero con Δz < 0.015 y sin IC de días).
-- **Estructurales ya medidas — finish-line, 728×3, 4→1:** **ALTA** de que existan en el modelo con ≥ $500 en todos los escenarios de WR (finish-line +$752 a +$1,201; 728×3 +$451 a +$2,010); la incertidumbre es de **reglas** (RTP) y de que el motor reproduzca la realidad (modelado, no medido en vivo).
-- **Costos operativos $714 → $0:** **ALTA** de que el ahorro sea ≈ $714 si la cifra es correcta; la cifra misma es SUPUESTO heredado.
+- **Estructurales — 728×3, 4→1 [ACTUALIZADO]:** **ALTA** de que existan en el modelo con ≥ $500 (728×3 +$1,476; 4→1 +$627 con slippage empírico); la incertidumbre es de **reglas** (RTP), del WR operativo con 728×3 (no remedido en vivo) y de que el motor reproduzca la realidad. **Finish-line: MEDIA** (antes ALTA): +$480 con slippage empírico (< $500), +$752 a +$1,201 con la mezcla {1,3} y otros WR; depende de una distribución de slippage con N = 7.
+- **Costos operativos [REEMPLAZADO]:** ya no se evalúan como palanca; son escenarios A $240 / B $827 / C pendiente. El $714 anterior era heredado (Parte D), no de una factura.
 - **Métodos de fondo:** n/a (no son palancas de dinero).
 
 ## 4. Qué exportar o enviar para cerrar los DESCONOCIDOS (ordenado por valor de información por esfuerzo)
@@ -105,11 +110,12 @@ Aplicables y ya usados: triple barrera con empate bien tratado (cotas adversa/fa
 2. **Aprobar y desplegar C3** (`c3_slippage_timing.patch`, 537 pruebas con los otros dos) — *revisión humana; da tiempos y `exec_exit` de cada operación desde ese día.*
 3. **Un ticket a Topstep** con 6 preguntas: (a) ¿el Combine 50K tiene DLL y restricciones de noticias Tier 1?; (b) umbrales de RTP y «compras excesivas»; (c) ¿se puede copiar la misma estrategia en cuentas propias en paralelo? ¿máximo de Combines simultáneos?; (d) ¿se puede elegir el modo de brackets «Auto OCO» en Combine/XFA?; (e) ¿qué incluye el tope de 50 micros y existe tope de MNQ/MYM?; (f) calendario de cierres de CME de 26/27-nov y 24-dic.
 4. **Ensayo en Practice de brackets nativos** (1 sesión): semántica de los ticks (¿desde el fill?), modo OCO, comportamiento con `errorCode 2`.
-5. **`economia_historial_cifras_24oct2026.md`** y la factura de Railway/datos (confirmar los $714/año).
+5. **`economia_historial_cifras_24oct2026.md`** y las **facturas** de la API (por cuenta), Railway y la mensualidad del Combine (cerrar el escenario C y ver si el reset de $49 ya incluye la mensualidad: B puede contar doble).
 6. **Logs del Pi del 19–23 oct** (`pi_executor.log`): latencia real señal → orden → fill.
 7. **Calendarios primarios restantes:** PPI, ISM, ventas minoristas (BLS/ISM/Census) y CME — minutos.
 
 ## 5. Correcciones a partes anteriores y límites
+- **H1 (cascada) → H1b:** slippage {1,3} sustituido por la distribución de 7 obs.; paso «costos → $0» eliminado; equilibrio de hoy 48.55 % → 47.47 % (A). **G4:** costos operativos ahora por cuenta (G4b). **Explicación del −0.72 pp de 728×3:** el WR no se remidió con esa geometría (`REPORTE_H1b.md` §5).
 - **G1c (+$1.5k por anclar al fill)** valía para slippage adverso **fijo** de 2–3 ticks; con ruido de media cero vale $55–657 (H2 §5).
 - **«Pass rate vs 81.4 % teórico»** (scheduler): artefacto del DLL; no usar.
 - Límites: IC95 del mapa = remuestras de la historia real (no cubren cambios de régimen); la dependencia entre cuentas y el WR de cada escenario son supuestos; sin tick data ni libro; `git push` denegado.
