@@ -1,0 +1,392 @@
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 916ecff..65b19c2 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -141,6 +141,7 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
+ from execution.gist_store import load_state as _gist_load_state
+ from execution.gist_store import save_log as _gist_save_log
+ from execution.gist_store import save_state as _gist_save_state
++from pi.slippage_pure import build_exec_record, extract_fill_time, slippage_ticks
+ from scheduler.telegram_bot import send
+ from strategies.geometry_pure import CANDIDATES
+ 
+@@ -384,10 +385,8 @@ def _warn_if_contract_spec_differs(contract: dict) -> None:
+         log.warning(f"_warn_if_contract_spec_differs: {e}")
+ 
+ 
+-def _reference_price(client: ProjectXClient, contract_id) -> float:
+-    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
+-    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
+-    y proteccion siempre juntas, sin ventana desnuda)."""
++def _reference_quote(client: ProjectXClient, contract_id) -> tuple:
++    """(precio, marca de tiempo de la barra o None). Igual que _reference_price pero conserva el `t` de la barra para medir su antiguedad (G1a)."""
+     bars = client.get_recent_bars(contract_id, minutes_back=15, live=False)
+     if not bars:
+         raise RuntimeError(f"Sin barras de los ultimos 15 min en ProjectX para contract_id={contract_id!r} "
+@@ -396,10 +395,17 @@ def _reference_price(client: ProjectXClient, contract_id) -> float:
+     last = bars[-1]
+     for k in ("close", "c", "last", "lastPrice"):
+         if k in last and last[k] is not None:
+-            return float(last[k])
++            return float(last[k]), (str(last["t"]) if last.get("t") is not None else None)
+     raise RuntimeError(f"Barra de ProjectX sin campo de precio reconocible: {last!r}")
+ 
+ 
++def _reference_price(client: ProjectXClient, contract_id) -> float:
++    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
++    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
++    y proteccion siempre juntas, sin ventana desnuda)."""
++    return _reference_quote(client, contract_id)[0]
++
++
+ # ── Resolucion de OrderSide -- gateada, nunca adivinada ──────────────────
+ def _load_verified_side_map() -> Optional[dict]:
+     """None si no existe o esta incompleto -- ver docstring del modulo,
+@@ -881,8 +887,11 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+ 
+     entry_price = state["entry_price"]
+     entry_estimated = True
++    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
+     rec = _lookup_order(client, account_id, state["entry_order_id"])
+     fill = _extract_fill_price(rec) if rec else None
++    if fill is None:
++        fill = state.get("fill_price")
+     if fill is not None:
+         entry_price, entry_estimated = fill, False
+ 
+@@ -907,6 +916,12 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
+         if outcome.get(flag):
+             entry[flag] = True
++    if not entry_estimated:
++        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
++        if slip is not None:
++            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
++    if state.get("exec"):
++        entry["exec"] = {**state["exec"], **({"fill_price": entry_price, "slip_ticks": slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)} if not entry_estimated else {})}
+     if signal.get("nc_signal") is not None:
+         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
+     if outcome.get("orphan_orders"):
+@@ -1116,14 +1131,20 @@ def _validate_signal(signal: dict) -> Optional[str]:
+     return None
+ 
+ 
++_LAST_EMPTY_POLL = None      # epoch del ultimo poll SIN señal (G1a)
++
++
+ def run_once():
+     try:
+         reconcile_if_needed()
+ 
+         signal = load_order_signal()
+         if not signal:
++            global _LAST_EMPTY_POLL
++            _LAST_EMPTY_POLL = time.time()                     # G1a: acota el retraso del polling (la señal se escribio despues de este instante)
+             log.info("Sin señal pendiente -- nada que hacer.")
+             return
++        _t_seen = time.time()                                  # G1a: instante en que el Pi ve la señal (polling de 120 s)
+ 
+         if not _signal_is_current(signal):
+             return
+@@ -1186,7 +1207,9 @@ def run_once():
+             )
+             return
+ 
+-        reference_price = _reference_price(client, contract_id)
++        t_signal_seen = _t_seen
++        reference_price, ref_bar_t = _reference_quote(client, contract_id)
++        t_ref_local = time.time()
+         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
+         sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
+ 
+@@ -1196,6 +1219,7 @@ def run_once():
+         if not _is_test_signal(signal):
+             _claim_signal(signal)
+ 
++        t_send = time.time()
+         try:
+             bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
+                                            tp_price, sl_price, verified_map)
+@@ -1214,6 +1238,7 @@ def run_once():
+             log.error(msg.replace("\n", " | "))
+             return
+ 
++        t_ack = time.time()
+         state = {
+             "phase": "bracket_open", "signal": signal, "entry_price": reference_price,
+             "entry_order_id": bracket["entry_order_id"], "tp_price": tp_price, "sl_price": sl_price,
+@@ -1235,9 +1260,23 @@ def run_once():
+                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
+                  f"invertido.\n{utc_now_str()}")
+ 
++        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
++        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
++        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
++        exec_rec = build_exec_record(side=signal["side"], nc=signal["nc"], tick_size=CFG.spec.tick_size, ref_price=reference_price,
++                                     t_signal_seen=t_signal_seen, t_ref_bar=ref_bar_t, t_ref_local=t_ref_local, t_send=t_send, t_ack=t_ack,
++                                     fill_price=open_fill, fill_time=extract_fill_time(entry_rec), t_prev_empty_poll=_LAST_EMPTY_POLL)
++        state["exec"] = exec_rec
++        if open_slip is not None:
++            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
++        save_pi_state(state)
+         msg = (f"{PREFIX}\n[OPEN]\n"
+                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
+-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
++               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
++                  else "Fill de entrada no leido aun (se registra al cierre)\n")
++               + f"Latencia: referencia→envío {exec_rec['lat_ref_to_send_ms']} ms · envío→ack {exec_rec['lat_send_to_ack_ms']} ms · "
++               f"antigüedad de la barra {exec_rec['ref_bar_age_s']} s · señal→envío {exec_rec['lat_signal_to_send_ms'] / 1000:.0f} s\n"
++               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
+                + utc_now_str())
+         send(msg)
+diff --git a/glitch/pi/slippage_pure.py b/glitch/pi/slippage_pure.py
+new file mode 100644
+index 0000000..36513d6
+--- /dev/null
++++ b/glitch/pi/slippage_pure.py
+@@ -0,0 +1,66 @@
++"""PROPUESTA -- NO DESPLEGAR (NEEDS HUMAN REVIEW, CLAUDE.md regla 4: toca el registro de ejecucion).
++
++C3: slippage REAL de entrada en ticks. Convencion: positivo = ADVERSO (peor que la referencia pre-trade con la que se anclan TP/SL).
++  LONG compra en `fill` > `ref` -> adverso; SHORT vende en `fill` < `ref` -> adverso.   slip_ticks = side * (fill - ref) / tick_size
++Calculo manual para cualquier dia (lun 19 / mar 20-oct): side * (precio de fill de TopstepX - referencia del mensaje [OPEN] del Pi) / 0.25.
++"""
++from __future__ import annotations
++
++from typing import Optional
++
++
++def slippage_ticks(side: int, ref_price: Optional[float], fill_price: Optional[float], tick_size: float) -> Optional[float]:
++    if side not in (1, -1) or ref_price is None or fill_price is None or tick_size <= 0:
++        return None
++    for v in (ref_price, fill_price):
++        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
++            return None
++    return round(side * (fill_price - ref_price) / tick_size, 2)
++
++
++# ── G1a (24-oct-2026): tiempos de ejecucion -----------------------------------------------------------------------------------
++_FILL_TIME_KEYS = ("fillTimestamp", "filledAt", "executionTimestamp", "updateTimestamp", "creationTimestamp")   # NO VERIFICADO cual trae Order/search
++
++
++def parse_iso(ts) -> Optional[float]:
++    """ISO-8601 (con 'Z' o desfase) -> epoch en segundos; None si no se puede."""
++    import datetime as _dt
++    if not isinstance(ts, str) or not ts:
++        return None
++    try:
++        return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
++    except ValueError:
++        return None
++
++
++def extract_fill_time(order_record: Optional[dict]) -> Optional[str]:
++    """Primera marca de tiempo conocida del registro de la orden (la clave exacta del fill no esta verificada: se guarda cual se uso)."""
++    if not order_record:
++        return None
++    for k in _FILL_TIME_KEYS:
++        v = order_record.get(k)
++        if isinstance(v, str) and parse_iso(v) is not None:
++            return f"{k}={v}"
++    return None
++
++
++def build_exec_record(*, side: int, nc: int, tick_size: float, ref_price: float, t_signal_seen: float, t_ref_bar: Optional[str], t_ref_local: float,
++                      t_send: float, t_ack: float, fill_price: Optional[float], fill_time: Optional[str], bid: Optional[float] = None,
++                      ask: Optional[float] = None, t_prev_empty_poll: Optional[float] = None) -> dict:
++    """Registro de ejecucion por orden de entrada. Tiempos locales en epoch (s); latencias en ms; `bid`/`ask` son None mientras no haya feed en vivo (SignalR)."""
++    t_fill = parse_iso(fill_time.split("=", 1)[1]) if fill_time and "=" in fill_time else None
++    t_bar = parse_iso(t_ref_bar)
++    rec = {
++        "side": side, "nc": nc, "ref_price": ref_price, "t_ref_bar": t_ref_bar, "t_ref_local": round(t_ref_local, 3),
++        "t_signal_seen": round(t_signal_seen, 3), "t_send": round(t_send, 3), "t_ack": round(t_ack, 3),
++        "fill_price": fill_price, "t_fill": fill_time, "bid": bid, "ask": ask,
++        "slip_ticks": slippage_ticks(side, ref_price, fill_price, tick_size),
++        "lat_signal_to_send_ms": round((t_send - t_signal_seen) * 1000),
++        "lat_ref_to_send_ms": round((t_send - t_ref_local) * 1000),
++        "lat_send_to_ack_ms": round((t_ack - t_send) * 1000),
++        "lat_send_to_fill_ms": round((t_fill - t_send) * 1000) if t_fill is not None else None,
++        "ref_bar_age_s": round(t_ref_local - t_bar, 1) if t_bar is not None else None,
++        "poll_window_s": round(t_signal_seen - t_prev_empty_poll, 1) if t_prev_empty_poll is not None else None,   # cota superior del retraso por polling
++    }
++    return rec
++
+diff --git a/glitch/tests/test_slippage_logging.py b/glitch/tests/test_slippage_logging.py
+new file mode 100644
+index 0000000..4a530ad
+--- /dev/null
++++ b/glitch/tests/test_slippage_logging.py
+@@ -0,0 +1,90 @@
++"""PROPUESTA (NO DESPLEGAR) -- C3: registrar slippage REAL de entrada (ref_price, fill_price, slip_ticks)."""
++import datetime as dt
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++from pi.slippage_pure import slippage_ticks
++from tests.test_pi_executor import FakeClient, _entry_deadline_off, _signal, fake_gist, sent  # noqa: F401
++
++TICK = 0.25
++
++
++@pytest.mark.parametrize("side,ref,fill,exp", [
++    (1, 6000.00, 6000.25, 1.0),      # LONG compra 1 tick por encima de la referencia -> adverso
++    (1, 6000.00, 5999.75, -1.0),     # LONG mejora
++    (-1, 6000.00, 5999.25, 3.0),     # SHORT vende 3 ticks por debajo -> adverso
++    (-1, 6000.00, 6000.50, -2.0),    # SHORT mejora
++    (1, 6000.00, 6000.00, 0.0),
++])
++def test_slippage_ticks_convencion(side, ref, fill, exp):
++    assert slippage_ticks(side, ref, fill, TICK) == exp
++
++
++@pytest.mark.parametrize("args", [(0, 6000.0, 6000.25, TICK), (1, None, 6000.25, TICK), (1, 6000.0, None, TICK),
++                                  (1, 6000.0, 0.0, TICK), (1, 6000.0, 6000.25, 0.0), (1, True, 6000.25, TICK)])
++def test_slippage_ticks_entradas_invalidas_dan_none(args):
++    assert slippage_ticks(*args) is None
++
++
++def _state(**over):
++    st = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 100,
++          "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
++          "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "x"}
++    st.update(over); return st
++
++
++def test_finalize_registra_ref_fill_y_slip(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    c = FakeClient(); c.order_records[100] = {"id": 100, "side": 9, "filledPrice": 6000.75}   # LONG: 3 ticks adversos
++    pe._finalize_cycle(c, 555, _state(), {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["ref_price"] == 6000.0 and e["fill_price"] == 6000.75 and e["slip_ticks"] == 3.0
++    assert e["entry"] == 6000.75 and e["entry_price_estimated"] is False
++
++
++def test_finalize_sin_fill_no_inventa_slippage(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    pe._finalize_cycle(FakeClient(), 555, _state(), {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert not ({"ref_price", "fill_price", "slip_ticks"} & set(e)) and e["entry_price_estimated"] is True
++
++
++def test_finalize_usa_el_fill_guardado_al_abrir_si_la_consulta_posterior_falla(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    st = _state(ref_price=6000.0, fill_price=5999.5, slip_ticks=-2.0)
++    pe._finalize_cycle(FakeClient(), 555, st, {"result": "TP", "exit_price": 6010.0, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["fill_price"] == 5999.5 and e["slip_ticks"] == -2.0
++
++
++def test_run_once_incluye_slippage_en_el_mensaje_open_y_en_el_estado(fake_gist, sent, _entry_deadline_off, monkeypatch):
++    class FillingClient(FakeClient):
++        def place_order(self, account_id, contract_id, order_type, side, size, price=None, stop_price=None):
++            oid = super().place_order(account_id, contract_id, order_type, side, size, price=price, stop_price=stop_price)
++            if order_type == pe.OrderType.MARKET:
++                self.order_records[oid]["filledPrice"] = 6000.25      # referencia 6000.0 (FakeClient.bars) -> +1 tick
++            return oid
++    client = FillingClient()
++    monkeypatch.setattr(pe, "authenticate", lambda: client)
++    monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
++    monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 9, "SELL_SIDE_INT": 7})
++    monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(2026, 9, 29, 14, 31, tzinfo=pe.CT))
++    fake_gist[pe.ORDER_FILE] = _signal()
++    pe.run_once()
++    opens = [m for m in sent if "[OPEN]" in m]
++    assert opens and "slippage de entrada: +1.00 ticks" in opens[0]
++    assert fake_gist["geometry_mes_log.json"][-1]["slip_ticks"] == 1.0
+diff --git a/glitch/tests/test_slippage_timing.py b/glitch/tests/test_slippage_timing.py
+new file mode 100644
+index 0000000..6508759
+--- /dev/null
++++ b/glitch/tests/test_slippage_timing.py
+@@ -0,0 +1,76 @@
++"""G1a (24-oct-2026) -- PROPUESTA (NO DESPLEGAR): registro de tiempos de ejecucion de la entrada (t_ref, t_envio, t_fill, latencias)."""
++import datetime as dt
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++from pi.slippage_pure import build_exec_record, extract_fill_time, parse_iso
++from tests.test_pi_executor import FakeClient, _entry_deadline_off, _signal, fake_gist, sent  # noqa: F401
++
++
++def test_parse_iso_y_extract_fill_time():
++    assert parse_iso("2026-10-26T14:35:02Z") == dt.datetime(2026, 10, 26, 14, 35, 2, tzinfo=dt.timezone.utc).timestamp()
++    assert parse_iso("basura") is None and parse_iso(None) is None
++    assert extract_fill_time({"updateTimestamp": "2026-10-26T14:35:03Z"}) == "updateTimestamp=2026-10-26T14:35:03Z"
++    assert extract_fill_time({"filledPrice": 1}) is None and extract_fill_time(None) is None
++
++
++def test_build_exec_record_latencias():
++    t0 = dt.datetime(2026, 10, 26, 14, 35, 2, tzinfo=dt.timezone.utc).timestamp()
++    r = build_exec_record(side=1, nc=40, tick_size=0.25, ref_price=7780.50, t_signal_seen=t0, t_ref_bar="2026-10-26T14:35:00Z", t_ref_local=t0 + 0.4,
++                          t_send=t0 + 0.9, t_ack=t0 + 1.3, fill_price=7781.25, fill_time="updateTimestamp=2026-10-26T14:35:04Z", t_prev_empty_poll=t0 - 61)
++    assert r["slip_ticks"] == 3.0 and r["lat_ref_to_send_ms"] == 500 and r["lat_send_to_ack_ms"] == 400 and r["lat_signal_to_send_ms"] == 900
++    assert r["lat_send_to_fill_ms"] == 1100 and r["ref_bar_age_s"] == 2.4 and r["poll_window_s"] == 61.0 and r["bid"] is None and r["ask"] is None
++
++
++def test_build_exec_record_sin_fill_no_inventa():
++    r = build_exec_record(side=-1, nc=40, tick_size=0.25, ref_price=7743.25, t_signal_seen=1.0, t_ref_bar=None, t_ref_local=1.1, t_send=1.2, t_ack=1.5,
++                          fill_price=None, fill_time=None)
++    assert r["slip_ticks"] is None and r["lat_send_to_fill_ms"] is None and r["ref_bar_age_s"] is None and r["poll_window_s"] is None
++
++
++def test_reference_quote_conserva_la_marca_de_la_barra_y_reference_price_no_cambia():
++    class C(FakeClient):
++        def get_recent_bars(self, *a, **k): return [{"t": "2026-10-26T14:34:00Z", "c": 6000.0}, {"t": "2026-10-26T14:35:00Z", "c": 6000.25}]
++    assert pe._reference_quote(C(), "X") == (6000.25, "2026-10-26T14:35:00Z") and pe._reference_price(C(), "X") == 6000.25
++
++
++def test_run_once_guarda_exec_en_estado_historial_y_mensaje(fake_gist, sent, _entry_deadline_off, monkeypatch):
++    class C(FakeClient):
++        def __init__(self): super().__init__(); self.bars = [{"t": "2026-09-29T15:00:00Z", "c": 6000.0}]
++        def place_order(self, account_id, contract_id, order_type, side, size, price=None, stop_price=None):
++            oid = super().place_order(account_id, contract_id, order_type, side, size, price=price, stop_price=stop_price)
++            if order_type == pe.OrderType.MARKET:
++                self.order_records[oid].update({"filledPrice": 6000.75, "updateTimestamp": "2026-09-29T15:00:02Z"})
++            return oid
++    client = C(); placed_before = None
++    monkeypatch.setattr(pe, "authenticate", lambda: client); monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
++    monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 9, "SELL_SIDE_INT": 7})
++    monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(2026, 9, 29, 14, 31, tzinfo=pe.CT))
++    pe._LAST_EMPTY_POLL = None
++    fake_gist[pe.ORDER_FILE] = _signal()
++    pe.run_once()
++    assert len(client.placed_orders) == 3                                           # el comportamiento de ordenes no cambia: entrada + TP + SL
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["slip_ticks"] == 3.0 and e["exec"]["ref_price"] == 6000.0 and e["exec"]["fill_price"] == 6000.75
++    assert e["exec"]["t_fill"] == "updateTimestamp=2026-09-29T15:00:02Z" and e["exec"]["lat_send_to_ack_ms"] >= 0 and e["exec"]["t_ref_bar"] == "2026-09-29T15:00:00Z"
++    op = [m for m in sent if "[OPEN]" in m][0]
++    assert "Latencia: referencia→envío" in op and "slippage de entrada: +3.00 ticks" in op
++
++
++def test_poll_sin_señal_marca_el_ultimo_poll_vacio(fake_gist, monkeypatch):
++    pe._LAST_EMPTY_POLL = None
++    pe.run_once()
++    assert pe._LAST_EMPTY_POLL is not None

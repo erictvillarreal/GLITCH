@@ -1,0 +1,31 @@
+# G5 — Scheduler en el Pi (SOLO DISEÑO; nada desplegado, ningún parche de código) — 24-oct-2026
+
+**Qué se pide:** que el Pi tome él mismo la decisión que hoy toma Railway en modo real (lado por `trading_day_index`, `nc/SL/TP/intento`, escribir la orden). **Qué NO cambia (dicho explícitamente):** el Pi sigue operando en la cuenta fijada, la orden de mercado ya sale del Pi, así que **el slippage no baja por mover el scheduler**. El beneficio es **fiabilidad y puntualidad**, no costo de ejecución ni dólares: no es una palanca contra el piso de $500.
+
+## 1. Diseño
+| pieza | diseño | hechos / verificación pendiente |
+|---|---|---|
+| Disparo | `glitch-pi-scheduler.timer` con `OnCalendar=Mon..Fri 09:20 America/Chicago`, `Persistent=false`, `AccuracySec=1s`; `glitch-pi-scheduler.service` (`Type=oneshot`, mismo `EnvironmentFile` que el ejecutor, `After=time-sync.target network-online.target`, `TimeoutStartSec=1200`). | Zona horaria en `OnCalendar`: soportada en systemd recientes (**la versión mínima y la del Pi NO se verificaron**: `systemd-analyze calendar "Mon..Fri 09:20 America/Chicago"` lo comprueba sin riesgo). `Persistent=false` a propósito: tras un corte no debe dispararse a las 9:50 con retraso; además el propio script rechaza fuera de 9:35–9:57. |
+| Reloj | El script exige reloj sincronizado (`timedatectl show -p NTPSynchronized` = yes) o aborta con ERROR a Telegram. | El Pi no tiene RTC (nota del servicio actual). |
+| Lectura | Historial con **lectura estricta** (`load_log_strict`); si falla: un `STATUS: ERROR` y salir sin escribir. **Nunca** asume intento 1. | `pi/manual_signal.py` (Parte F) ya implementa exactamente esto y las reglas de rechazo. |
+| Lógica | Mismas funciones puras de `intento`, `decide_side(trading_day_index(hoy))`, `is_trading_day` y calendario (más cierres anticipados: hoy **ni el scheduler ni el Pi** los conocen). Mensajes `INICIO DE DIA` y `[SEÑAL ENVIADA AL PI]` con el texto actual (Telegram igual). | Reutilizar `manual_signal.py` (paridad con el scheduler probada en `test_paridad_con_el_scheduler`). El texto del INICIO (`_paper_progress`) hay que copiarlo y probarlo. |
+| Espera | Dormir hasta 9:35:00 CT con `time.monotonic()` en pasos de 1 s; máximo 20 min; luego escribir. | Elimina la dependencia del cron en UTC (el 1-nov mueve una hora el de Railway). |
+| Escritura | Contrato idéntico (`date, side, direction, ticker, product_code, nc, sl_ticks, tp_ticks, product, intento, dry_run`), escritura estricta + **lectura posterior** y solo entonces el aviso. | Igual que `v1_gist_strict.patch`. |
+| Massive | **No hace falta**: en modo real solo se usa para el nombre del contrato en logs y alertas de vencimiento; el Pi resuelve su propio contrato (`resolve_contract_id`). | Saca una llave (`MASSIVE_API_KEY`) de la nube. |
+| Fase posterior (opcional) | Entregar la señal al ejecutor **en el mismo host** (archivo local o llamada en proceso) y dejar el Gist solo como bitácora: elimina los 0–120 s del polling y el modo de fallo «PATCH tragado». | Cambia el ejecutor (lógica de capital, regla 4): requiere su propia revisión. Mientras no exista, el polling de 5–10 s en 9:34–9:40 CT (G1d-c) da el 90 % de la puntualidad con cambio mínimo. |
+
+## 2. Convivencia con el scheduler de Railway (transición) y reversa
+1. **Fase 0, sombra (≥ 10 sesiones):** el Pi-scheduler corre con `--dry-run` (calcula y registra lo que enviaría, **sin escribir ni anunciar**); se compara cada día con la señal de Railway: lado, `nc`, `intento` y texto deben coincidir 10/10. Cualquier diferencia detiene la migración.
+2. **Fase 1, un solo dueño por día:** una variable `GLITCH_SCHEDULER_OWNER=pi|railway` leída por ambos (cada uno sale si no es el dueño) **o** simplemente pausar el cron de `GEOMETRY` en Railway cuando el timer del Pi esté habilitado. La exclusión mutua de respaldo ya existe: ambos hacen *leer → rechazar si hay orden → escribir*, el segundo en llegar ve la orden (BLOCKED), y el ejecutor tiene el marcador local de ejecución por fecha (una señal por día se ejecuta a lo sumo una vez). La ventana de carrera (lectura y escritura no son atómicas) es de segundos; con un solo dueño habilitado no existe.
+3. **Fase 2, Railway como vigilante (sin escribir):** un cron de Railway a las 9:31 CT que solo avisa «no hubo INICIO del Pi-scheduler» (una lectura del Gist). Así el punto único de fallo deja de ser silencioso.
+4. **Reversa (un minuto):** `sudo systemctl disable --now glitch-pi-scheduler.timer` y reactivar el cron de `GEOMETRY`. Como el contrato de la orden no cambia, no hay migración de datos.
+
+## 3. Si el Pi se cae
+- Hoy, con el Pi caído **no se ejecuta nada** (el ejecutor vive ahí) aunque Railway escriba. El Pi-scheduler **no añade** un modo de fallo de ejecución; sí concentra scheduler + ejecutor en un solo host (si falla, no hay trade: falla seguro, no pierde dinero).
+- Ya existe el watchdog (log del ejecutor sin crecer en 10 min → alerta, `pi/ops/watchdog.py`). A añadir: que también vigile el timer (`systemctl is-active glitch-pi-scheduler.timer` y la hora del último INICIO).
+- UPS / respaldo de red: **opcional**; el costo y la compatibilidad con el Pi **no se cotizaron** (NO VERIFICADO). Un módem 4G o el hotspot del teléfono como respaldo de red cubre el fallo más probable (internet) sin hardware nuevo para la energía; un corte eléctrico durante una posición abierta es el riesgo residual (bracket ya colocado en el broker: la protección TP/SL vive en el servidor de Topstep, no en el Pi).
+
+## 4. Valor y recomendación
+- **Dólares directos: ninguno medible.** Un día perdido de la cadena vale del orden de $1.4k/252 ≈ $6 por cuenta (a WR 50 %); el valor de G5 es evitar errores **de etiquetado y de silencio** (V1: «Intento #1» escrito al historial, señal anunciada sin existir), no días perdidos.
+- Sobrevive al piso de $500: **no** como palanca de dinero. Se justifica como **reducción de riesgo operativo**.
+- Recomendación: **no desplegar antes del 15-nov.** Prioridad: (1) `v1_gist_strict.patch` (cierra el silencio actual con mucho menos cambio), (2) C3, (3) polling corto, (4) Pi-scheduler en sombra. Esfuerzo estimado del Pi-scheduler: ≈ 150 líneas reutilizando `manual_signal.py`, pruebas y 10 sesiones en sombra.

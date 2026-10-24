@@ -7,6 +7,7 @@
 | `v1_gist_strict_mgc_cerebro2dev.patch` | el mismo parche para `origin/cerebro2-dev` (scheduler de MGC) | `git apply --check` sobre `cerebro2-dev` (265 → 269) |
 | `manual_signal.patch`, `manual_signal/` | plan B: señal manual segura (+ 16 pruebas); solo agrega archivos nuevos | `python -m pi.manual_signal` (dry-run); con v1: 514 pruebas |
 | `mgc_loader_contract_filter.patch` | filtra por contrato dominante en `dd_wr/product_sweep.py::load_sessions` | para `research/firm-map-and-labs` @6d4b069 (no está en `main`) |
+| `c3_slippage_timing.patch` | Parte G (G1a): C3 + tiempos de ejecución (`exec`: t_ref, t_envío, t_ack, t_fill, latencias, edad de la barra, ventana de polling); solo registra | `git apply --check` sobre `main` (492 → 513; con los otros dos de `main`: 535) |
 | `test_v4_restart.py` | reinicio del Pi con posición abierta: retoma el bracket sin duplicar | pytest igual que arriba |
 | `env_map.py` | mapa de variables de entorno desde el grafo de imports (AST) | `python experimentos/parteF/env_map.py` |
 Orden sugerido si Eric aprueba: `manual_signal.patch` (solo agrega) → `v1_gist_strict.patch`. Los dos de `main` no se pisan (514 pruebas con ambos).
