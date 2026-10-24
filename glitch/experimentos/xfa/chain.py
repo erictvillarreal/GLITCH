@@ -18,14 +18,17 @@ from sim import (FLOOR_CAP, MLL, NC_MAX, TARGET, OutcomeTable, side_of, tp_net_p
 H = 252; LAG_CASH = 5; ACT_DAYS = 1; OPS = 714.0
 
 
-def combine_bank(dd_mes, n, policy="P0", slips=(1.0, 3.0), slip_p=(0.5, 0.5), seed=1, maxdays=60, exit_slip=3.0, drift=0.0, sl_ticks=100, tp_ticks=32):
+def combine_bank(dd_mes, n, policy="P0", slips=(1.0, 3.0), slip_p=(0.5, 0.5), seed=1, maxdays=60, exit_slip=3.0, drift=0.0, sl_ticks=100, tp_ticks=32, order="adverse", init=None, pool=None, first_side=None, fee=None):
     """Intentos de Combine desde cuenta nueva (50,000/50,000, meta 3,000): devuelve passed (bool) y days (dias de trading consumidos)."""
     rng = np.random.default_rng(seed)
-    tabs = {s: OutcomeTable(dd_mes, s, exit_slip, "adverse", sl_ticks, tp_ticks, step=10.0, drift=drift) for s in slips}
+    tabs = {s: OutcomeTable(dd_mes, s, exit_slip, order, sl_ticks, tp_ticks, step=10.0, drift=drift, **({} if fee is None else {"fee": fee})) for s in slips}
     D = dd_mes.D
     bal = np.zeros(n); peak = np.zeros(n); best = np.zeros(n)                # relativo: ganancia del intento
     alive = np.ones(n, bool); passed = np.zeros(n, bool); days = np.zeros(n, int); cdays = np.zeros(n, int)
-    par0 = rng.integers(0, 2, n)
+    if init is not None:                                      # estado inicial (bal, peak, best, dias ya operados) relativo a $0 de ganancia del intento (Parte H)
+        bal += init[0]; peak += init[1]; best += init[2]; cdays += int(init[3])
+    poolx = np.arange(D) if pool is None else np.asarray(pool)
+    par0 = rng.integers(0, 2, n) if first_side is None else np.full(n, 0 if first_side == 1 else 1)
     for t in range(maxdays):
         a = alive
         if not a.any(): break
@@ -36,7 +39,7 @@ def combine_bank(dd_mes, n, policy="P0", slips=(1.0, 3.0), slip_p=(0.5, 0.5), se
         if policy == "P0": nc = np.full(n, NC_MAX)
         else: nc = np.clip(np.ceil(need / tp_net_per_contract(3.0) - 1e-9).astype(int), 1, NC_MAX)
         side = np.where((par0 + t) % 2 == 0, 1, -1)
-        idx = rng.integers(0, D, n); sc = rng.choice(len(slips), size=n, p=slip_p)
+        idx = poolx[rng.integers(0, len(poolx), n)]; sc = rng.choice(len(slips), size=n, p=slip_p)
         kind = np.full(n, 3, np.int8); pnl = np.zeros(n)
         for si, s in enumerate(slips):
             for sd in (1, -1):
@@ -61,7 +64,7 @@ def xfa_bank(days, rules, policy, n, seed=2, k=14):
     return r["life"].astype(int), r["pay_day"], r["pay_net"]
 
 
-def run_chain(cb_passed, cb_days, xb_life, xb_pday, xb_pnet, n=50000, seed=3, first_cash_lag=LAG_CASH):
+def run_chain(cb_passed, cb_days, xb_life, xb_pday, xb_pnet, n=50000, seed=3, first_cash_lag=LAG_CASH, reset_fee=49.0, act_fee=149.0, ops=None):
     rng = np.random.default_rng(seed)
     t = np.zeros(n, int); cash = np.zeros(n); fees = np.zeros(n); npass = np.zeros(n); npay_cash = np.zeros(n)
     active = np.ones(n, bool)
@@ -69,10 +72,10 @@ def run_chain(cb_passed, cb_days, xb_life, xb_pday, xb_pnet, n=50000, seed=3, fi
         a = active & (t < H)
         if not a.any(): break
         i = rng.integers(0, len(cb_passed), n)
-        fees += np.where(a, 49.0, 0.0)                               # compra o reset al inicio de cada intento
+        fees += np.where(a, reset_fee, 0.0)                               # compra o reset al inicio de cada intento
         t_end = t + cb_days[i]
         ps = a & cb_passed[i] & (t_end < H)
-        fees += np.where(ps, 149.0, 0.0); npass += ps
+        fees += np.where(ps, act_fee, 0.0); npass += ps
         j = rng.integers(0, len(xb_life), n)
         t_x = t_end + ACT_DAYS + 1
         K = xb_pday.shape[1]
@@ -84,5 +87,5 @@ def run_chain(cb_passed, cb_days, xb_life, xb_pday, xb_pnet, n=50000, seed=3, fi
         t = np.where(ps, t_x + xb_life[j], t_end + 1)
         t = np.where(a, t, t)
         active = active & (t < H)
-    net = cash - fees - OPS
+    net = cash - fees - (OPS if ops is None else ops)
     return dict(net=net, cash=cash, fees=fees, npass=npass, npay=npay_cash)

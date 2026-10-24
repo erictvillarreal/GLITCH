@@ -130,6 +130,8 @@ def sim_day(dd: DayData, side: int, nc: int, cushion: float, slip: float = 1.0, 
     i_adv = np.minimum(i_liq, i_sl)
     if order == "adverse":
         adv_wins = i_adv <= i_tp
+    elif order == "favorable":                          # cota OPTIMISTA (Parte H, H8): en una barra ambigua gana el TP
+        adv_wins = i_adv < i_tp
     else:
         k = np.clip(i_tp, 0, K - 1)
         tie_adv_first = adv_first_ohlc[np.arange(D), k]

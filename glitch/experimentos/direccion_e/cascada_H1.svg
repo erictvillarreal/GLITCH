@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="294" font-family="sans-serif" font-size="12"><rect width="100%" height="100%" fill="white"/>
+<text x="10" y="22" font-size="15" font-weight="bold">Cascada del WR de equilibrio de la cadena completa (menor = mejor)</text>
+<line x1="615.6054364765532" y1="40" x2="615.6054364765532" y2="264" stroke="#c0392b" stroke-dasharray="4 3"/><text x="575.6054364765532" y="280" fill="#c0392b">WR medido 47.4 %</text>
+<line x1="464.40255834190725" y1="40" x2="464.40255834190725" y2="264" stroke="#27ae60" stroke-dasharray="4 3"/><text x="424.40255834190725" y="280" fill="#27ae60">46.5 % (margen)</text>
+<rect x="330" y="56" width="479.5990406217851" height="18" fill="#7f8c8d"/>
+<text x="8" y="69">hoy</text><text x="815.5990406217851" y="69">48.55 %</text>
+<rect x="669.7066863114476" y="90" width="139.8923543103375" height="18" fill="#2980b9"/>
+<text x="8" y="103">+ finish-line (P3)</text><text x="815.5990406217851" y="103">47.72 %</text>
+<rect x="548.2826217909544" y="124" width="121.42406452049318" height="18" fill="#2980b9"/>
+<text x="8" y="137">+ 728×3</text><text x="675.7066863114476" y="137">47.00 %</text>
+<rect x="454.3813522719274" y="158" width="93.90126951902698" height="18" fill="#2980b9"/>
+<text x="8" y="171">+ costos operativos $714 → $0 (pausar servicios sobr</text><text x="554.2826217909544" y="171">46.44 %</text>
+<rect x="414.4035021810184" y="192" width="39.977850090909044" height="18" fill="#2980b9"/>
+<text x="8" y="205">+ slip de entrada del Combine ≤ 1 tick (si el anclaj</text><text x="460.3813522719274" y="205">46.20 %</text>
+</svg>

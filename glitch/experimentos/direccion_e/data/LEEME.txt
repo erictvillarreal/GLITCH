@@ -8,3 +8,5 @@ DX-Y.NYB: 9377 dias 1990-01-01 -> 2026-10-20 (DX-Y_NYB.csv)
 CL=F: 6568 dias 2000-08-23 -> 2026-10-20 (CL_F.csv)
 EURUSD=X: 5939 dias 2003-12-01 -> 2026-10-21 (EURUSD_X.csv)
 ZN=F: 6549 dias 2000-09-21 -> 2026-10-20 (ZN_F.csv)
+
+Parte H, 2026-10-24 15:50: ^VIX: 9273 dias 1990-01-02 -> 2026-10-23 (VIX.csv); ^GVZ: 4628 dias 2008-06-03 -> 2026-10-23 (GVZ.csv)

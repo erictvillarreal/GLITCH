@@ -1,12 +1,12 @@
 diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
-index 916ecff..65b19c2 100644
+index 916ecff..74a815b 100644
 --- a/glitch/pi/pi_executor.py
 +++ b/glitch/pi/pi_executor.py
 @@ -141,6 +141,7 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
  from execution.gist_store import load_state as _gist_load_state
  from execution.gist_store import save_log as _gist_save_log
  from execution.gist_store import save_state as _gist_save_state
-+from pi.slippage_pure import build_exec_record, extract_fill_time, slippage_ticks
++from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, slippage_ticks
  from scheduler.telegram_bot import send
  from strategies.geometry_pure import CANDIDATES
  
@@ -54,7 +54,7 @@ index 916ecff..65b19c2 100644
      if fill is not None:
          entry_price, entry_estimated = fill, False
  
-@@ -907,6 +916,12 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
+@@ -907,6 +916,16 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
      for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
          if outcome.get(flag):
              entry[flag] = True
@@ -62,12 +62,16 @@ index 916ecff..65b19c2 100644
 +        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
 +        if slip is not None:
 +            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
++    if not outcome.get("exit_price_estimated", False) and outcome["result"] in ("TP", "SL"):
++        xs = exit_slip_ticks(signal["side"], outcome["result"], state.get("tp_price"), state.get("sl_price"), exit_price, CFG.spec.tick_size)
++        if xs is not None:
++            entry["exec_exit"] = {"result": outcome["result"], "trigger": state.get("tp_price") if outcome["result"] == "TP" else state.get("sl_price"), "exit_price": exit_price, "slip_exit_ticks": xs}
 +    if state.get("exec"):
 +        entry["exec"] = {**state["exec"], **({"fill_price": entry_price, "slip_ticks": slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)} if not entry_estimated else {})}
      if signal.get("nc_signal") is not None:
          entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
      if outcome.get("orphan_orders"):
-@@ -1116,14 +1131,20 @@ def _validate_signal(signal: dict) -> Optional[str]:
+@@ -1116,14 +1135,20 @@ def _validate_signal(signal: dict) -> Optional[str]:
      return None
  
  
@@ -88,7 +92,7 @@ index 916ecff..65b19c2 100644
  
          if not _signal_is_current(signal):
              return
-@@ -1186,7 +1207,9 @@ def run_once():
+@@ -1186,7 +1211,9 @@ def run_once():
              )
              return
  
@@ -99,7 +103,7 @@ index 916ecff..65b19c2 100644
          tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
          sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
  
-@@ -1196,6 +1219,7 @@ def run_once():
+@@ -1196,6 +1223,7 @@ def run_once():
          if not _is_test_signal(signal):
              _claim_signal(signal)
  
@@ -107,7 +111,7 @@ index 916ecff..65b19c2 100644
          try:
              bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
                                             tp_price, sl_price, verified_map)
-@@ -1214,6 +1238,7 @@ def run_once():
+@@ -1214,6 +1242,7 @@ def run_once():
              log.error(msg.replace("\n", " | "))
              return
  
@@ -115,7 +119,7 @@ index 916ecff..65b19c2 100644
          state = {
              "phase": "bracket_open", "signal": signal, "entry_price": reference_price,
              "entry_order_id": bracket["entry_order_id"], "tp_price": tp_price, "sl_price": sl_price,
-@@ -1235,9 +1260,23 @@ def run_once():
+@@ -1235,9 +1264,23 @@ def run_once():
                   f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
                   f"invertido.\n{utc_now_str()}")
  
@@ -142,10 +146,10 @@ index 916ecff..65b19c2 100644
          send(msg)
 diff --git a/glitch/pi/slippage_pure.py b/glitch/pi/slippage_pure.py
 new file mode 100644
-index 0000000..36513d6
+index 0000000..4912621
 --- /dev/null
 +++ b/glitch/pi/slippage_pure.py
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,77 @@
 +"""PROPUESTA -- NO DESPLEGAR (NEEDS HUMAN REVIEW, CLAUDE.md regla 4: toca el registro de ejecucion).
 +
 +C3: slippage REAL de entrada en ticks. Convencion: positivo = ADVERSO (peor que la referencia pre-trade con la que se anclan TP/SL).
@@ -211,6 +215,17 @@ index 0000000..36513d6
 +        "poll_window_s": round(t_signal_seen - t_prev_empty_poll, 1) if t_prev_empty_poll is not None else None,   # cota superior del retraso por polling
 +    }
 +    return rec
++
++
++def exit_slip_ticks(side: int, result: str, tp_price, sl_price, exit_price, tick_size: float):
++    """Slippage de SALIDA respecto del disparador, en ticks, + = adverso (peor que el disparador). TP (limite): negativo = mejora de precio. SL (stop de mercado): positivo = deslizamiento.
++    FLATTEN / UNKNOWN no tienen disparador: None. Parte H (24-oct-2026), H2."""
++    if side not in (1, -1) or tick_size <= 0 or exit_price is None or result not in ("TP", "SL"):
++        return None
++    trig = tp_price if result == "TP" else sl_price
++    if trig is None:
++        return None
++    return round(side * (trig - exit_price) / tick_size, 2)
 +
 diff --git a/glitch/tests/test_slippage_logging.py b/glitch/tests/test_slippage_logging.py
 new file mode 100644
@@ -310,10 +325,10 @@ index 0000000..4a530ad
 +    assert fake_gist["geometry_mes_log.json"][-1]["slip_ticks"] == 1.0
 diff --git a/glitch/tests/test_slippage_timing.py b/glitch/tests/test_slippage_timing.py
 new file mode 100644
-index 0000000..6508759
+index 0000000..b1d6f23
 --- /dev/null
 +++ b/glitch/tests/test_slippage_timing.py
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,96 @@
 +"""G1a (24-oct-2026) -- PROPUESTA (NO DESPLEGAR): registro de tiempos de ejecucion de la entrada (t_ref, t_envio, t_fill, latencias)."""
 +import datetime as dt
 +import os
@@ -332,7 +347,7 @@ index 0000000..6508759
 +import pytest
 +
 +import pi.pi_executor as pe
-+from pi.slippage_pure import build_exec_record, extract_fill_time, parse_iso
++from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, parse_iso
 +from tests.test_pi_executor import FakeClient, _entry_deadline_off, _signal, fake_gist, sent  # noqa: F401
 +
 +
@@ -390,3 +405,23 @@ index 0000000..6508759
 +    pe._LAST_EMPTY_POLL = None
 +    pe.run_once()
 +    assert pe._LAST_EMPTY_POLL is not None
++
++
++def test_exit_slip_ticks_convencion():
++    assert exit_slip_ticks(1, "SL", 6010.0, 5975.0, 5974.50, 0.25) == 2.0          # stop de un LARGO lleno 2 ticks abajo: adverso
++    assert exit_slip_ticks(-1, "SL", 5990.0, 6025.0, 6025.50, 0.25) == 2.0         # stop de un CORTO lleno arriba: adverso
++    assert exit_slip_ticks(1, "TP", 6010.0, 5975.0, 6010.25, 0.25) == -1.0         # limite lleno 1 tick mejor: mejora
++    assert exit_slip_ticks(1, "FLATTEN", 6010.0, 5975.0, 6001.0, 0.25) is None and exit_slip_ticks(1, "SL", None, None, 6000.0, 0.25) is None
++    assert exit_slip_ticks(0, "SL", 1.0, 1.0, 1.0, 0.25) is None
++
++
++def test_finalize_registra_exec_exit(fake_gist, monkeypatch):
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    st = {"phase": "bracket_open", "signal": _signal(), "entry_price": 6000.0, "entry_order_id": 100, "tp_price": 6010.0, "sl_price": 5975.0, "tp_order_id": 101, "sl_order_id": 102,
++          "contract_id": "CON.MES.Z26", "account_id": 555, "opened_at": "x"}
++    pe._finalize_cycle(FakeClient(), 555, st, {"result": "SL", "exit_price": 5974.5, "exit_price_estimated": False})
++    e = fake_gist["geometry_mes_log.json"][-1]
++    assert e["exec_exit"] == {"result": "SL", "trigger": 5975.0, "exit_price": 5974.5, "slip_exit_ticks": 2.0}
++    pe._finalize_cycle(FakeClient(), 555, st, {"result": "SL", "exit_price": 5975.0, "exit_price_estimated": True})
++    assert "exec_exit" not in fake_gist["geometry_mes_log.json"][-1]            # un precio estimado no se registra como medición
++
