@@ -1,0 +1,55 @@
+diff --git a/glitch/dd_wr/product_sweep.py b/glitch/dd_wr/product_sweep.py
+index f54a621..c60cf9e 100644
+--- a/glitch/dd_wr/product_sweep.py
++++ b/glitch/dd_wr/product_sweep.py
+@@ -35,8 +35,16 @@ PRODUCTS = {
+ }
+ 
+ 
+-def load_sessions(stem):
++def load_sessions(stem, dominant_contract=True):
++    """Sesiones por dia (CT). dominant_contract=True (default): si el parquet trae la etiqueta `contract`, cada dia se queda SOLO con las barras del contrato de
++    mayor volumen de ese dia (el front month de Topstep). El parquet de MGC intercala barras de DOS contratos en ~44 % de los dias (saltos de ~250 ticks que son
++    artefactos y inflan los toques de TP/SL ~14 %): ver experimentos/xfa/EVIDENCIA_CEREBRO2.md §1.1. dominant_contract=False reproduce el comportamiento anterior."""
+     d = pd.read_parquet(os.path.join(D, f"{stem}.parquet"))
++    if dominant_contract and "contract" in d.columns:
++        day = pd.Series(d.index.tz_convert("America/Chicago").date, index=d.index)
++        vol = d.groupby([day.values, d["contract"].values])["volume"].sum()
++        dom = vol.groupby(level=0).idxmax().map(lambda t: t[1])
++        d = d[d["contract"].values == day.map(dom).values]
+     i = d.index.tz_convert("America/Chicago")
+     d = d.assign(day=i.date, m=i.hour * 60 + i.minute)
+     return [(day, g["high"].values, g["low"].values, g["close"].values, g["m"].values) for day, g in d.groupby("day", sort=True)]
+diff --git a/glitch/tests/test_load_sessions_contract.py b/glitch/tests/test_load_sessions_contract.py
+new file mode 100644
+index 0000000..3f39986
+--- /dev/null
++++ b/glitch/tests/test_load_sessions_contract.py
+@@ -0,0 +1,27 @@
++"""load_sessions debe quedarse con el contrato dominante del dia (el parquet de MGC intercala dos contratos)."""
++import os, sys
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++import numpy as np, pandas as pd
++import dd_wr.product_sweep as ps
++
++
++def _frame():
++    idx = pd.date_range("2026-03-02 13:00", periods=8, freq="5min", tz="UTC")           # un solo dia CT (07:00-07:35)
++    cont = ["A", "B", "A", "B", "A", "B", "A", "B"]                                      # intercalados
++    vol = [100, 5, 100, 5, 100, 5, 100, 5]                                                # A domina
++    price = [2500.0, 2525.0] * 4                                                          # B ~25 puntos arriba (artefacto de roll)
++    return pd.DataFrame({"open": price, "high": np.array(price) + 1, "low": np.array(price) - 1, "close": price, "volume": vol, "contract": cont}, index=idx)
++
++
++def test_filtra_el_contrato_dominante_y_quita_el_salto(tmp_path, monkeypatch):
++    _frame().to_parquet(tmp_path / "x.parquet"); monkeypatch.setattr(ps, "D", str(tmp_path))
++    (day, h, l, c, m), = ps.load_sessions("x")
++    assert len(c) == 4 and set(c) == {2500.0}
++    (day2, h2, l2, c2, m2), = ps.load_sessions("x", dominant_contract=False)
++    assert len(c2) == 8 and np.ptp(c2) == 25.0                                            # comportamiento anterior: salto de 25 puntos
++
++
++def test_sin_columna_contract_no_cambia(tmp_path, monkeypatch):
++    _frame().drop(columns="contract").to_parquet(tmp_path / "y.parquet"); monkeypatch.setattr(ps, "D", str(tmp_path))
++    (_, _, _, c, _), = ps.load_sessions("y")
++    assert len(c) == 8

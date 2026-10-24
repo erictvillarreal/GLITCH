@@ -1,0 +1,351 @@
+diff --git a/glitch/execution/gist_store.py b/glitch/execution/gist_store.py
+index bf119d8..84b1e51 100644
+--- a/glitch/execution/gist_store.py
++++ b/glitch/execution/gist_store.py
+@@ -190,3 +190,19 @@ def save_log_strict(filename: str, data: list) -> None:
+         r.raise_for_status()
+     except Exception as e:
+         raise GistError(f"escritura de {filename} fallo: {e}") from e
++
++
++def load_state_strict(filename: str) -> dict:
++    """Como load_state pero distingue 'no existe / vacio' ({}) de 'fallo de red/API/JSON' (GistError)."""
++    data = _read_file_strict(filename)
++    if data is None:
++        return {}
++    if not isinstance(data, dict):
++        raise GistError(f"{filename} no contiene un objeto (tipo {type(data).__name__})")
++    return data
++
++
++def save_state_strict(filename: str, data: dict) -> None:
++    """Como save_state pero LANZA GistError si el PATCH falla. NO verifica por lectura posterior: eso lo hace el llamador."""
++    save_log_strict(filename, data)
++
+diff --git a/glitch/scheduler/geometry_scheduler.py b/glitch/scheduler/geometry_scheduler.py
+index d060307..81eb9f3 100644
+--- a/glitch/scheduler/geometry_scheduler.py
++++ b/glitch/scheduler/geometry_scheduler.py
+@@ -49,6 +49,7 @@ Railway Cron: definir antes de conectar (mismo horario que combo2d,
+ 25 14 * * 1-5, es un punto de partida razonable -- ajustar segun el
+ producto elegido y su horario RTH real).
+ """
++import json
+ import os
+ import sys
+ import logging
+@@ -79,6 +80,8 @@ from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
+ from execution.contracts import get_front_month, check_expiry_alerts
+ from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
+ from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state
++from execution.gist_store import GistError, load_log_strict as _gist_load_log_strict
++from execution.gist_store import load_state_strict as _gist_load_state_strict, save_state_strict as _gist_save_state_strict
+ from core.prop_firm import TOPSTEP_50K
+ 
+ CT = ZoneInfo("America/Chicago")
+@@ -457,6 +460,29 @@ def save_order_signal(d: dict):
+     _gist_save_state(ORDER_FILE, d)
+ 
+ 
++def load_log_strict() -> list:
++    """Modo real: lanza GistError si el historial no se puede leer (distingue 'no existe todavia' ([]) de 'fallo')."""
++    return _gist_load_log_strict(LOG_FILE)
++
++
++def load_order_signal_strict() -> dict:
++    return _gist_load_state_strict(ORDER_FILE)
++
++
++def save_order_signal_strict(d: dict) -> None:
++    _gist_save_state_strict(ORDER_FILE, d)
++
++
++def _gist_error_exit(what: str, err: Exception) -> None:
++    """Modo real (DRY_RUN=false): un fallo del Gist NO se traga. Avisa STATUS: ERROR y el llamador sale sin escribir nada
++    (V1, 24-oct-2026: con el token revocado el scheduler anunciaba '[SEÑAL ENVIADA AL PI]' sin que la orden existiera)."""
++    msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++           f"ERROR: fallo del Gist al {what} -- {err}. NO se envia señal al Pi hoy; no se escribio nada. "
++           f"Revisar GITHUB_GIST_TOKEN/GIST_ID de este servicio (¿token revocado o rotado?).\n{utc_now_str()}")
++    send(msg)
++    log.error(msg.replace("\n", " | "))
++
++
+ def is_trading_day():
+     """
+     Calendario de feriados duplicado deliberadamente desde
+@@ -506,7 +532,14 @@ def run():
+ 
+     now = ct_now()
+     today_str = str(date.today())
+-    paper_log = load_log()
++    if DRY_RUN:
++        paper_log = load_log()
++    else:
++        try:
++            paper_log = load_log_strict()    # un 401/timeout NO se lee como [] (-> 'Intento #1', 'Dia 1 de paper')
++        except GistError as e:
++            _gist_error_exit("leer el historial", e)
++            return
+     # Logica de reinicio de intento (09-sep-2026, ver GLITCH_RESEARCH_LOG.md)
+     # -- resuelve la limitacion documentada anteriormente ("Progreso a
+     # Target acumulado sin limite de intento"). "Progreso a
+@@ -639,7 +672,11 @@ def run():
+             send(msg)
+             log.error(msg.replace("\n", " | "))
+             return
+-        existing_signal = load_order_signal()
++        try:
++            existing_signal = load_order_signal_strict()
++        except GistError as e:
++            _gist_error_exit("leer la orden pendiente", e)
++            return
+         if existing_signal:
+             msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
+                    f"ERROR: ya hay una señal de {existing_signal.get('date')} sin consumir por el Pi "
+@@ -650,12 +687,25 @@ def run():
+             log.error(msg.replace("\n", " | "))
+             return
+ 
+-        save_order_signal({
++        payload = {
+             "date": today_str, "side": side, "direction": direction_str,
+             "ticker": CFG.spec.yf_ticker, "product_code": CFG.spec.product_code,
+             "nc": CFG.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+             "product": PRODUCT_KEY, "intento": intento_actual, "dry_run": False,
+-        })
++        }
++        try:
++            save_order_signal_strict(payload)
++            written = load_order_signal_strict()      # lectura posterior: la orden DEBE estar antes de anunciarla
++        except GistError as e:
++            _gist_error_exit("escribir/verificar la orden", e)
++            return
++        if written != json.loads(json.dumps(payload, default=str)):
++            msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++                   f"ERROR: la orden NO quedo escrita en el Gist (la lectura posterior no coincide). "
++                   f"No se anuncia señal; verificar {ORDER_FILE} a mano.\n{utc_now_str()}")
++            send(msg)
++            log.error(msg.replace("\n", " | "))
++            return
+         real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+                     f"Direction: {direction_str}\nContracts: {CFG.nc}\n"
+                     f"SL/TP: {CFG.sl_ticks}/{CFG.tp_ticks} ticks\n"
+diff --git a/glitch/tests/test_geometry_parity.py b/glitch/tests/test_geometry_parity.py
+index be14f14..1f81819 100644
+--- a/glitch/tests/test_geometry_parity.py
++++ b/glitch/tests/test_geometry_parity.py
+@@ -227,6 +227,7 @@ class TestDryRunFalseDelegatesToPi:
+         monkeypatch.setattr(scheduler, "get_front_month", lambda code, cache: "MESZ6")
+         monkeypatch.setattr(scheduler, "check_expiry_alerts", lambda cache, send_fn, prefix: None)
+         monkeypatch.setattr(scheduler, "load_log", lambda: [])
++        monkeypatch.setattr(scheduler, "load_log_strict", lambda: [])    # modo real: lectura estricta (V1, 24-oct-2026)
+         monkeypatch.setattr(scheduler, "save_log", lambda l: None)
+         monkeypatch.setattr(scheduler, "load_pending", lambda: {})
+         monkeypatch.setattr(scheduler, "save_pending", lambda d: None)
+@@ -240,9 +241,9 @@ class TestDryRunFalseDelegatesToPi:
+         monkeypatch.setattr(scheduler, "DRY_RUN", False)
+         sent = []
+         self._patch_common(monkeypatch, sent)
+-        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+         captured = {}
+-        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: captured.update(d))
++        monkeypatch.setattr(scheduler, "load_order_signal_strict", lambda: dict(captured))   # la lectura posterior ve lo escrito
++        monkeypatch.setattr(scheduler, "save_order_signal_strict", lambda d: captured.update(d))
+ 
+         scheduler.run()
+ 
+@@ -266,9 +267,10 @@ class TestDryRunFalseDelegatesToPi:
+             sleeps.append(s)
+             clock["t"] += dt.timedelta(minutes=5)
+         monkeypatch.setattr(scheduler.time, "sleep", _sleep)
+-        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
++        store = {}
++        monkeypatch.setattr(scheduler, "load_order_signal_strict", lambda: dict(store))
+         writes = []
+-        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: writes.append((clock["t"], d)))
++        monkeypatch.setattr(scheduler, "save_order_signal_strict", lambda d: (store.update(d), writes.append((clock["t"], d))))
+         scheduler.run()
+         assert sleeps, "debio esperar la compuerta"
+         assert len(writes) == 1
+@@ -279,9 +281,9 @@ class TestDryRunFalseDelegatesToPi:
+         monkeypatch.setattr(scheduler, "DRY_RUN", False)
+         sent = []
+         self._patch_common(monkeypatch, sent, ct_hour=14, ct_minute=40)
+-        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
++        monkeypatch.setattr(scheduler, "load_order_signal_strict", lambda: {})
+         writes = []
+-        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: writes.append(d))
++        monkeypatch.setattr(scheduler, "save_order_signal_strict", lambda d: writes.append(d))
+         scheduler.run()
+         assert writes == []
+         assert any("despues del cierre de sesion" in m for m in sent)
+@@ -292,9 +294,9 @@ class TestDryRunFalseDelegatesToPi:
+         monkeypatch.setattr(scheduler, "DRY_RUN", False)
+         sent = []
+         self._patch_common(monkeypatch, sent)
+-        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {})
+         captured = {}
+-        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: captured.update(d))
++        monkeypatch.setattr(scheduler, "load_order_signal_strict", lambda: dict(captured))   # la lectura posterior ve lo escrito
++        monkeypatch.setattr(scheduler, "save_order_signal_strict", lambda d: captured.update(d))
+         scheduler.run()
+         expected = decide_side(trading_day_index(dt.date.today()), scheduler.CFG.direction)
+         assert captured["side"] == expected
+@@ -305,9 +307,9 @@ class TestDryRunFalseDelegatesToPi:
+         monkeypatch.setattr(scheduler, "DRY_RUN", False)
+         sent = []
+         self._patch_common(monkeypatch, sent)
+-        monkeypatch.setattr(scheduler, "load_order_signal", lambda: {"date": "2026-09-28", "side": 1})
++        monkeypatch.setattr(scheduler, "load_order_signal_strict", lambda: {"date": "2026-09-28", "side": 1})
+         save_calls = []
+-        monkeypatch.setattr(scheduler, "save_order_signal", lambda d: save_calls.append(d))
++        monkeypatch.setattr(scheduler, "save_order_signal_strict", lambda d: save_calls.append(d))
+ 
+         scheduler.run()
+ 
+diff --git a/glitch/tests/test_geometry_scheduler_strict.py b/glitch/tests/test_geometry_scheduler_strict.py
+new file mode 100644
+index 0000000..e14c66f
+--- /dev/null
++++ b/glitch/tests/test_geometry_scheduler_strict.py
+@@ -0,0 +1,140 @@
++"""
++V1 (24-oct-2026) -- el scheduler en modo real (DRY_RUN=false) NO debe tragarse los fallos del Gist.
++Recorre run() real hasta Telegram con send/ct_now/date/sleep/front-month parcheados y la API de Gists simulada en memoria (sin red).
++"""
++import datetime as dt
++import importlib
++import json
++import os
++import sys
++
++os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++from zoneinfo import ZoneInfo
++
++import execution.gist_store as gs
++
++CT = ZoneInfo("America/Chicago")
++MON = dt.date(2026, 10, 26)
++HISTORY = [
++    {"date": "2026-10-14", "result": "SL", "pnl": -2000.0, "intento": 1, "direction": "SHORT", "side": -1},
++    {"date": "2026-10-19", "result": "TP", "pnl": 1551.2, "intento": 2, "direction": "SHORT", "side": -1},
++    {"date": "2026-10-20", "result": "TP", "pnl": 1401.2, "intento": 2, "direction": "LONG", "side": 1},
++]
++
++
++class _Resp:
++    def __init__(self, status=200, body=None): self.status_code, self._b = status, body or {}
++    def json(self): return self._b
++    def raise_for_status(self):
++        if self.status_code >= 400: raise RuntimeError(f"HTTP {self.status_code}")
++
++
++class _Gist:
++    """mode: ok | 401 (todo falla) | write401 (lee bien, no escribe) | write_lost (PATCH 200 que no guarda)."""
++    def __init__(self, files, mode="ok"):
++        self.files, self.mode, self.patches = {k: json.dumps(v) for k, v in files.items()}, mode, 0
++    def get(self, *a, **k):
++        return _Resp(401) if self.mode == "401" else _Resp(200, {"files": {k_: {"content": v} for k_, v in self.files.items()}})
++    def patch(self, url, headers=None, json=None, timeout=None, **k):
++        self.patches += 1
++        if self.mode in ("401", "write401"): return _Resp(401)
++        if self.mode != "write_lost":
++            for n, o in json["files"].items(): self.files[n] = o["content"]
++        return _Resp(200)
++    def read(self, n): return __import__("json").loads(self.files[n])
++
++
++@pytest.fixture
++def env(monkeypatch):
++    monkeypatch.setattr(gs, "GITHUB_GIST_TOKEN", "fake"); monkeypatch.setattr(gs, "GIST_ID", "fake")
++    monkeypatch.setenv("GLITCH_PRODUCT", "MES")
++    import scheduler.geometry_scheduler as s
++    s = importlib.reload(s)
++    sent = []
++    now = dt.datetime(2026, 10, 26, 9, 36, tzinfo=CT)
++
++    class FakeDate(dt.date):
++        @classmethod
++        def today(cls): return MON
++
++    monkeypatch.setattr(s, "DRY_RUN", False)
++    monkeypatch.setattr(s, "send", sent.append)
++    monkeypatch.setattr(s, "ct_now", lambda: now)
++    monkeypatch.setattr(s, "date", FakeDate)
++    monkeypatch.setattr(s.time, "sleep", lambda *_: None)
++    monkeypatch.setattr(s, "get_front_month", lambda *_a, **_k: "MESZ6")
++    monkeypatch.setattr(s, "check_expiry_alerts", lambda *_a, **_k: None)
++
++    def go(gist):
++        monkeypatch.setattr(gs.requests, "get", gist.get); monkeypatch.setattr(gs.requests, "patch", gist.patch)
++        s.run()
++        return "\n".join(sent)
++    return s, sent, go
++
++
++def _files(order=None):
++    return {"geometry_mes_log.json": HISTORY, "orden_pendiente_mes.json": order if order is not None else {}}
++
++
++def test_token_revocado_da_un_unico_error_y_no_anuncia_senal(env):
++    s, sent, go = env
++    g = _Gist(_files(), mode="401"); text = go(g)
++    assert len(sent) == 1 and "STATUS: ERROR" in text and "leer el historial" in text
++    assert "INICIO DE DIA" not in text and "[SEÑAL ENVIADA AL PI]" not in text and "Intento #1" not in text
++    assert g.patches == 0
++
++
++def test_lectura_ok_escritura_rechazada_no_anuncia_senal(env):
++    s, sent, go = env
++    g = _Gist(_files(), mode="write401"); text = go(g)
++    assert "STATUS: ERROR" in text and "escribir/verificar la orden" in text and "[SEÑAL ENVIADA AL PI]" not in text
++    assert g.read("orden_pendiente_mes.json") == {}
++
++
++def test_patch_200_que_no_guarda_se_detecta_por_lectura_posterior(env):
++    s, sent, go = env
++    g = _Gist(_files(), mode="write_lost"); text = go(g)
++    assert "NO quedo escrita" in text and "[SEÑAL ENVIADA AL PI]" not in text
++
++
++def test_camino_feliz_escribe_verifica_y_anuncia_en_ese_orden(env):
++    s, sent, go = env
++    g = _Gist(_files()); text = go(g)
++    assert sent[0].startswith("S10GLITCH - COMBINE - MES | INICIO DE DIA") and "Resultado de ayer: 2026-10-20: LONG → TP  PnL=$+1,401.20" in sent[0]
++    orden = g.read("orden_pendiente_mes.json")
++    assert orden == {"date": "2026-10-26", "side": 1, "direction": "LONG", "ticker": "MES=F", "product_code": "MES", "nc": 40,
++                     "sl_ticks": 100, "tp_ticks": 32, "product": "MES", "intento": 2, "dry_run": False}
++    assert "[SEÑAL ENVIADA AL PI]" in sent[-1] and "Intento #2" in sent[-1]
++
++
++def test_orden_vieja_sin_consumir_bloquea_y_con_401_ya_no_pasa_en_silencio(env):
++    s, sent, go = env
++    viejo = {"date": "2026-10-19", "side": 1, "nc": 3}
++    g = _Gist(_files(viejo)); text = go(g)
++    assert "STATUS: BLOCKED" in text and g.read("orden_pendiente_mes.json") == viejo
++    sent.clear()
++    text = go(_Gist(_files(viejo), mode="401"))
++    assert "STATUS: ERROR" in text and "BLOCKED" not in text and "[SEÑAL ENVIADA AL PI]" not in text
++
++
++def test_gist_store_state_strict(monkeypatch):
++    monkeypatch.setattr(gs, "GITHUB_GIST_TOKEN", "fake"); monkeypatch.setattr(gs, "GIST_ID", "fake")
++    g = _Gist({"a.json": {"x": 1}, "lista.json": [1]})
++    monkeypatch.setattr(gs.requests, "get", g.get); monkeypatch.setattr(gs.requests, "patch", g.patch)
++    assert gs.load_state_strict("a.json") == {"x": 1} and gs.load_state_strict("no_existe.json") == {}
++    with pytest.raises(gs.GistError):
++        gs.load_state_strict("lista.json")            # tipo equivocado
++    gs.save_state_strict("b.json", {"y": 2}); assert g.read("b.json") == {"y": 2}
++    bad = _Gist({}, mode="401")
++    monkeypatch.setattr(gs.requests, "get", bad.get); monkeypatch.setattr(gs.requests, "patch", bad.patch)
++    with pytest.raises(gs.GistError):
++        gs.load_state_strict("a.json")
++    with pytest.raises(gs.GistError):
++        gs.save_state_strict("a.json", {})

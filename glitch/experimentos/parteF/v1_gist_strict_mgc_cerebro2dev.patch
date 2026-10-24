@@ -1,0 +1,232 @@
+diff --git a/glitch/execution/gist_store.py b/glitch/execution/gist_store.py
+index c579e5f..84b1e51 100644
+--- a/glitch/execution/gist_store.py
++++ b/glitch/execution/gist_store.py
+@@ -140,3 +140,69 @@ def save_state(filename: str, data: dict) -> None:
+     """Escribe el dict de ESTADO VOLATIL completo (reemplaza el anterior).
+     Pasar {} para marcar explicitamente 'sin posicion pendiente'."""
+     _write_file(filename, data)
++
++
++# ── Variantes ESTRICTAS (auditoria 04-oct-2026, hallazgo A4) ───────────────────────────────────────────────────
++# load_log()/save_log() devuelven [] ante CUALQUIER fallo de lectura y tragan los fallos de escritura: correcto para
++# no tumbar un scheduler de paper, pero un LEER-AGREGAR-REEMPLAZAR sobre eso borra todo el historial cuando falla la
++# lectura (se reemplaza por una lista con una sola entrada). Estas variantes distinguen "no existe todavia" (vacio
++# legitimo) de "fallo" (excepcion). Las usa pi/pi_executor.py; Railway sigue con las no estrictas, sin cambios.
++class GistError(RuntimeError):
++    pass
++
++
++def _read_file_strict(filename: str):
++    """None solo si el gist/archivo no tiene contenido (vacio legitimo). Cualquier fallo de red/API/JSON lanza GistError."""
++    _require_config()
++    try:
++        r = requests.get(f"{_API}/gists/{GIST_ID}", headers=_headers(), timeout=15)
++        r.raise_for_status()
++        gist = r.json()
++    except Exception as e:
++        raise GistError(f"lectura de {filename} fallo: {e}") from e
++    file_obj = gist.get("files", {}).get(filename)
++    if not file_obj:
++        return None
++    content = file_obj.get("content", "")
++    if not content.strip():
++        return None
++    try:
++        return json.loads(content)
++    except Exception as e:
++        raise GistError(f"{filename} no es JSON valido: {e}") from e
++
++
++def load_log_strict(filename: str) -> list:
++    data = _read_file_strict(filename)
++    if data is None:
++        return []
++    if not isinstance(data, list):
++        raise GistError(f"{filename} no contiene una lista (tipo {type(data).__name__})")
++    return data
++
++
++def save_log_strict(filename: str, data: list) -> None:
++    """Como save_log pero LANZA GistError si el PATCH falla (el llamador decide: reintentar, spool, alertar)."""
++    _require_config()
++    try:
++        payload = {"files": {filename: {"content": json.dumps(data, indent=2, default=str)}}}
++        r = requests.patch(f"{_API}/gists/{GIST_ID}", headers=_headers(), json=payload, timeout=15)
++        r.raise_for_status()
++    except Exception as e:
++        raise GistError(f"escritura de {filename} fallo: {e}") from e
++
++
++def load_state_strict(filename: str) -> dict:
++    """Como load_state pero distingue 'no existe / vacio' ({}) de 'fallo de red/API/JSON' (GistError)."""
++    data = _read_file_strict(filename)
++    if data is None:
++        return {}
++    if not isinstance(data, dict):
++        raise GistError(f"{filename} no contiene un objeto (tipo {type(data).__name__})")
++    return data
++
++
++def save_state_strict(filename: str, data: dict) -> None:
++    """Como save_state pero LANZA GistError si el PATCH falla. NO verifica por lectura posterior: eso lo hace el llamador."""
++    save_log_strict(filename, data)
++
+diff --git a/glitch/scheduler/geometry_mgc_scheduler.py b/glitch/scheduler/geometry_mgc_scheduler.py
+index ed4d8b4..edf8679 100644
+--- a/glitch/scheduler/geometry_mgc_scheduler.py
++++ b/glitch/scheduler/geometry_mgc_scheduler.py
+@@ -71,6 +71,7 @@ bloqueante para dejarlo preparado. Ejemplo (UTC, CT=UTC-5 en horario de
+ verano -- verificar DST vigente al momento de configurar el cron real):
+     0 12 * * 1-5    (12:00 UTC = 7:00 CT durante CDT)
+ """
++import json
+ import os
+ import sys
+ import logging
+@@ -103,6 +104,8 @@ from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E4
+ from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
+ from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
+ from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
++from execution.gist_store import GistError, load_log_strict as _gist_load_log_strict  # noqa: E402
++from execution.gist_store import load_state_strict as _gist_load_state_strict, save_state_strict as _gist_save_state_strict  # noqa: E402
+ from core.prop_firm import TOPSTEP_150K, TOPSTEP_SPECS  # noqa: E402
+ from core.funded_account import XFA_150K, XFA_SPECS  # noqa: E402
+ 
+@@ -274,6 +277,27 @@ def save_order_signal(d: dict):
+     _gist_save_state(ORDER_FILE, d)
+ 
+ 
++def load_log_strict() -> list:
++    """Modo real: lanza GistError si el historial no se puede leer (distingue 'no existe todavia' ([]) de 'fallo')."""
++    return _gist_load_log_strict(LOG_FILE)
++
++
++def load_order_signal_strict() -> dict:
++    return _gist_load_state_strict(ORDER_FILE)
++
++
++def save_order_signal_strict(d: dict) -> None:
++    _gist_save_state_strict(ORDER_FILE, d)
++
++
++def _gist_error_exit(what: str, err: Exception) -> None:
++    """Modo real: un fallo del Gist NO se traga (V1, 24-oct-2026). Avisa STATUS: ERROR; el llamador sale sin escribir nada."""
++    msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++           f"ERROR: fallo del Gist al {what} -- {err}. NO se envia señal al Pi hoy; no se escribio nada. "
++           f"Revisar GITHUB_GIST_TOKEN/GIST_ID de este servicio (¿token revocado o rotado?).\n{utc_now_str()}")
++    send(msg); log.error(msg.replace("\n", " | "))
++
++
+ def _wait_for_entry_gate():
+     while ct_now().hour * 60 + ct_now().minute < ENTRY_GATE_MINUTES:
+         log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando la hora de entrada ({ENTRY_GATE_MINUTES // 60}:{ENTRY_GATE_MINUTES % 60:02d} CT)...")
+@@ -293,19 +317,34 @@ def _hand_off_to_pi(side: int, direction_str: str, intento: int, today_str: str)
+                f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
+         send(msg); log.error(msg.replace("\n", " | "))
+         return False
+-    existing = load_order_signal()
++    try:
++        existing = load_order_signal_strict()
++    except GistError as e:
++        _gist_error_exit("leer la orden pendiente", e)
++        return False
+     if existing:
+         msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
+                f"ERROR: ya hay una señal de {existing.get('date')} sin consumir por el Pi -- no se sobreescribe (evita perder o duplicar una orden real). "
+                f"Verificar que pi_executor.py (GLITCH_PRODUCT={REAL_PRODUCT_KEY}) este corriendo en el Pi. No se envia señal nueva hoy.\n{utc_now_str()}")
+         send(msg); log.error(msg.replace("\n", " | "))
+         return False
+-    save_order_signal({
++    payload = {
+         "date": today_str, "side": side, "direction": direction_str,
+         "ticker": REAL_CFG.spec.yf_ticker, "product_code": REAL_CFG.spec.product_code,
+         "nc": REAL_CFG.nc, "sl_ticks": REAL_CFG.sl_ticks, "tp_ticks": REAL_CFG.tp_ticks,
+         "product": REAL_PRODUCT_KEY, "intento": intento, "dry_run": False,
+-    })
++    }
++    try:
++        save_order_signal_strict(payload)
++        written = load_order_signal_strict()                  # lectura posterior: la orden DEBE estar antes de anunciarla
++    except GistError as e:
++        _gist_error_exit("escribir/verificar la orden", e)
++        return False
++    if written != json.loads(json.dumps(payload, default=str)):
++        msg = (f"{PREFIX}\nSTATUS: ERROR\nERROR: la orden NO quedo escrita en el Gist (la lectura posterior no coincide). "
++               f"No se anuncia señal; verificar {ORDER_FILE} a mano.\n{utc_now_str()}")
++        send(msg); log.error(msg.replace("\n", " | "))
++        return False
+     real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
+                 f"Direction: {direction_str}\nContracts: {REAL_CFG.nc}\n"
+                 f"SL/TP: {REAL_CFG.sl_ticks}/{REAL_CFG.tp_ticks} ticks\n"
+@@ -720,7 +759,14 @@ def run():
+         return
+ 
+     today_str = str(dt.date.today())
+-    paper_log = load_log()
++    if DRY_RUN:
++        paper_log = load_log()
++    else:
++        try:
++            paper_log = load_log_strict()    # un 401/timeout NO se lee como [] (-> 'Intento #1', 'Dia 1 de paper')
++        except GistError as e:
++            _gist_error_exit("leer el historial", e)
++            return
+     # Logica de reinicio de intento (09-sep-2026, ver GLITCH_RESEARCH_LOG.md)
+     # -- resuelve la limitacion documentada anteriormente ("Equity/Dias
+     # vs. Estimado acumulados sin limite de intento"). WR/Ciclos NO se
+diff --git a/glitch/tests/test_mgc_handoff.py b/glitch/tests/test_mgc_handoff.py
+index 0ebf928..25452c9 100644
+--- a/glitch/tests/test_mgc_handoff.py
++++ b/glitch/tests/test_mgc_handoff.py
+@@ -94,6 +94,9 @@ class Env:
+         monkeypatch.setattr(s, "send", lambda m: self.sent.append(m))
+         monkeypatch.setattr(s, "_gist_load_state", lambda f: dict(self.store.get(f, {})))
+         monkeypatch.setattr(s, "_gist_save_state", lambda f, d: self.store.__setitem__(f, d))
++        monkeypatch.setattr(s, "_gist_load_state_strict", lambda f: dict(self.store.get(f, {})))      # modo real: lectura/escritura estrictas (V1)
++        monkeypatch.setattr(s, "_gist_save_state_strict", lambda f, d: self.store.__setitem__(f, d))
++        monkeypatch.setattr(s, "load_log_strict", lambda: [])
+         monkeypatch.setattr(s, "ct_now", lambda: dt.datetime(2026, 10, 19, hh, mm, tzinfo=s.CT))
+         monkeypatch.setattr(s, "flatten_minutes_ct", lambda d: flatten_min)
+         monkeypatch.setattr(s, "is_trading_day", lambda: True)
+@@ -159,3 +162,40 @@ class TestHandoff:
+         import scheduler.geometry_mgc_scheduler as s
+         s = importlib.reload(s)
+         assert s.DRY_RUN is True and s.PROFIT_TARGET == 9_000 and s.MLL_THRESHOLD == -4_500 and s.CFG.nc == 6
++
++
++class TestGistFailuresAreNotSwallowed:
++    """V1 (24-oct-2026): con el token del Gist revocado (401) el modo real NO debe anunciar una señal inexistente."""
++    def _env(self, s, monkeypatch, **kw):
++        e = Env(s, monkeypatch, **kw)
++        from execution.gist_store import GistError
++        return e, GistError
++
++    def test_history_read_failure_gives_error_and_nothing_else(self, real_sched, monkeypatch):
++        e, GistError = self._env(real_sched, monkeypatch)
++        def boom(): raise GistError("lectura de geometry_mgc_log.json fallo: 401")
++        monkeypatch.setattr(real_sched, "load_log_strict", boom)
++        real_sched.run()
++        assert len(e.sent) == 1 and "STATUS: ERROR" in e.sent[0] and "leer el historial" in e.sent[0]
++        assert e.store[real_sched.ORDER_FILE] == {}
++
++    def test_order_write_failure_does_not_announce(self, real_sched, monkeypatch):
++        e, GistError = self._env(real_sched, monkeypatch)
++        def boom(f, d): raise GistError("escritura fallo: 401")
++        monkeypatch.setattr(real_sched, "_gist_save_state_strict", boom)
++        real_sched.run()
++        assert any("STATUS: ERROR" in m for m in e.sent) and not any("SEÑAL ENVIADA AL PI" in m for m in e.sent)
++
++    def test_lost_write_is_detected_by_read_back(self, real_sched, monkeypatch):
++        e, GistError = self._env(real_sched, monkeypatch)
++        monkeypatch.setattr(real_sched, "_gist_save_state_strict", lambda f, d: None)       # PATCH 200 que no guarda
++        real_sched.run()
++        assert any("NO quedo escrita" in m for m in e.sent) and not any("SEÑAL ENVIADA AL PI" in m for m in e.sent)
++
++    def test_unreadable_pending_order_is_error_not_silent_pass(self, real_sched, monkeypatch):
++        e, GistError = self._env(real_sched, monkeypatch)
++        def boom(f): raise GistError("lectura fallo: 401")
++        monkeypatch.setattr(real_sched, "_gist_load_state_strict", boom)
++        real_sched.run()
++        assert any("leer la orden pendiente" in m for m in e.sent) and not any("SEÑAL ENVIADA AL PI" in m for m in e.sent)
++
