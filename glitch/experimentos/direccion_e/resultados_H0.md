@@ -1,6 +1,6 @@
 # resultados_H0 — mapa de probabilidades (Parte H)
 
-IC95 = percentiles 2.5–97.5 de 20 remuestras de la HISTORIA REAL (bloques de 5 días; MGC 488 días limpios, MES 492 días), cada una con su banco de 20,000 intentos/vidas. Cuenta lo incierto del conjunto de días, **no** lo incierto del futuro (cambio de régimen). Estados: MEDIDO / MODELADO / SUPUESTO / DESCONOCIDO.
+IC95 = percentiles 2.5–97.5 de **20** remuestras (modo `--quick`; con 20 el IC es aproximado y tiende a ser algo ancho; `python h0_mapa.py` sin `--quick` usa 100 y tarda ≈ 1 h) de la HISTORIA REAL (bloques de 5 días; MGC 488 días limpios, MES 492 días), cada una con su banco de 20,000 intentos/vidas. Cuenta lo incierto del conjunto de días, **no** lo incierto del futuro (cambio de régimen). Estados: MEDIDO / MODELADO / SUPUESTO / DESCONOCIDO.
 
 ## Filas 1–2. MGC (3 micros, SL = TP = 364 ticks, 7:15→14:30 CT, datos limpios de contrato; FLATTEN = cierre a las 14:30 sin tocar barrera)
 
