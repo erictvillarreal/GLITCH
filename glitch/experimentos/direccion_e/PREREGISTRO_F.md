@@ -7,7 +7,7 @@
 ## H1 — Geometría que reduce FLATTEN (barreras simétricas más cortas)
 - **Mecanismo.** Con SL = TP = 364 el 56 % de los días terminan en FLATTEN (P&L continuo, media ≈ $0, desvío ≈ $420): son días «desperdiciados» para el contador de días ≥ $150 y para el MLL. Una barrera más cercana convierte una parte en TP/SL.
 - **Qué cambia.** SL = TP = **300 ticks** (≈ 0.7 × el rango mediano del día, 423 ticks; el valor actual es 0.86×), nc = 3, todo lo demás igual. Un solo valor, sin barrido.
-- **Predicción (dirección esperada y por qué).** FLATTEN baja a ≈ 45–50 %. **Se espera RECHAZO en valor**: la Parte D mostró que barreras cortas con 3 micros reparten pagos pequeños y *bajan* el cobrado (−$400 por XFA en los brackets de 100–150 ticks), y 728×3 (que sube FLATTEN) paga +$100. Se pre-registra para cerrarla, no porque se espere que gane.
+- **Predicción (dirección esperada y por qué).** FLATTEN baja a ≈ 45–50 %. **Se espera RECHAZO en valor**: la Parte D mostró que barreras cortas con 3 micros reparten pagos pequeños y *bajan* el cobrado (−$400 por XFA, `xfa/resultados_D.md`; los anchos exactos no se re-verificaron al escribir esto), y 728×3 (que sube FLATTEN) paga +$100. Se pre-registra para cerrarla, no porque se espere que gane.
 - **Rechazo.** H1 se rechaza si el límite superior del IC95 de la diferencia pareada de cobrado por XFA es < 0, **o** si el WR de equilibrio sube a > 48.6 %. **Se acepta como candidata** solo si el límite inferior del IC95 > 0 con Holm (α/4) **y** el equilibrio ≤ 48.3 %.
 - **Potencia.** Diferencias de cobrado de ≈ $50 (7 %) tienen EE de bootstrap ≈ $20–35 por la varianza de 488 días: detecta ≥ ~$70; efectos menores = «sin potencia».
 - **Gates.** G1 (cargador limpio, parche `mgc_loader_contract_filter`), G2 (Holm sobre 4), G3 (neto anual adicional ≥ $500 con IC), G4 (paper en sombra ≥ 30 días + kill-switch + aprobación; requiere revisión humana, regla 4).
@@ -37,4 +37,4 @@
 - **Gates.** G1 (registro verificado contra TopstepX), G2 sobre la medición, G3 (valor con la distribución medida), G4 (cambia la forma de entrar con capital real: revisión humana).
 
 ## Enmiendas
-(ninguna al momento de escribir)
+- 24-oct-2026, antes de cualquier resultado de F4: se quitó una cifra de anchos de barrera («100–150 ticks») que no se había re-verificado en H1. Sin efecto sobre reglas ni parámetros.
