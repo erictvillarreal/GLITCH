@@ -144,6 +144,7 @@ from execution.gist_store import save_log_strict as _gist_save_log_strict
 from execution.gist_store import load_state as _gist_load_state
 from execution.gist_store import save_log as _gist_save_log
 from execution.gist_store import save_state as _gist_save_state
+from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, slippage_ticks
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES
 
@@ -394,10 +395,8 @@ def _warn_if_contract_spec_differs(contract: dict) -> None:
         log.warning(f"_warn_if_contract_spec_differs: {e}")
 
 
-def _reference_price(client: ProjectXClient, contract_id) -> float:
-    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
-    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
-    y proteccion siempre juntas, sin ventana desnuda)."""
+def _reference_quote(client: ProjectXClient, contract_id) -> tuple:
+    """(precio, marca de tiempo de la barra o None). Igual que _reference_price pero conserva el `t` de la barra para medir su antiguedad (G1a)."""
     bars = client.get_recent_bars(contract_id, minutes_back=15, live=False)
     if not bars:
         raise RuntimeError(f"Sin barras de los ultimos 15 min en ProjectX para contract_id={contract_id!r} "
@@ -406,8 +405,15 @@ def _reference_price(client: ProjectXClient, contract_id) -> float:
     last = bars[-1]
     for k in ("close", "c", "last", "lastPrice"):
         if k in last and last[k] is not None:
-            return float(last[k])
+            return float(last[k]), (str(last["t"]) if last.get("t") is not None else None)
     raise RuntimeError(f"Barra de ProjectX sin campo de precio reconocible: {last!r}")
+
+
+def _reference_price(client: ProjectXClient, contract_id) -> float:
+    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
+    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
+    y proteccion siempre juntas, sin ventana desnuda)."""
+    return _reference_quote(client, contract_id)[0]
 
 
 # ── Resolucion de OrderSide -- gateada, nunca adivinada ──────────────────
@@ -900,8 +906,11 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
 
     entry_price = state["entry_price"]
     entry_estimated = True
+    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
     rec = _lookup_order(client, account_id, state["entry_order_id"])
     fill = _extract_fill_price(rec) if rec else None
+    if fill is None:
+        fill = state.get("fill_price")
     if fill is not None:
         entry_price, entry_estimated = fill, False
 
@@ -926,6 +935,16 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
         if outcome.get(flag):
             entry[flag] = True
+    if not entry_estimated:
+        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
+        if slip is not None:
+            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
+    if not outcome.get("exit_price_estimated", False) and outcome["result"] in ("TP", "SL"):
+        xs = exit_slip_ticks(signal["side"], outcome["result"], state.get("tp_price"), state.get("sl_price"), exit_price, CFG.spec.tick_size)
+        if xs is not None:
+            entry["exec_exit"] = {"result": outcome["result"], "trigger": state.get("tp_price") if outcome["result"] == "TP" else state.get("sl_price"), "exit_price": exit_price, "slip_exit_ticks": xs}
+    if state.get("exec"):
+        entry["exec"] = {**state["exec"], **({"fill_price": entry_price, "slip_ticks": slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)} if not entry_estimated else {})}
     if signal.get("nc_signal") is not None:
         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
     if outcome.get("orphan_orders"):
@@ -1173,14 +1192,20 @@ def _validate_signal(signal: dict) -> Optional[str]:
     return None
 
 
+_LAST_EMPTY_POLL = None      # epoch del ultimo poll SIN señal (G1a)
+
+
 def run_once():
     try:
         reconcile_if_needed()
 
         signal = load_order_signal()
         if not signal:
+            global _LAST_EMPTY_POLL
+            _LAST_EMPTY_POLL = time.time()                     # G1a: acota el retraso del polling (la señal se escribio despues de este instante)
             log.info("Sin señal pendiente -- nada que hacer.")
             return
+        _t_seen = time.time()                                  # G1a: instante en que el Pi ve la señal (polling de 120 s)
 
         if not _signal_is_current(signal):
             return
@@ -1251,7 +1276,10 @@ def run_once():
         if MLL_GUARD:
             log.info(f"guardia de MLL: {_mll_why}")
 
-        reference_price = _reference_price(client, contract_id)
+
+        t_signal_seen = _t_seen
+        reference_price, ref_bar_t = _reference_quote(client, contract_id)
+        t_ref_local = time.time()
         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
         sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
 
@@ -1261,6 +1289,7 @@ def run_once():
         if not _is_test_signal(signal):
             _claim_signal(signal)
 
+        t_send = time.time()
         try:
             bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
                                            tp_price, sl_price, verified_map)
@@ -1279,6 +1308,7 @@ def run_once():
             log.error(msg.replace("\n", " | "))
             return
 
+        t_ack = time.time()
         state = {
             "phase": "bracket_open", "signal": signal, "entry_price": reference_price,
             "entry_order_id": bracket["entry_order_id"], "tp_price": tp_price, "sl_price": sl_price,
@@ -1300,9 +1330,23 @@ def run_once():
                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
                  f"invertido.\n{utc_now_str()}")
 
+        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
+        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
+        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
+        exec_rec = build_exec_record(side=signal["side"], nc=signal["nc"], tick_size=CFG.spec.tick_size, ref_price=reference_price,
+                                     t_signal_seen=t_signal_seen, t_ref_bar=ref_bar_t, t_ref_local=t_ref_local, t_send=t_send, t_ack=t_ack,
+                                     fill_price=open_fill, fill_time=extract_fill_time(entry_rec), t_prev_empty_poll=_LAST_EMPTY_POLL)
+        state["exec"] = exec_rec
+        if open_slip is not None:
+            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
+        save_pi_state(state)
         msg = (f"{PREFIX}\n[OPEN]\n"
                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
+                  else "Fill de entrada no leido aun (se registra al cierre)\n")
+               + f"Latencia: referencia→envío {exec_rec['lat_ref_to_send_ms']} ms · envío→ack {exec_rec['lat_send_to_ack_ms']} ms · "
+               f"antigüedad de la barra {exec_rec['ref_bar_age_s']} s · señal→envío {exec_rec['lat_signal_to_send_ms'] / 1000:.0f} s\n"
+               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
                + utc_now_str())
         send(msg)
