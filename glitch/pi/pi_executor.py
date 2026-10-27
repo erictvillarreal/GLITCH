@@ -135,6 +135,7 @@ require_env(
 
 from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
 from execution.ct_logging import setup_ct_logging
+from execution.roll_rules import apply_roll_rule
 from execution.session_calendar import flatten_minutes_ct
 from execution.gist_store import load_log as _gist_load_log
 from execution.gist_store import load_log_strict as _gist_load_log_strict
@@ -349,11 +350,18 @@ def resolve_contract_id(client: ProjectXClient, product_code: str) -> dict:
         raise RuntimeError(f"No se encontro contrato para product_code={product_code!r} en ProjectX.")
     active = [c for c in matches if c.get("activeContract") is True]
     pool = active or matches
+    if not active:
+        # J4-f (26-oct-2026; NEEDS HUMAN REVIEW): sin la marca `activeContract` el "mas cercano" es, para el oro, el contrato que ya paso su aviso de
+        # entrega (MGCV6 vence ~28-oct). Se aplica la MISMA regla de roll determinista que usan los schedulers (execution/contracts.py::ROLL_RULES); para
+        # productos sin regla (MES) no cambia nada. Si la regla vaciara la lista, apply_roll_rule devuelve la original.
+        by_exp = sorted(matches, key=lambda c: c.get("expirationDate", ""))
+        kept = {n for n, _ in apply_roll_rule(product_code, [(c.get("name", ""), c.get("expirationDate", "")) for c in by_exp], ct_now().date())}
+        pool = [c for c in by_exp if c.get("name", "") in kept] or matches
     pool.sort(key=lambda c: c.get("expirationDate", ""))
     chosen = pool[0]
     if not active:
-        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano "
-                    f"({chosen.get('name')}), que puede NO ser el front month por volumen.")
+        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano que no "
+                    f"haya pasado su ventana de roll ({chosen.get('name')}), que puede NO ser el front month por volumen.")
     else:
         nearest = sorted(matches, key=lambda c: c.get("expirationDate", ""))[0]
         if nearest.get("id") != chosen.get("id"):
