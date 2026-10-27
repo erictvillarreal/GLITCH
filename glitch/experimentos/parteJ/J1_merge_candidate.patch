@@ -1,0 +1,2995 @@
+diff --git a/Procfile b/Procfile
+index 764674f..15f9f2f 100644
+--- a/Procfile
++++ b/Procfile
+@@ -1,2 +1,3 @@
+ worker: python glitch/scheduler/combo2d_scheduler.py
+ worker-geometry: python glitch/scheduler/geometry_scheduler.py
++worker-geometry-mgc: python glitch/scheduler/geometry_mgc_scheduler.py
+diff --git a/glitch/T4_MGC_HANDOFF.md b/glitch/T4_MGC_HANDOFF.md
+new file mode 100644
+index 0000000..3636710
+--- /dev/null
++++ b/glitch/T4_MGC_HANDOFF.md
+@@ -0,0 +1,7 @@
++# T4 — Handoff real de Cerebro 2 (MGC) al Pi — rama `feat/t4-mgc-handoff` (desde `origin/cerebro2-dev`)
++El reporte completo (diagnóstico del feed, plan de ensayo, criterios) está en la rama `feat/t4-pi-mgc`: `REPORT_T4_MGC_PIPELINE_2026-10-12.md`. NEEDS HUMAN REVIEW (CLAUDE.md regla 4).
++Cambios en esta rama (todo con pruebas en `tests/test_mgc_handoff.py`, 20 pruebas; 156 pasan junto a las suites relacionadas):
++1. `scheduler/geometry_mgc_scheduler.py`: con `DRY_RUN=false` escribe `orden_pendiente_<GLITCH_PRODUCT>.json` (por defecto `orden_pendiente_mgc.json`) con el mismo contrato de campos que `geometry_scheduler.py` (MES) y termina; se niega a sobrescribir una señal sin consumir y a enviar después del flatten (con calendario de cierres anticipados). La geometría de la señal es la de la cuenta REAL (XFA 50K, nc 3, SL=TP=364), no la del paper de 150K. Los umbrales de intento pasan a los de la cuenta real en modo real; el paper no cambia.
++2. `strategies/geometry_pure.py`: una sola fuente de verdad — `CANDIDATES["MGC"]` = XFA 50K (SL=TP=364, nc 3); `MGC_XFA_100K` (nc 4), `MGC_XFA_150K` (nc 6, paper de Railway); el candidato de Combine anterior queda como `MGC_COMBINE_LEGACY` (sin uso).
++3. `execution/contracts.py`: regla determinista de roll para el oro (descarta el contrato a 2 días hábiles de su primer día de aviso): `MGCV6` deja de ser front el 28-sep-2026, `MGCZ6` lo es hasta ~26-nov.
++Invariante que el Pi exige: `signal["product"]` idéntico a su `GLITCH_PRODUCT` (si no, la trata como señal de ENSAYO: ≤ 2 contratos y sin marcador at-most-once).
+diff --git a/glitch/core/funded_account.py b/glitch/core/funded_account.py
+index 55997c7..0afd71b 100644
+--- a/glitch/core/funded_account.py
++++ b/glitch/core/funded_account.py
+@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
+ from typing import List, Optional
+ from enum import Enum
+ 
++import numpy as np
++
+ 
+ class XFAStatus(Enum):
+     ACTIVE          = "active"
+@@ -110,6 +112,16 @@ class XFAAccount:
+     """
+     spec: XFASpec = field(default_factory=lambda: XFA_50K)
+ 
++    # SIN RESOLVER contra fuente primaria completa (01-sep-2026): ¿el MLL
++    # se fija en $0 SOLO en el primer payout, o EN CADA payout? El codigo
++    # anterior a este cambio asumia "cada payout" de forma hardcodeada,
++    # sin exponer la alternativa -- eso NO es lo mismo que "confirmado".
++    # "every_payout" preserva el comportamiento anterior (default, para no
++    # romper nada que ya dependiera de el); "first_payout_only" es la
++    # alternativa sin probar. NUNCA reportar un numero de negocio usando
++    # solo uno de los dos sin el otro al lado como sensibilidad.
++    mll_reset_policy: str = "every_payout"  # "every_payout" | "first_payout_only"
++
+     balance: float           = field(init=False)
+     mll_floor: float         = field(init=False)
+     status: XFAStatus        = field(init=False)
+@@ -120,6 +132,7 @@ class XFAAccount:
+     lifetime_payout_usd: float = field(default=0.0, init=False)
+     days_since_last_trade: int = field(default=0, init=False)
+     day_log: List[DayRecord] = field(default_factory=list, init=False)
++    _has_had_first_payout: bool = field(default=False, init=False)
+ 
+     def __post_init__(self):
+         self.balance   = 0.0
+@@ -181,9 +194,16 @@ class XFAAccount:
+         trader_take = gross * self.spec.profit_split_trader
+ 
+         self.balance -= gross
+-        # CONFIRMADO via help.topstep.com: despues del primer payout el MLL
+-        # se fija en $0 permanentemente. Ya no hace trailing.
+-        self.mll_floor = 0.0
++        # SIN RESOLVER (ver mll_reset_policy arriba): la cita original de
++        # help.topstep.com decia "el MLL se fija en $0 tras el primer
++        # payout" -- pero nunca se verifico si eso aplica SOLO la primera
++        # vez o CADA vez. "every_payout" fuerza el floor a 0 siempre (el
++        # comportamiento que este codigo tenia hardcodeado antes de esto);
++        # "first_payout_only" solo lo fuerza la primera vez, dejando que
++        # el trailing normal de end_of_day() gobierne despues.
++        if self.mll_reset_policy == "every_payout" or not self._has_had_first_payout:
++            self.mll_floor = 0.0
++        self._has_had_first_payout = True
+         self.winning_days_count = 0
+         self.lifetime_payouts += 1
+         self.lifetime_payout_usd += trader_take
+@@ -268,3 +288,310 @@ def simulate_xfa_paths(dist, spec: XFASpec = XFA_50K, n_paths: int = 5000,
+         "avg_days_to_eligible": float(np.mean(days_to_eligible)) if days_to_eligible else None,
+         "payout": payouts_usd,
+     }
++
++
++def simulate_xfa_lifetime(dist, spec: XFASpec = XFA_50K, mll_reset_policy: str = "every_payout",
++                           n_paths: int = 5000, max_days: int = 756, seed: int = 7) -> dict:
++    """
++    Simula la VIDA COMPLETA de N cuentas XFA -- a diferencia de
++    simulate_xfa_paths() (que se detiene en el primer payout o blow),
++    esto encadena payouts sucesivos: la cuenta sigue operando despues de
++    cada payout (balance reducido, NO reseteado a cero) hasta que truena
++    (BLOWN_MLL) o se acaba max_days sin haber truenado (right-censored --
++    ver prob_still_alive_at_horizon, un promedio que ignora esto
++    SUBESTIMA el verdadero valor esperado).
++
++    max_days=756 (~3 años habiles) por default -- horizonte largo a
++    proposito, no un numero de negocio en si.
++
++    mll_reset_policy: "every_payout" o "first_payout_only" -- ver
++    XFAAccount.mll_reset_policy. SIEMPRE correr ambos y reportarlos
++    lado a lado, nunca uno solo como respuesta final (pregunta sin
++    resolver contra fuente primaria completa -- ver docstring del modulo
++    y GLITCH_RESEARCH_LOG.md).
++
++    Vectorizado sobre el eje de paths (04-sep-2026): la version anterior
++    era un loop Python escalar path-por-path/dia-por-dia -- su costo
++    real depende de cuantos dias corre cada path antes de tronar
++    (`break` temprano), y ese costo varia ~75x entre combinaciones de
++    bajo blow-rate (WR cerca de WR_natural, ~12ms/corrida) y alto
++    blow-rate cercano a 0 -- osea alta supervivencia, RR/WR altos, que
++    corren el horizonte casi completo (~900ms/corrida). Un benchmark de
++    un solo punto no representa ese rango. Validado bit-a-bit contra la
++    version escalar anterior en 32 casos (deterministas y estocasticos,
++    las 3 cuentas, ambas politicas, WR/RR bajos y altos) antes de
++    reemplazarla -- ver GLITCH_RESEARCH_LOG.md.
++    """
++    import numpy as np
++    rng = np.random.default_rng(seed)
++    pnls = dist.sample(n_paths * max_days, rng).reshape(n_paths, max_days)
++
++    mll_distance = spec.mll_distance
++    floor_lock_level = spec.floor_lock_level
++    min_winning_day_usd = spec.min_winning_day_usd
++    winning_days_required = spec.winning_days_required
++    payout_pct = spec.payout_pct_of_balance
++    payout_cap = spec.payout_cap_usd
++    split = spec.profit_split_trader
++
++    balance = np.zeros(n_paths)
++    mll_floor = np.full(n_paths, spec.floor_start)
++    alive = np.ones(n_paths, dtype=bool)
++    winning_days_count = np.zeros(n_paths, dtype=np.int64)
++    lifetime_payouts = np.zeros(n_paths, dtype=np.int64)
++    lifetime_payout_usd = np.zeros(n_paths)
++    has_had_first_payout = np.zeros(n_paths, dtype=bool)
++    day_number = np.zeros(n_paths, dtype=np.int64)
++
++    for day in range(max_days):
++        active_at_start = alive
++        day_pnl = pnls[:, day]
++
++        balance = np.where(active_at_start, balance + day_pnl, balance)
++        day_number = np.where(active_at_start, day + 1, day_number)
++
++        new_floor_candidate = balance - mll_distance
++        floor_should_update = active_at_start & (new_floor_candidate > mll_floor)
++        mll_floor = np.where(floor_should_update, np.minimum(new_floor_candidate, floor_lock_level), mll_floor)
++
++        newly_blown = active_at_start & (balance <= mll_floor)
++        alive = alive & ~newly_blown
++
++        still_active_today = active_at_start & ~newly_blown
++        counted = still_active_today & (day_pnl >= min_winning_day_usd)
++        winning_days_count = np.where(counted, winning_days_count + 1, winning_days_count)
++
++        eligible = still_active_today & (winning_days_count >= winning_days_required)
++        if eligible.any():
++            gross = np.minimum(balance[eligible] * payout_pct, payout_cap)
++            trader_take = gross * split
++            balance = balance.copy()
++            balance[eligible] -= gross
++            if mll_reset_policy == "every_payout":
++                mll_floor = mll_floor.copy()
++                mll_floor[eligible] = 0.0
++            else:
++                reset_now = eligible & (~has_had_first_payout)
++                if reset_now.any():
++                    mll_floor = mll_floor.copy()
++                    mll_floor[reset_now] = 0.0
++            has_had_first_payout = has_had_first_payout.copy()
++            has_had_first_payout[eligible] = True
++            winning_days_count = winning_days_count.copy()
++            winning_days_count[eligible] = 0
++            lifetime_payouts = lifetime_payouts.copy()
++            lifetime_payouts[eligible] += 1
++            lifetime_payout_usd = lifetime_payout_usd.copy()
++            lifetime_payout_usd[eligible] += trader_take
++
++    n_never_eligible = int((lifetime_payouts == 0).sum())
++    n_still_alive_at_horizon = int(alive.sum())
++    payouts_arr = lifetime_payouts.astype(float)
++    days_arr = day_number.astype(float)
++    usd_arr = lifetime_payout_usd
++
++    return {
++        "n_paths": n_paths,
++        "mll_reset_policy": mll_reset_policy,
++        "max_days_horizon": max_days,
++        "prob_still_alive_at_horizon": n_still_alive_at_horizon / n_paths,
++        "prob_never_reached_first_payout": n_never_eligible / n_paths,
++        "avg_lifetime_payouts": float(payouts_arr.mean()),
++        "median_lifetime_payouts": float(np.median(payouts_arr)),
++        "payouts_p10_p90": (float(np.percentile(payouts_arr, 10)), float(np.percentile(payouts_arr, 90))),
++        "avg_lifetime_days": float(days_arr.mean()),
++        "median_lifetime_days": float(np.median(days_arr)),
++        "avg_lifetime_payout_usd": float(usd_arr.mean()),
++        "median_lifetime_payout_usd": float(np.median(usd_arr)),
++        "payout_usd_p10_p90": (float(np.percentile(usd_arr, 10)), float(np.percentile(usd_arr, 90))),
++    }
++
++
++# ── XFA Scaling Plan (04-sep-2026) ──────────────────────────────────────────
++# Tabla confirmada por el usuario contra la imagen oficial de
++# help.topstep.com ("What is the Scaling Plan?"). La transcripcion cruda
++# tenia una ambiguedad en las filas de 100K/150K (una fila generica
++# "$3,000-$4,500" con un valor de 100K que choca con una fila aparte
++# "> $3,000 (100K) -> 10"). Se resuelve aqui usando el patron que el
++# propio usuario senalo como no-coincidencia: el techo de contratos de
++# CADA cuenta se alcanza exactamente en su propio mll_distance (50K: 5
++# lotes en $2,000; 100K: 10 lotes en $3,000; 150K: 15 lotes en $4,500).
++# Bins/lots por cuenta, indexados por mll_distance (clave inequivoca ya
++# usada en todo el repo para identificar tamano de cuenta XFA):
++#   bins[i]  = umbral de balance donde empieza el siguiente tier
++#   lots[i]  = lotes mini-equivalentes permitidos en ese tier
++# np.searchsorted(bins, balance, side="right") da el indice correcto en
++# `lots` para cualquier balance (incluye balances negativos -> tier 0).
++XFA_SCALING_PLAN = {
++    2_000.0: {  # 50K
++        "bins": np.array([1_500.0, 2_000.0]),
++        "lots": np.array([2, 3, 5]),
++    },
++    3_000.0: {  # 100K
++        "bins": np.array([1_500.0, 2_000.0, 3_000.0]),
++        "lots": np.array([3, 4, 5, 10]),
++    },
++    4_500.0: {  # 150K
++        "bins": np.array([1_500.0, 2_000.0, 3_000.0, 4_500.0]),
++        "lots": np.array([3, 4, 5, 10, 15]),
++    },
++}
++
++# Ratio lote-mini : contrato-micro. Default 10:1 (la gran mayoria de
++# micros, incluye MES/MGC/M2K/MCL/M6E). Excepciones documentadas en el
++# mismo articulo de Topstep -- ninguno de los 7 productos en
++# strategies/geometry_pure.py.SPECS cae en estas excepciones hoy, se
++# deja lista para cuando se agregue SIL/MBT/MET.
++RATIO_MINI_TO_MICRO = {"SIL": 5, "MBT": 1, "MET": 1}
++
++
++def dynamic_nc_for_balance(balance: "np.ndarray", mll_distance: float, product_code: str = "") -> "np.ndarray":
++    """
++    Contratos MICRO maximos permitidos, vectorizado sobre `balance`
++    (shape (n_paths,) o escalar), segun el Scaling Plan real de la
++    cuenta identificada por `mll_distance` (2000/3000/4500).
++    """
++    plan = XFA_SCALING_PLAN[mll_distance]
++    tier_idx = np.searchsorted(plan["bins"], balance, side="right")
++    lots = plan["lots"][tier_idx]
++    ratio = RATIO_MINI_TO_MICRO.get(product_code, 10)
++    return lots * ratio
++
++
++def simulate_xfa_lifetime_dynamic_nc(wr: float, sl_usd_per_contract: float, tp_usd_per_contract: float,
++                                      commission_roundturn: float, spec: XFASpec = XFA_50K,
++                                      product_code: str = "", nc_designed: float | None = None,
++                                      mll_reset_policy: str = "every_payout",
++                                      n_paths: int = 5000, max_days: int = 756, seed: int = 7,
++                                      return_raw: bool = False) -> dict:
++    """
++    Misma mecanica que simulate_xfa_lifetime(), pero el numero de
++    contratos (`nc`) se recalcula CADA DIA para CADA path segun el
++    balance de inicio de ese dia, siguiendo el Scaling Plan real de la
++    XFA (dynamic_nc_for_balance()) -- no un `nc` fijo elegido una sola
++    vez por derive_nc(). A diferencia de la version de nc fijo, aqui la
++    entrada no es un `dist` con avg_win_usd/avg_loss_usd ya horneados
++    con un nc especifico -- es la economia POR CONTRATO
++    (sl_usd_per_contract/tp_usd_per_contract/commission_roundturn), para
++    que el $ del dia escale con el nc real de ese dia.
++
++    nc_designed: el `nc` que el diseno de riesgo (derive_nc(), k
++    consecutivo) eligio para este candidato. Si se da, `nc_today =
++    min(nc_designed, nc_permitido_por_scaling_plan)` -- el Scaling Plan
++    es un TECHO LEGAL adicional, no una orden de operar el maximo
++    posible. Omitirlo (None) simula "siempre el maximo legal", que es
++    una estrategia DISTINTA (mucho mas grande/riesgosa), no una
++    validacion del candidato original -- error cometido y corregido en
++    esta misma sesion, ver GLITCH_RESEARCH_LOG.md 04-sep-2026: al
++    validar los top-5 candidatos [P] sin este cap, el resultado
++    reflejaba una posicion ~5x mas grande que la diseñada, no el
++    candidato real.
++
++    Vectorizado sobre el eje de paths igual que simulate_xfa_lifetime()
++    -- un solo loop Python de `max_days` iteraciones; dynamic_nc_for_balance()
++    usa np.searchsorted sobre el array de balance completo en cada
++    iteracion, NO un loop escalar por path (ver GLITCH_RESEARCH_LOG.md,
++    incidente de rendimiento del 04-sep-2026 -- mismo error que ya se
++    diagnostico y arreglo para nc fijo, no repetirlo aqui).
++    """
++    rng = np.random.default_rng(seed)
++    is_win = rng.random((n_paths, max_days)) < wr
++
++    mll_distance = spec.mll_distance
++    floor_lock_level = spec.floor_lock_level
++    min_winning_day_usd = spec.min_winning_day_usd
++    winning_days_required = spec.winning_days_required
++    payout_pct = spec.payout_pct_of_balance
++    payout_cap = spec.payout_cap_usd
++    split = spec.profit_split_trader
++
++    balance = np.zeros(n_paths)
++    mll_floor = np.full(n_paths, spec.floor_start)
++    alive = np.ones(n_paths, dtype=bool)
++    winning_days_count = np.zeros(n_paths, dtype=np.int64)
++    lifetime_payouts = np.zeros(n_paths, dtype=np.int64)
++    lifetime_payout_usd = np.zeros(n_paths)
++    has_had_first_payout = np.zeros(n_paths, dtype=bool)
++    day_number = np.zeros(n_paths, dtype=np.int64)
++
++    for day in range(max_days):
++        active_at_start = alive
++
++        # nc de HOY = Scaling Plan aplicado al balance de AYER (inicio
++        # de sesion) -- "max contracts do not increase mid-session" --
++        # acotado por nc_designed si se dio (el Scaling Plan es un
++        # techo legal ADICIONAL, no una orden de operar el maximo).
++        nc_today = dynamic_nc_for_balance(balance, mll_distance, product_code)
++        if nc_designed is not None:
++            nc_today = np.minimum(nc_today, nc_designed)
++        net_win = nc_today * (tp_usd_per_contract - commission_roundturn)
++        net_loss = -nc_today * (sl_usd_per_contract + commission_roundturn)
++        day_pnl = np.where(is_win[:, day], net_win, net_loss)
++
++        balance = np.where(active_at_start, balance + day_pnl, balance)
++        day_number = np.where(active_at_start, day + 1, day_number)
++
++        new_floor_candidate = balance - mll_distance
++        floor_should_update = active_at_start & (new_floor_candidate > mll_floor)
++        mll_floor = np.where(floor_should_update, np.minimum(new_floor_candidate, floor_lock_level), mll_floor)
++
++        newly_blown = active_at_start & (balance <= mll_floor)
++        alive = alive & ~newly_blown
++
++        still_active_today = active_at_start & ~newly_blown
++        counted = still_active_today & (day_pnl >= min_winning_day_usd)
++        winning_days_count = np.where(counted, winning_days_count + 1, winning_days_count)
++
++        eligible = still_active_today & (winning_days_count >= winning_days_required)
++        if eligible.any():
++            gross = np.minimum(balance[eligible] * payout_pct, payout_cap)
++            trader_take = gross * split
++            balance = balance.copy()
++            balance[eligible] -= gross
++            if mll_reset_policy == "every_payout":
++                mll_floor = mll_floor.copy()
++                mll_floor[eligible] = 0.0
++            else:
++                reset_now = eligible & (~has_had_first_payout)
++                if reset_now.any():
++                    mll_floor = mll_floor.copy()
++                    mll_floor[reset_now] = 0.0
++            has_had_first_payout = has_had_first_payout.copy()
++            has_had_first_payout[eligible] = True
++            winning_days_count = winning_days_count.copy()
++            winning_days_count[eligible] = 0
++            lifetime_payouts = lifetime_payouts.copy()
++            lifetime_payouts[eligible] += 1
++            lifetime_payout_usd = lifetime_payout_usd.copy()
++            lifetime_payout_usd[eligible] += trader_take
++
++    n_never_eligible = int((lifetime_payouts == 0).sum())
++    n_still_alive_at_horizon = int(alive.sum())
++    payouts_arr = lifetime_payouts.astype(float)
++    days_arr = day_number.astype(float)
++    usd_arr = lifetime_payout_usd
++
++    result = {
++        "n_paths": n_paths,
++        "mll_reset_policy": mll_reset_policy,
++        "max_days_horizon": max_days,
++        "prob_still_alive_at_horizon": n_still_alive_at_horizon / n_paths,
++        "prob_never_reached_first_payout": n_never_eligible / n_paths,
++        "avg_lifetime_payouts": float(payouts_arr.mean()),
++        "median_lifetime_payouts": float(np.median(payouts_arr)),
++        "payouts_p10_p90": (float(np.percentile(payouts_arr, 10)), float(np.percentile(payouts_arr, 90))),
++        "avg_lifetime_days": float(days_arr.mean()),
++        "median_lifetime_days": float(np.median(days_arr)),
++        "avg_lifetime_payout_usd": float(usd_arr.mean()),
++        "median_lifetime_payout_usd": float(np.median(usd_arr)),
++        "payout_usd_p10_p90": (float(np.percentile(usd_arr, 10)), float(np.percentile(usd_arr, 90))),
++    }
++    if return_raw:
++        # Arrays por path -- para combinar con OTRAS corridas (seeds
++        # distintos = independientes) y estudiar sumas/joint-probabilities
++        # sobre multiples cuentas simultaneas (Camino C). No usado por el
++        # camino normal de un candidato individual.
++        result["raw_lifetime_payout_usd"] = usd_arr
++        result["raw_lifetime_payouts"] = payouts_arr
++        result["raw_lifetime_days"] = days_arr
++    return result
+diff --git a/glitch/execution/contracts.py b/glitch/execution/contracts.py
+index 82ffed2..88f62f3 100644
+--- a/glitch/execution/contracts.py
++++ b/glitch/execution/contracts.py
+@@ -110,15 +110,82 @@ def _get(path: str, params: dict, max_pages: int = 20) -> list[dict]:
+     return out
+ 
+ 
+-def resolve_front_month(product: str) -> tuple[str, str]:
++_MONTH_CODES = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
++
++# Regla de roll por producto (T4, 12-oct-2026; NEEDS HUMAN REVIEW). Topstep exige operar el front month = el vencimiento de mayor VOLUMEN
++# (help.topstep.com/8284108), no el de vencimiento mas cercano. Para el oro (GC/MGC) la liquidez migra del contrato bimestral que entra en mes de
++# entrega al siguiente ANTES del primer dia de aviso (FND = ultimo dia habil del mes previo al de entrega): MGCV6 (oct-2026) se quedo sin barras el
++# 1-oct-2026 (incidente de 700+ min sin datos, GLITCH_RESEARCH_LOG.md) -- justo despues de su FND (30-sep). `resolve_front_month` elegia el vencimiento
++# mas cercano, o sea MGCV6 hasta su ultimo dia de negociacion (~28-oct). Regla determinista (no depende de la API): se descarta el contrato cuando
++# faltan <= `bdays_before_fnd` dias habiles (solo fines de semana; feriados no modelados) para su FND. Los meses activos limitan los candidatos
++# (oro: feb/abr/jun/ago/oct/dic); si el filtro dejara cero candidatos, se vuelve al comportamiento anterior.
++ROLL_RULES = {
++    "MGC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
++    "GC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
++}
++
++
++def _ticker_month_year(product: str, ticker: str, ref_year: int):
++    m = re.match(rf"^{re.escape(product)}([FGHJKMNQUVXZ])(\d{{1,2}})$", ticker)
++    if not m:
++        return None
++    month = _MONTH_CODES[m.group(1)]
++    yy = int(m.group(2))
++    year = (ref_year // 100) * 100 + yy if yy >= 10 else (ref_year // 10) * 10 + yy
++    if year < ref_year - 5:
++        year += 10
++    return month, year
++
++
++def _add_business_days(d: dt.date, n: int) -> dt.date:
++    step = 1 if n >= 0 else -1
++    left = abs(n)
++    while left:
++        d += dt.timedelta(days=step)
++        if d.weekday() < 5:
++            left -= 1
++    return d
++
++
++def first_notice_day(year: int, month: int) -> dt.date:
++    """FND de un contrato de metales con entrega en (year, month): ultimo dia habil (lun-vie) del mes anterior."""
++    first = dt.date(year, month, 1)
++    d = first - dt.timedelta(days=1)
++    while d.weekday() >= 5:
++        d -= dt.timedelta(days=1)
++    return d
++
++
++def apply_roll_rule(product: str, candidates: list, today: dt.date) -> list:
++    """candidates: [(ticker, last_trade_date_iso)] ordenados por vencimiento. Aplica ROLL_RULES[product] si existe; si el filtro vaciara la lista, devuelve la original."""
++    rule = ROLL_RULES.get(product)
++    if not rule:
++        return candidates
++    kept = []
++    for ticker, ltd in candidates:
++        my = _ticker_month_year(product, ticker, today.year)
++        if my is None:
++            continue
++        month, year = my
++        if month not in rule["active_months"]:
++            continue
++        cutoff = _add_business_days(first_notice_day(year, month), -rule["bdays_before_fnd"])
++        if today >= cutoff:
++            continue
++        kept.append((ticker, ltd))
++    return kept or candidates
++
++
++def resolve_front_month(product: str, today: "dt.date | None" = None) -> tuple[str, str]:
+     """
+-    Contrato outright (no spread/combo) con vencimiento mas cercano,
+-    vigente HOY. Devuelve (ticker, last_trade_date_iso).
++    Contrato outright (no spread/combo) con vencimiento mas cercano que NO haya cruzado su ventana de roll (ver ROLL_RULES), vigente HOY.
++    Devuelve (ticker, last_trade_date_iso).
+ 
+     Lanza si no encuentra ninguno -- fallar ruidosamente es preferible a
+     tradear un ticker adivinado o quedarse con uno vencido.
+     """
+-    today_str = dt.date.today().isoformat()
++    today = today or dt.date.today()
++    today_str = today.isoformat()
+     results = _get("/futures/v1/contracts",
+                     {"product_code": product, "date": today_str, "active": "true", "limit": 250})
+     candidates = []
+@@ -132,6 +199,7 @@ def resolve_front_month(product: str) -> tuple[str, str]:
+     if not candidates:
+         raise RuntimeError(f"resolve_front_month: sin contratos activos validos para {product} en {today_str}")
+     candidates.sort(key=lambda x: x[1])
++    candidates = apply_roll_rule(product, candidates, today)
+     return candidates[0]
+ 
+ 
+diff --git a/glitch/execution/session_calendar.py b/glitch/execution/session_calendar.py
+new file mode 100644
+index 0000000..281325f
+--- /dev/null
++++ b/glitch/execution/session_calendar.py
+@@ -0,0 +1,39 @@
++"""
++Glitch — Calendario de sesion: flatten condicional en dias de cierre anticipado (25-sep-2026)
++================================================================================================
++Fuente oficial: help.topstep.com/en/articles/13350348-topstep-holiday-trading-hours -- "Close all positions 15 minutes
++before early close (e.g., close by 11:45 CT for a 12:00 CT close)". Las posiciones abiertas pasada esa hora se liquidan
++automaticamente. Los schedulers de produccion hacian flatten FIJO a las 14:30 CT sin excepcion -- en los dias de cierre anticipado
++que SI se operan (27-nov y 24-dic-2026) la posicion habria sido liquidada por Topstep antes de que el scheduler la cerrara,
++sin registro fiel del resultado.
++
++Aqui vive UNICAMENTE el dato de calendario (fuente unica para ambos schedulers, sin acoplarlos entre si). Los feriados de mercado
++cerrado siguen en is_trading_day() de cada scheduler.
++
++EARLY_CLOSE_BY_CT = hora oficial "Close positions by" (CT). El flatten del scheduler es esa hora menos FLATTEN_MARGIN_MIN (30
++min, mismo margen de siempre: 14:30 vs el corte normal de 15:10 CT).
++26-nov-2026 (Thanksgiving) figura aqui como defensa en profundidad: hoy is_trading_day() ya lo excluye por completo.
++Topstep solo publico 2026 y el 1-ene-2027 (cerrado); agregar fechas nuevas cuando se publiquen.
++"""
++import datetime as dt
++
++NORMAL_FLATTEN_MIN = 14 * 60 + 30
++FLATTEN_MARGIN_MIN = 30
++EARLY_CLOSE_BY_CT = {
++    dt.date(2026, 11, 26): (11, 45),
++    dt.date(2026, 11, 27): (12, 0),
++    dt.date(2026, 12, 24): (12, 0),
++}
++
++
++def flatten_minutes_ct(d: dt.date) -> int:
++    """Minutos desde medianoche CT a partir de los cuales hay que hacer flatten ese dia."""
++    close_by = EARLY_CLOSE_BY_CT.get(d)
++    if close_by is None:
++        return NORMAL_FLATTEN_MIN
++    return min(NORMAL_FLATTEN_MIN, close_by[0] * 60 + close_by[1] - FLATTEN_MARGIN_MIN)
++
++
++def is_flatten_time(now: dt.datetime) -> bool:
++    """now = datetime en CT."""
++    return now.hour * 60 + now.minute >= flatten_minutes_ct(now.date())
+diff --git a/glitch/scheduler/geometry_mgc_scheduler.py b/glitch/scheduler/geometry_mgc_scheduler.py
+new file mode 100644
+index 0000000..ed4d8b4
+--- /dev/null
++++ b/glitch/scheduler/geometry_mgc_scheduler.py
+@@ -0,0 +1,1118 @@
++"""
++GLITCH — Geometry MGC/XFA Scheduler (Cerebro 2, paper trading real) — 07-sep-2026
++====================================================================================
++Paper-trading en vivo del candidato de geometria pura MGC/150K
++(strategies/geometry_pure.py::CANDIDATES["MGC_XFA_150K"]) -- SL=TP=364
++ticks, nc=6, alternando sin señal predictiva, WR=0.50 objetivo (validado
++empiricamente: 49.97% con la ventana horaria original, 50.20% con la
++ventana corregida 7:00-15:00 CT -- ver GLITCH_RESEARCH_LOG.md, 06/07-sep-2026).
++
++DIFERENCIA DELIBERADA con scheduler/geometry_scheduler.py (MES/G2):
++
++1. Fuente de precio en vivo: MASSIVE, no Yahoo. Decision explicita del
++   usuario (04-sep-2026) -- la suscripcion de Massive ya esta pagada y
++   su delay es medible/consistente (a diferencia del de Yahoo, que fue
++   erratico y costo 2.5 semanas de incidentes con MES=F). geometry_scheduler.py
++   NO se puede reusar tal cual para MGC porque esta hardcodeado a
++   yfinance (`SPECS["MGC"].yf_ticker` es `None` -- deliberadamente, ver
++   ProductSpec, el scheduler de Yahoo se niega a adivinar un simbolo).
++   Este archivo usa execution.contracts.get_front_month() (misma fuente
++   de verdad que TODOS los schedulers) + una consulta directa a la API
++   de Massive para el precio actual, con el patron YA CORREGIDO
++   (sort=window_start.desc + limit=1, SIN rango de fechas -- ver
++   scripts/probe_massive_mgc_delay.py y GLITCH_RESEARCH_LOG.md,
++   "Leccion de API reusable", 07-sep-2026. El patron de rango+sort=asc
++   NO devuelve el dato mas reciente en este endpoint, no repetir eso.)
++
++2. Ventana de apertura: 7:00 CT (ventana de mayor liquidez REAL de
++   gold, confirmada con evidencia -- ver GLITCH_RESEARCH_LOG.md,
++   "HALLAZGO -- la ventana horaria de MGC..." 07-sep-2026), NO 9:30 CT
++   (esa es la convencion de equity index que geometry_scheduler.py usa
++   para MES). Flatten obligatorio a las 14:30 CT (mismo margen de 30
++   minutos antes del cierre de la ventana validada, 15:00 CT, que
++   geometry_scheduler.py ya usa para MES).
++
++3. ENTRY_WAIT_MINUTES: CONFIRMADO (09-sep-2026). El margen de espera
++   post-apertura antes de buscar el primer precio de entrada se midio
++   con `scripts/probe_massive_mgc_delay.py` en 2 corridas, en horarios
++   distintos del dia (manana y tarde/noche): 9.43 min y 9.50 min
++   promedio respectivamente, maximo observado 9.94 min -- diferencia
++   de 0.07 min entre corridas, rangos solapados. Delay de Massive
++   confirmado ESTABLE entre momentos del dia, a diferencia del de
++   Yahoo (que fue erratico y costo 2.5 semanas de incidentes con
++   MES=F). ENTRY_WAIT_MINUTES=13 incluye margen de seguridad sobre el
++   maximo observado. Ver GLITCH_RESEARCH_LOG.md, 08/09-sep-2026, para
++   el detalle de ambas corridas. Este scheduler SE NIEGA A ARRANCAR
++   (falla ruidosamente, con alerta a Telegram) si ENTRY_WAIT_MINUTES
++   alguna vez vuelve a quedar en None -- mismo principio de "fallar
++   explicito, no adivinar" ya aplicado a MASSIVE_API_KEY/yf_ticker/etc.
++   en el resto del repo.
++
++4. Reporte de progreso: WR empirico vs WR teorico (0.50), no pass_rate
++   de Combine -- este candidato es de geometria pura para XFA, no para
++   pasar el Combine (ver GLITCH_RESEARCH_LOG.md, "HALLAZGO ESTRUCTURAL
++   CENTRAL DE CEREBRO 2" -- el pass_rate de Combine de ESTE candidato
++   es solo 46.9%/47.5%, un numero completamente distinto que NO debe
++   confundirse con el WR reportado aqui). Este scheduler paper-tradea
++   la GEOMETRIA (TP/SL/FLATTEN dia a dia) -- NO simula la maquina de
++   estados completa de Combine+XFA (eso ya esta modelado por separado
++   en core/funded_account.py + core/prop_firm.py + el Monte Carlo de
++   flujo de caja, scripts/cerebro2_cashflow_monte_carlo.py).
++
++DRY_RUN=true siempre por default -- pasar a DRY_RUN=false es una
++decision explicita separada, no el default de este codigo.
++
++NO push a main todavia -- vive en cerebro2-dev hasta decision explicita
++de merge/deploy (ver GLITCH_RESEARCH_LOG.md, 07-sep-2026).
++
++Railway Cron: horario propuesto basado en la ventana de liquidez ya
++confirmada (7:00-14:30 CT) -- ajustar el lunes si hace falta, no
++bloqueante para dejarlo preparado. Ejemplo (UTC, CT=UTC-5 en horario de
++verano -- verificar DST vigente al momento de configurar el cron real):
++    0 12 * * 1-5    (12:00 UTC = 7:00 CT durante CDT)
++"""
++import os
++import sys
++import logging
++import time
++import datetime as dt
++from typing import Optional
++from zoneinfo import ZoneInfo
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
++
++# CHEQUEO UNIFICADO DE ARRANQUE -- mismo patron y mismo motivo que
++# combo2d_scheduler.py/geometry_scheduler.py. Debe correr ANTES de
++# telegram_bot/execution.contracts/execution.gist_store. Namespace de
++# Gist NUEVO Y SEPARADO ("geometry_mgc_log.json") -- nunca reusar las
++# claves de geometry_mes_log/combo2d_log (ver checklist del usuario,
++# 07-sep-2026, punto 5).
++from execution.env_check import require_env
++
++require_env(
++    [("MASSIVE_API_KEY", "POLYGON_API_KEY"), "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
++     "GITHUB_GIST_TOKEN", "GIST_ID"],
++    "GEOMETRY-MGC-XFA",
++)
++
++import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el resto del repo
++
++from scheduler.telegram_bot import send  # noqa: E402
++from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
++from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E402
++from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
++from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
++from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
++from core.prop_firm import TOPSTEP_150K, TOPSTEP_SPECS  # noqa: E402
++from core.funded_account import XFA_150K, XFA_SPECS  # noqa: E402
++
++CT = ZoneInfo("America/Chicago")
++# Logging con timestamp SIEMPRE en America/Chicago -- mismo fix del
++# 07-sep-2026 aplicado a geometry_scheduler.py/combo2d_scheduler.py/
++# glitch_scheduler.py en main, ver execution/ct_logging.py y
++# GLITCH_RESEARCH_LOG.md para el por que (el patron anterior dependia
++# silenciosamente del TZ del contenedor).
++from execution.ct_logging import setup_ct_logging
++log = setup_ct_logging("geometry_mgc")
++
++# ── Config ────────────────────────────────────────────────────────────────
++DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
++
++# Fijo, NO switcheable via env var como geometry_scheduler.py -- este es
++# un servicio de Railway DEDICADO a este candidato especifico, no un
++# scheduler generico multi-producto. Si en el futuro se quiere esa
++# flexibilidad, refactorizar entonces -- explicito ahora es mejor que
++# implicito con un solo candidato real.
++PRODUCT_KEY = "MGC_XFA_150K"
++DISPLAY_LABEL = "GEOMETRY-MGC-XFA"  # usado solo en logs internos (log.info), no en mensajes de Telegram -- ver PREFIX abajo
++CFG = CANDIDATES[PRODUCT_KEY]
++
++# Rediseño de templates de Telegram (09-sep-2026) -- mismo estandar en los
++# 3 schedulers, ver GLITCH_RESEARCH_LOG.md. PREFIX identifica el mensaje
++# como Cerebro 2/XFA de un vistazo, sin ambiguedad con Cerebro 1/COMBINE
++# (geometry_scheduler.py) ni con COMBO2D.
++PREFIX = f"S10GLITCH - XFA - {CFG.spec.product_code}"
++
++# ── Modo real (DRY_RUN=false): handoff al Pi (T4, 12-oct-2026; NEEDS HUMAN REVIEW) ──
++# Con DRY_RUN=false este scheduler YA NO simula: escribe la señal de hoy a ORDER_FILE (mismo Gist, mismo contrato que geometry_scheduler.py para
++# MES) y termina; el Pi (GLITCH_PRODUCT=<REAL_PRODUCT_KEY>) coloca la orden y escribe el resultado REAL en LOG_FILE. La geometria de la señal es la de
++# la cuenta REAL (REAL_CFG, XFA 50K = nc 3), NO la del candidato paper de 150K (CFG).
++# INVARIANTE (pi_executor._is_test_signal): signal["product"] debe ser IDENTICO a GLITCH_PRODUCT del Pi; si no, el Pi la trata como señal de
++# ENSAYO (<= 2 contratos, sin marcador at-most-once ni ventana horaria). Por eso REAL_PRODUCT_KEY sale de la misma variable que usa el Pi.
++REAL_PRODUCT_KEY = os.getenv("GLITCH_PRODUCT", "MGC")
++if not DRY_RUN and REAL_PRODUCT_KEY not in CANDIDATES:
++    print(f"FATAL: GLITCH_PRODUCT={REAL_PRODUCT_KEY!r} no esta en CANDIDATES ({sorted(CANDIDATES)}).", file=sys.stderr)
++    sys.exit(1)
++REAL_CFG = CANDIDATES[REAL_PRODUCT_KEY] if REAL_PRODUCT_KEY in CANDIDATES else CFG
++ORDER_FILE = f"orden_pendiente_{REAL_PRODUCT_KEY.lower()}.json"
++REAL_ACCOUNT_SIZE = {"MGC": "50K", "MGC_XFA_100K": "100K", "MGC_XFA_150K": "150K"}.get(REAL_PRODUCT_KEY, "50K")
++
++LOG_FILE = "geometry_mgc_log.json"  # namespace nuevo y separado, ver docstring
++# Estado volatil de "posicion actualmente abierta, si hay una" (09-sep-2026,
++# ver GLITCH_RESEARCH_LOG.md -- hallazgo de la posicion SHORT MGCV6 que
++# nunca recibio su CLOSE). Archivo SEPARADO de LOG_FILE.
++PENDING_FILE = "geometry_mgc_pending.json"
++POLL_INTERVAL = 60  # segundos entre polls, mismo valor que geometry_scheduler.py
++
++# WR objetivo de diseño (gambler's ruin, RR=1.0 simetrico) -- validado
++# empiricamente: 49.97% (ventana horaria original), 50.20% (ventana
++# corregida 7:00-15:00 CT). Ver GLITCH_RESEARCH_LOG.md, 06/07-sep-2026.
++# NO es un pass_rate de Combine (ese es 46.9%/47.5%, numero distinto,
++# ver docstring del modulo).
++THEORETICAL_WR = 0.50
++
++# CONFIRMADO (N=2 corridas, horarios distintos, 09-sep-2026): promedio
++# 9.43-9.50 min, maximo observado 9.94 min, margen de 13 min incluye
++# buffer de seguridad. Ver GLITCH_RESEARCH_LOG.md para el detalle de
++# ambas corridas -- mismo estandar de "medir, no asumir" ya aplicado a
++# Yahoo, ahora cerrado para Massive/MGC: la primera corrida (08-sep,
++# manana) dio 9.43 min promedio (rango 9.07-9.78); la segunda (09-sep,
++# tarde/noche, horario deliberadamente distinto de la primera) dio
++# 9.50 min promedio (rango 9.06-9.94) -- diferencia de solo 0.07 min
++# entre promedios, rangos solapados. Delay de Massive confirmado
++# ESTABLE entre momentos del dia, no erratico como el de Yahoo.
++ENTRY_WAIT_MINUTES = 13  # CONFIRMADO (N=2 corridas, 09-sep-2026) -- ver comentario arriba
++
++RTH_OPEN_HOUR, RTH_OPEN_MINUTE = 7, 0    # ventana de mayor liquidez de MGC confirmada, no 9:30
++FLATTEN_HOUR, FLATTEN_MINUTE = 14, 30    # mismo margen de 30min antes del cierre de ventana (15:00 CT) que MES
++
++# "Dias vs. Estimado" (template de Telegram, 09-sep-2026) --
++# dias_calendario_esperados = dias_promedio_resolucion (avg de TODOS los
++# intentos de Combine resueltos, pase o truene -- SimResult.avg_resolution_days)
++# x (1 / pass_rate) (intentos esperados hasta pasar). MISMA formula y mismo
++# motor (simulation/monte_carlo.py::TopstepMonteCarloSimulator, ya
++# auditado) que el numero equivalente de G2 (4.49 dias, ver
++# GLITCH_RESEARCH_LOG.md, "Duracion recomendada del periodo de paper
++# trading", 25-ago-2026) -- NO un numero de servilleta, calculado
++# formalmente con scripts/mgc_dias_esperados.py (09-sep-2026), reusando la
++# misma distribucion/geometria de scripts/cerebro2_cashflow_monte_carlo.py
++# (SL=TP=364 ticks, nc=6, TOPSTEP_150K). Con WR=0.5020 (empirico, ventana
++# horaria corregida -- dataset de referencia actual para este candidato):
++# pass_rate=47.35%, avg_pass_days=7.58, avg_blown_days=5.66,
++# dias_promedio_resolucion=6.57, dias_calendario_esperados=13.8726.
++# Redondeado a 13.9. (Con WR=0.50 teorico el resultado es casi identico,
++# 13.99 -- insensible a cual WR se use.)
++DIAS_ESPERADOS = 13.9
++
++# Logica de reinicio de intento de Combine (09-sep-2026, ver
++# GLITCH_RESEARCH_LOG.md) -- misma logica que geometry_scheduler.py,
++# umbrales confirmados contra core/prop_firm.py (fuente ya auditada), NO
++# hardcodeados a mano: este candidato usa una cuenta 150K (ver
++# PRODUCT_KEY="MGC_XFA_150K" arriba), TOPSTEP_150K.profit_target=$9,000,
++# TOPSTEP_150K.mll_distance=$4,500 -- DISTINTOS de los $3,000/$2,000 de
++# G2 (cuenta 50K). Confirmar SIEMPRE el tamaño de cuenta real de cada
++# candidato antes de reusar estos numeros en un candidato nuevo.
++PROFIT_TARGET = TOPSTEP_150K.profit_target      # $9,000
++MLL_THRESHOLD = -TOPSTEP_150K.mll_distance      # -$4,500
++if not DRY_RUN:
++    # En modo real los umbrales son los de la cuenta REAL (no los del paper de 150K): de lo contrario _current_intento() / el piso trailing
++    # juzgarian la cuenta 50K con $9,000 / $4,500. Paper (DRY_RUN=true) no cambia.
++    PROFIT_TARGET = TOPSTEP_SPECS[REAL_ACCOUNT_SIZE].profit_target
++    MLL_THRESHOLD = -TOPSTEP_SPECS[REAL_ACCOUNT_SIZE].mll_distance
++
++# Elegibilidad de payout REAL de Topstep (distinta de PASE/QUIEBRE de arriba,
++# que son los umbrales de Combine reusados aqui como limite de "intento" --
++# ver docstring de run(), este scheduler NO simula el ciclo de payout real de
++# la XFA). 5 dias con PnL neto del dia >= $150, SIN importar si el dia
++# resolvio TP/SL/FLATTEN -- criterio DISTINTO de "balance/equity acumulado
++# positivo" (22-sep-2026, pedido explicito del usuario de no confundir
++# ambos). Fuente unica: XFA_150K (core/funded_account.py), no hardcodeado.
++MIN_WINNING_DAY_USD = (XFA_150K if DRY_RUN else XFA_SPECS[REAL_ACCOUNT_SIZE]).min_winning_day_usd     # $150
++WINNING_DAYS_REQUIRED = (XFA_150K if DRY_RUN else XFA_SPECS[REAL_ACCOUNT_SIZE]).winning_days_required  # 5
++
++_front_month_cache: dict[str, tuple[str, str]] = {}
++
++
++def _fail_if_entry_wait_not_confirmed():
++    """Falla ruidosamente (Telegram + exit) si ENTRY_WAIT_MINUTES sigue
++    sin confirmar -- NO arrancar con un margen adivinado. Ver docstring
++    del modulo, punto 3, y el checklist del usuario 07-sep-2026 punto 3:
++    'que el codigo falle explicitamente si se intenta desplegar sin ese
++    valor confirmado, no que corra con un default adivinado'."""
++    if ENTRY_WAIT_MINUTES is None:
++        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++               f"ERROR: ENTRY_WAIT_MINUTES sin confirmar (sigue en None).\n"
++               f"Correr scripts/probe_massive_mgc_delay.py lunes-viernes en horario "
++               f"de mercado activo y setear el valor real antes de desplegar.")
++        log.error(msg.replace("\n", " | "))
++        try:
++            send(msg)
++        except Exception as e:
++            log.error(f"No se pudo enviar alerta de Telegram (ademas del error principal): {e}")
++        sys.exit(1)
++
++
++# ── Helpers ───────────────────────────────────────────────────────────────
++def ct_now(): return dt.datetime.now(CT)
++
++
++def utc_now_str():
++    """Timestamp UTC para los mensajes de Telegram (template 09-sep-2026)
++    -- distinto de ct_now(), que sigue usandose para el timing operativo
++    del scheduler (apertura, flatten, etc). No afecta setup_ct_logging()
++    (execution/ct_logging.py) -- los logs del servidor siguen en CT."""
++    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
++
++
++def load_log():
++    return _gist_load_log(LOG_FILE)
++
++
++def save_log(l):
++    _gist_save_log(LOG_FILE, l)
++
++
++ENTRY_GATE_MINUTES = RTH_OPEN_HOUR * 60 + RTH_OPEN_MINUTE + ENTRY_WAIT_MINUTES   # 7:13 CT: misma hora de entrada que el backtest de Cerebro 2
++
++
++def load_order_signal() -> dict:
++    """Señal pendiente para el Pi (mismo Gist). {} si no hay ninguna sin consumir."""
++    return _gist_load_state(ORDER_FILE)
++
++
++def save_order_signal(d: dict):
++    _gist_save_state(ORDER_FILE, d)
++
++
++def _wait_for_entry_gate():
++    while ct_now().hour * 60 + ct_now().minute < ENTRY_GATE_MINUTES:
++        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando la hora de entrada ({ENTRY_GATE_MINUTES // 60}:{ENTRY_GATE_MINUTES % 60:02d} CT)...")
++        time.sleep(15)
++
++
++def _hand_off_to_pi(side: int, direction_str: str, intento: int, today_str: str) -> bool:
++    """Escribe la señal real. Devuelve True si la escribio. Mismo contrato de campos que geometry_scheduler.py (MES): date, side, direction, ticker, product_code,
++    nc, sl_ticks, tp_ticks, product, intento, dry_run. Se niega a sobrescribir una señal sin consumir y a enviar despues del flatten de hoy (calendario de cierres
++    anticipados incluido)."""
++    _wait_for_entry_gate()
++    now = ct_now()
++    flatten_min = flatten_minutes_ct(dt.date.today())
++    if now.hour * 60 + now.minute >= flatten_min:
++        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++               f"ERROR: el scheduler llego despues del cierre de sesion ({now.strftime('%H:%M')} CT >= {flatten_min // 60}:{flatten_min % 60:02d}) "
++               f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
++        send(msg); log.error(msg.replace("\n", " | "))
++        return False
++    existing = load_order_signal()
++    if existing:
++        msg = (f"{PREFIX}\nSTATUS: BLOCKED\n"
++               f"ERROR: ya hay una señal de {existing.get('date')} sin consumir por el Pi -- no se sobreescribe (evita perder o duplicar una orden real). "
++               f"Verificar que pi_executor.py (GLITCH_PRODUCT={REAL_PRODUCT_KEY}) este corriendo en el Pi. No se envia señal nueva hoy.\n{utc_now_str()}")
++        send(msg); log.error(msg.replace("\n", " | "))
++        return False
++    save_order_signal({
++        "date": today_str, "side": side, "direction": direction_str,
++        "ticker": REAL_CFG.spec.yf_ticker, "product_code": REAL_CFG.spec.product_code,
++        "nc": REAL_CFG.nc, "sl_ticks": REAL_CFG.sl_ticks, "tp_ticks": REAL_CFG.tp_ticks,
++        "product": REAL_PRODUCT_KEY, "intento": intento, "dry_run": False,
++    })
++    real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
++                f"Direction: {direction_str}\nContracts: {REAL_CFG.nc}\n"
++                f"SL/TP: {REAL_CFG.sl_ticks}/{REAL_CFG.tp_ticks} ticks\n"
++                f"Intento #{intento}\n"
++                f"Ejecucion real delegada a pi_executor.py -- este scheduler no coloca la orden ni monitorea el resultado en este modo.\n"
++                f"{utc_now_str()}")
++    send(real_msg); log.info(real_msg.replace("\n", " | "))
++    return True
++
++
++def load_pending() -> dict:
++    """{} si no hay ninguna posicion pendiente de reconciliar -- ver
++    PENDING_FILE arriba y GLITCH_RESEARCH_LOG.md, 09-sep-2026."""
++    return _gist_load_state(PENDING_FILE)
++
++
++def save_pending(d: dict):
++    """Pasar {} para limpiar (posicion resuelta normalmente o ya reconciliada)."""
++    _gist_save_state(PENDING_FILE, d)
++
++
++def is_trading_day():
++    """
++    Calendario de feriados duplicado deliberadamente desde
++    geometry_scheduler.py/combo2d_scheduler.py -- mismo razonamiento
++    (dato estatico trivial, bajo riesgo de duplicacion). NOTA: este es
++    el calendario de feriados de EQUITY INDEX/CME general -- no se
++    verifico si COMEX metales observa exactamente los mismos feriados
++    (ej. algunos exchanges de commodities operan en dias que equity no).
++    Simplificacion deliberada para el deploy inicial -- refinar si se
++    observa un feriado real donde MGC si opera y este scheduler se
++    queda afuera sin necesidad.
++    """
++    now = ct_now()
++    if now.weekday() >= 5: return False
++    holidays = {
++        (2026,1,1),(2026,1,19),(2026,2,16),(2026,4,3),
++        (2026,5,25),(2026,7,3),(2026,9,7),(2026,11,26),(2026,12,25),
++        (2027,1,1)   # agregado 25-sep-2026 (help.topstep.com/13350348: mercado cerrado)
++    }
++    return (now.year, now.month, now.day) not in holidays
++
++
++def _current_intento(paper_log: list) -> int:
++    """
++    Misma logica que geometry_scheduler.py::_current_intento -- ver ese
++    archivo para el razonamiento completo. Duplicado deliberadamente
++    (no importado de geometry_scheduler.py) -- este scheduler NO debe
++    acoplarse a codigo de Cerebro 1, mismo principio ya establecido en
++    el docstring de geometry_scheduler.py.
++
++    CORREGIDO #1 (09-sep-2026, mismo fix que geometry_scheduler.py): mira
++    CUALQUIER entrada con el campo "intento" presente, no solo las
++    resueltas (TP/SL/FLATTEN) -- una entrada "RECONCILED" (fuera de ese
++    set, a proposito) habria quedado invisible aqui, causando que el
++    siguiente trade real reusara un numero de intento ya consumido.
++
++    CORREGIDO #2 (10-sep-2026, mismo fix que geometry_scheduler.py --
++    ver GLITCH_RESEARCH_LOG.md, incidente portado desde `main`): el
++    incremento `intento_actual += 1` en run() (paso 5b) nunca se
++    persistia -- variable local, se perdia al salir del proceso. La
++    corrida del dia siguiente recalculaba este `max(tags)` desde cero,
++    encontraba el mismo intento ya completado, y nunca avanzaba por su
++    cuenta. Corregido para que el intento actual se derive COMPLETO de
++    los datos guardados: si el intento mas alto YA cruzo PROFIT_TARGET
++    o MLL_THRESHOLD, el intento actual real es el SIGUIENTE.
++    """
++    tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
++    if not tags:
++        return 1
++    latest = max(tags)
++    latest_pnl = _attempt_pnl(paper_log, latest)
++    latest_floor = _attempt_trailing_floor(paper_log, latest)
++    if _check_attempt_reset(latest_pnl, PROFIT_TARGET, latest_floor) is not None:
++        return latest + 1
++    return latest
++
++
++def _attempt_entries(paper_log: list, intento: int) -> list:
++    return [e for e in paper_log
++            if e.get("result") in ("TP", "SL", "FLATTEN") and e.get("intento", 1) == intento]
++
++
++def _attempt_pnl(paper_log: list, intento: int) -> float:
++    return sum(e.get('pnl', 0) for e in _attempt_entries(paper_log, intento))
++
++
++def _attempt_days_elapsed(paper_log: list, intento: int, today_str: str) -> int:
++    """0 si el intento todavia no tiene ningun ciclo resuelto (justo
++    despues de un reinicio) -- distinto de _paper_progress()['days_elapsed']
++    (historico, devuelve 1 en ese caso)."""
++    entries = _attempt_entries(paper_log, intento)
++    dates_seen = sorted({e["date"] for e in entries if e.get("date")})
++    if not dates_seen:
++        return 0
++    first_date = dt.datetime.strptime(dates_seen[0], "%Y-%m-%d").date()
++    today = dt.datetime.strptime(today_str, "%Y-%m-%d").date()
++    return (today - first_date).days + 1
++
++
++def _attempt_peak(paper_log: list, intento: int) -> float:
++    """Maximo rodante del PnL acumulado DENTRO de un intento especifico
++    -- portado desde geometry_scheduler.py (16-sep-2026, ver
++    GLITCH_RESEARCH_LOG.md, gap de paridad ya identificado) -- se
++    reinicia junto con el intento (ver _check_attempt_reset). Tambien
++    es la base del floor trailing real (_attempt_trailing_floor)."""
++    peak = 0.0
++    running = 0.0
++    for e in _attempt_entries(paper_log, intento):
++        running += e.get('pnl', 0)
++        if running > peak:
++            peak = running
++    return peak
++
++
++def _attempt_winning_days(paper_log: list, intento: int) -> int:
++    """
++    Conteo REAL de elegibilidad de payout de Topstep (22-sep-2026, pedido
++    explicito del usuario): dias DENTRO del intento actual con PnL neto
++    del dia >= MIN_WINNING_DAY_USD ($150) -- cuenta CUALQUIER dia
++    resuelto (TP, SL o FLATTEN) que cumpla el monto, no solo los TP.
++    Un SL o FLATTEN nunca llega a +$150 en esta geometria (SL=TP=364
++    ticks, el unico resultado con pnl positivo grande es TP), pero la
++    funcion no asume eso -- lee pnl real de cada entrada, igual que
++    _attempt_peak()/_attempt_pnl().
++
++    NO confundir con equity/balance acumulado del intento
++    (_attempt_pnl): son criterios DISTINTOS por diseño de Topstep -- un
++    intento puede tener equity acumulado bajo o negativo y aun asi
++    tener 5 dias individuales de +$150 (si estan intercalados con SL
++    grandes), y viceversa. _attempt_entries() ya excluye RECONCILED por
++    construccion (mismo filtro que el resto de este modulo) -- un dia
++    con posicion pendiente sin resolver nunca cuenta como dia ganador
++    hasta que se reconcilie con un resultado real.
++    """
++    return sum(1 for e in _attempt_entries(paper_log, intento)
++               if e.get('pnl', 0) >= MIN_WINNING_DAY_USD)
++
++
++def _replay_payout_cycles(paper_log: list, intento: int) -> dict:
++    """
++    Recorrido cronologico UNICO de las entradas resueltas del intento,
++    re-derivado COMPLETO de paper_log en cada corrida -- mismo
++    principio ya usado por _current_intento() (nunca un contador
++    separado que se pueda desincronizar del log real; "persistir en
++    el Gist" para este dato significa lo mismo que ya significa para
++    "intento": vive implicito en el log ya persistido, no en un campo
++    nuevo separado que alguien podria olvidar actualizar).
++
++    Implementa las DOS condiciones REALES de Topstep para elegibilidad
++    de payout (22-sep-2026, verificado contra help.topstep.com, ver
++    GLITCH_RESEARCH_LOG.md):
++      1. 5 dias ganadores (>= MIN_WINNING_DAY_USD) DESDE el ultimo
++         payout de este intento -- el conteo se REINICIA a 0 tras cada
++         payout ("your 5-day count restarts"), no es cada 5-multiplo
++         acumulado sin reinicio.
++      2. A partir del SEGUNDO payout: profit neto >= $0.01 desde el
++         balance registrado en el payout anterior ("positive net
++         profit since your last Payout"). El PRIMER payout esta
++         EXENTO de esta condicion.
++
++    Si dia-ganador-5 ya se cumplio pero el profit-gate (2) todavia no
++    (a partir del segundo payout), el intento queda BLOQUEADO: el
++    conteo de dias ganadores NO se reinicia por el bloqueo -- sigue
++    en o por encima del umbral, y el profit-gate se re-evalua cada
++    dia siguiente (incluyendo dias que en si mismos no son "ganadores"
++    pero si mueven el balance) hasta que tambien se cumpla, momento en
++    el que el payout se dispara con la fecha de ESE dia.
++
++    Devuelve {"events": [{"date", "balance", "n"} ...] (cronologico,
++    n=1,2,3... = numero de payout), "winning_days_since_last": int,
++    "balance": float (equity acumulado del intento completo, NO se
++    resetea por payout -- coincide con _attempt_pnl), "is_first_payout": bool}.
++    """
++    events: list[dict] = []
++    winning_since_last = 0
++    balance = 0.0
++    for e in _attempt_entries(paper_log, intento):
++        balance += e.get('pnl', 0)
++        if e.get('pnl', 0) >= MIN_WINNING_DAY_USD:
++            winning_since_last += 1
++        if winning_since_last >= WINNING_DAYS_REQUIRED:
++            is_first = not events
++            profit_ok = is_first or (balance - events[-1]["balance"] >= 0.01)
++            if profit_ok:
++                events.append({"date": e.get("date"), "balance": balance, "n": len(events) + 1})
++                winning_since_last = 0
++            # si no profit_ok: BLOQUEADO -- winning_since_last NO se
++            # reinicia, se re-evalua en la siguiente iteracion (el
++            # profit-gate puede volverse True en un dia posterior sin
++            # que ese dia sea "ganador" -- basta con que el balance
++            # supere el del ultimo payout).
++    return {
++        "events": events,
++        "winning_days_since_last": winning_since_last,
++        "balance": balance,
++        "is_first_payout": not events,
++    }
++
++
++def _check_payout_eligibility_crossed(events_before: list, events_after: list) -> bool:
++    """Funcion PURA, testeable en aislamiento -- mismo patron que
++    _check_attempt_reset(). True solo cuando la entrada de HOY disparo
++    un NUEVO evento de payout (el conteo de eventos subio) -- funciona
++    igual para el primer payout y para cualquier payout posterior,
++    incluyendo el caso bloqueado-por-profit-gate que se libera el
++    mismo dia. Nunca reavisa por seguir en o por encima del umbral sin
++    un evento nuevo."""
++    return len(events_after) > len(events_before)
++
++
++def _attempt_trailing_floor(paper_log: list, intento: int) -> float:
++    """
++    CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): floor trailing
++    REAL de Topstep para el intento -- sube con cada nuevo pico de
++    balance alcanzado dentro del intento, nunca baja, tope en 0
++    (equivalente a floor_lock_level en terminos de attempt_pnl-desde-
++    cero). Antes de este fix, `_check_attempt_reset()` comparaba
++    siempre contra MLL_THRESHOLD fijo, ignorando cualquier pico
++    intermedio -- mas permisivo que la regla real de Topstep, que SI
++    usa este floor trailing (ver simulation/monte_carlo.py::
++    TopstepMonteCarloSimulator, el motor ya validado detras de todas
++    las cifras de negocio publicadas). Hallazgo original: caso real de
++    este mismo intento (pico ~$900, dos SL despues) donde el codigo
++    desplegado seguia reportando "activa" con un floor mas permisivo
++    que el real -- auditoria retrospectiva (scripts/audit_mgc_trailing_mll_2026_09_16.py)
++    confirmo que, en ESE caso especifico, ambas reglas coincidian
++    (la caida no fue lo bastante profunda para divergir), pero el
++    riesgo hacia adelante es real y motiva este fix. Formula
++    equivalente al ratchet completo (confirmado contra el script de
++    auditoria): floor = min(peak + MLL_THRESHOLD, 0) -- MLL_THRESHOLD
++    ya viene negativo, peak >= 0 siempre por construccion de
++    _attempt_peak(), asi que esto reproduce floor=MLL_THRESHOLD cuando
++    no hay pico (sin cambio de comportamiento en ese caso) y ratchet
++    hacia arriba (tope en 0) a medida que el pico crece.
++    """
++    peak = _attempt_peak(paper_log, intento)
++    return min(peak + MLL_THRESHOLD, 0.0)
++
++
++def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_threshold: float) -> Optional[str]:
++    """Misma logica que geometry_scheduler.py::_check_attempt_reset --
++    funcion PURA, testeable en aislamiento. mll_threshold ya viene
++    NEGATIVO -- desde el fix del 16-sep-2026, el llamador pasa el floor
++    TRAILING real (_attempt_trailing_floor()), no la constante
++    MLL_THRESHOLD directa (ver MLL_THRESHOLD arriba)."""
++    if attempt_pnl_after >= profit_target:
++        return "PASE"
++    if attempt_pnl_after <= mll_threshold:
++        return "QUIEBRE"
++    return None
++
++
++def _build_pending_record(side: int, direction_str: str, entry_price: float, tp_price: float,
++                           sl_price: float, ticker: str, today_str: str, intento: int,
++                           nc: int, sl_ticks: int, tp_ticks: int, product_key: str, dry_run: bool) -> dict:
++    """Mismo mecanismo que geometry_scheduler.py::_build_pending_record --
++    ver ese archivo para el razonamiento completo (09-sep-2026, ver
++    GLITCH_RESEARCH_LOG.md -- posicion SHORT MGCV6 que nunca recibio su
++    CLOSE)."""
++    return {
++        "date": today_str, "side": side, "direction": direction_str,
++        "entry": entry_price, "tp_price": tp_price, "sl_price": sl_price,
++        "ticker": ticker, "nc": nc, "sl_ticks": sl_ticks, "tp_ticks": tp_ticks,
++        "product": product_key, "dry_run": dry_run, "intento": intento,
++    }
++
++
++def _reconcile_pending_position(pending: dict, current_price: float,
++                                 tick_value_usd: float, tick_size: float) -> dict:
++    """
++    Funcion PURA -- mismo diseño y misma limitacion honesta que
++    geometry_scheduler.py::_reconcile_pending_position (ver ese archivo
++    para el razonamiento completo): result SIEMPRE "RECONCILED" (nunca
++    "TP"/"SL"/"FLATTEN"), excluido a proposito de WR/attempt_pnl/
++    deteccion de PASE-QUIEBRE via el mismo filtro que ya usan
++    _attempt_entries()/_paper_progress().
++    """
++    side = pending["side"]
++    entry_price = pending["entry"]
++    tp_price = pending["tp_price"]
++    sl_price = pending["sl_price"]
++
++    if side == 1:
++        if current_price >= tp_price:
++            estimated_outcome, exit_price = "TP", tp_price
++        elif current_price <= sl_price:
++            estimated_outcome, exit_price = "SL", sl_price
++        else:
++            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
++    else:
++        if current_price <= tp_price:
++            estimated_outcome, exit_price = "TP", tp_price
++        elif current_price >= sl_price:
++            estimated_outcome, exit_price = "SL", sl_price
++        else:
++            estimated_outcome, exit_price = "INCONCLUSIVE", current_price
++
++    pnl = (exit_price - entry_price) * side * tick_value_usd / tick_size * pending["nc"]
++
++    return {
++        "date": pending["date"], "side": side, "direction": pending.get("direction"),
++        "entry": entry_price, "exit": exit_price, "result": "RECONCILED",
++        "estimated_outcome": estimated_outcome,
++        "pnl": round(pnl, 2), "pnl_estimated": True, "reconciled": True,
++        "sl_ticks": pending.get("sl_ticks"), "tp_ticks": pending.get("tp_ticks"),
++        "nc": pending["nc"], "dry_run": pending.get("dry_run"),
++        "product": pending.get("product"), "intento": pending["intento"],
++    }
++
++
++def _paper_progress(paper_log: list, today_str: str) -> dict:
++    """Misma logica que geometry_scheduler.py::_paper_progress -- WR en
++    vez de pass_rate (ver THEORETICAL_WR arriba)."""
++    resolved = [e for e in paper_log if e.get("result") in ("TP", "SL", "FLATTEN")]
++    dates_seen = sorted({e["date"] for e in paper_log if e.get("date")})
++
++    if dates_seen:
++        first_date = dt.datetime.strptime(dates_seen[0], "%Y-%m-%d").date()
++        today = dt.datetime.strptime(today_str, "%Y-%m-%d").date()
++        days_elapsed = (today - first_date).days + 1
++    else:
++        days_elapsed = 1
++
++    n_cycles = len(resolved)
++    # WR condicional (TP/(TP+SL)), excluye FLATTEN -- mismo criterio ya
++    # aplicado en scripts/validate_mgc_wr_empirical.py para no diluir
++    # el denominador con time-exits/flattens.
++    n_tp = sum(1 for e in resolved if e.get("result") == "TP")
++    n_sl = sum(1 for e in resolved if e.get("result") == "SL")
++    wr_empirico = n_tp / (n_tp + n_sl) if (n_tp + n_sl) > 0 else None
++
++    prior_resolved = [e for e in resolved if e.get("date") != today_str]
++    yesterday = prior_resolved[-1] if prior_resolved else None
++
++    return {
++        "days_elapsed": days_elapsed, "n_cycles": n_cycles,
++        "wr_empirico": wr_empirico, "yesterday": yesterday,
++    }
++
++
++# Umbral de "barra vieja" (01-oct-2026, incidente real documentado en
++# GLITCH_RESEARCH_LOG.md: MGCV6 se quedo sin ninguna barra nueva por
++# 700+ minutos, mientras unreal=$0.00 se reportaba como si fuera precio
++# en vivo). ANTES, fetch_latest_price() aceptaba sin cuestionar lo que
++# Massive devolviera como "la mas reciente" -- sin comparar su propio
++# window_start contra la hora real, exactamente el patron de "medir, no
++# asumir" que ya se aplico a ENTRY_WAIT_MINUTES, solo que aqui no se
++# habia blindado en el codigo de produccion, solo en el script de
++# diagnostico (scripts/probe_massive_mgc_delay.py).
++#
++# Valor: el delay NORMAL de Massive para MGC ya quedo CONFIRMADO
++# (09-sep-2026, 2 corridas en horarios distintos) en 9.43-9.50 min
++# promedio, maximo observado 9.94 min. 20 minutos = ~2x ese maximo
++# confirmado -- suficiente margen para no disparar en operacion normal,
++# muy por debajo de las horas que tomo el incidente real.
++STALE_BAR_MAX_AGE_SECONDS = 20 * 60
++
++
++def fetch_latest_price(ticker: str) -> tuple[Optional[float], Optional[float]]:
++    """
++    Precio actual via Massive -- patron YA CORREGIDO (ver docstring del
++    modulo): sort=window_start.desc + limit=1, SIN rango de fechas. El
++    patron de rango+sort=asc (usado para descargas historicas) NO
++    devuelve el dato mas reciente en este endpoint -- no repetir ese
++    error aqui.
++
++    Devuelve (precio, antiguedad_segundos) -- o (None, None) si no hay
++    dato o la llamada fallo. `window_start` es NANOSEGUNDOS epoch
++    (confirmado contra scripts/fetch_mes_2y.py y
++    scripts/probe_massive_mgc_delay.py, que ya usan /1e9 -- NO
++    milisegundos). El llamador decide si `antiguedad_segundos` es
++    aceptable (ver STALE_BAR_MAX_AGE_SECONDS) -- esta funcion solo
++    reporta el dato, no filtra.
++    """
++    api_key = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
++    headers = {"Authorization": f"Bearer {api_key}"}
++    for resolution in ("1min", "5min"):
++        try:
++            r = requests.get(
++                f"https://api.massive.com/futures/v1/aggs/{ticker}",
++                headers=headers,
++                params={"resolution": resolution, "sort": "window_start.desc", "limit": 1},
++                timeout=20,
++            )
++            r.raise_for_status()
++            results = r.json().get("results", [])
++            if results:
++                bar = results[0]
++                age_seconds = None
++                ws = bar.get("window_start")
++                if ws is not None:
++                    bar_time = dt.datetime.fromtimestamp(ws / 1e9, tz=dt.timezone.utc)
++                    age_seconds = (dt.datetime.now(dt.timezone.utc) - bar_time).total_seconds()
++                return float(bar["close"]), age_seconds
++        except Exception as e:
++            log.error(f"fetch_latest_price {ticker} ({resolution}): {e}")
++    return None, None
++
++
++def run():
++    log.info("=" * 60)
++    log.info(f"GLITCH — {DISPLAY_LABEL} ({CFG.spec.label})")
++    log.info(f"DRY_RUN={DRY_RUN}  NC={CFG.nc}  SL={CFG.sl_ticks}  TP={CFG.tp_ticks}  "
++              f"direction={CFG.direction}  ENTRY_WAIT_MINUTES={ENTRY_WAIT_MINUTES}")
++    log.info("=" * 60)
++
++    _fail_if_entry_wait_not_confirmed()
++
++    if not is_trading_day():
++        log.info("No es dia de trading — saliendo")
++        return
++
++    today_str = str(dt.date.today())
++    paper_log = load_log()
++    # Logica de reinicio de intento (09-sep-2026, ver GLITCH_RESEARCH_LOG.md)
++    # -- resuelve la limitacion documentada anteriormente ("Equity/Dias
++    # vs. Estimado acumulados sin limite de intento"). WR/Ciclos NO se
++    # reinician -- siguen siendo historicos de TODOS los intentos.
++    intento_actual = _current_intento(paper_log)
++    attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
++
++    # ── 0. Reconciliar posicion pendiente de una corrida anterior
++    #        interrumpida (09-sep-2026, ver GLITCH_RESEARCH_LOG.md --
++    #        hallazgo de la posicion SHORT MGCV6 que nunca recibio su
++    #        CLOSE). El propio ticker de la posicion pendiente ya esta
++    #        guardado en `pending` (el contrato especifico que estaba
++    #        abierto, que puede diferir del front-month de HOY si hubo
++    #        un roll de por medio) -- no hace falta resolver el
++    #        front-month de hoy para esto. ──
++    pending = load_pending() if DRY_RUN else {}
++    if not DRY_RUN and load_pending():
++        log.warning("Hay una posicion pendiente del paper (geometry_mgc_pending.json); en modo real se IGNORA (el Pi lleva su propio estado).")
++    if pending:
++        log.info(f"Posicion pendiente encontrada de {pending.get('date')} -- reconciliando antes de continuar...")
++        recon_price, recon_age = fetch_latest_price(pending["ticker"])
++        if recon_price is None or (recon_age is not None and recon_age > STALE_BAR_MAX_AGE_SECONDS):
++            reason = "sin datos de precio" if recon_price is None else f"solo datos viejos ({recon_age/60:.0f} min)"
++            msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++                   f"ERROR: posicion pendiente de {pending.get('date')} no se pudo reconciliar "
++                   f"({reason}) -- reintentando la proxima corrida. No se abre "
++                   f"posicion nueva hoy.\n{utc_now_str()}")
++            send(msg)
++            log.error(msg.replace("\n", " | "))
++            return
++        reconciled_entry = _reconcile_pending_position(pending, recon_price, CFG.spec.tick_value_usd, CFG.spec.tick_size)
++        paper_log.append(reconciled_entry)
++        save_log(paper_log)
++        save_pending({})
++        recon_msg = (f"{PREFIX} [POSICION RECONCILIADA TRAS INTERRUPCION]\n"
++                     f"Intento #{reconciled_entry['intento']}  |  {pending.get('direction')}: "
++                     f"{reconciled_entry['entry']:,.4f} → {reconciled_entry['exit']:,.4f}\n"
++                     f"Resultado estimado: {reconciled_entry['estimated_outcome']} (NO CONFIRMADO)\n"
++                     f"PnL estimado: ${reconciled_entry['pnl']:+,.2f} (reconciliado, no confirmado -- "
++                     f"el precio pudo haber tocado TP o SL y revertido durante la interrupcion, "
++                     f"esto solo ve donde esta el precio ahora)\n"
++                     f"Excluido de WR/attempt_pnl -- ver GLITCH_RESEARCH_LOG.md\n"
++                     f"{utc_now_str()}")
++        send(recon_msg)
++        log.info(recon_msg.replace("\n", " | "))
++        intento_actual = _current_intento(paper_log)
++        attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
++
++    # ── 1. Resuelve el contrato en uso (en modo real es solo informativo: el Pi resuelve su propio contrato en ProjectX; un fallo aqui NO debe
++    #        impedir la señal) ──
++    ticker = None
++    try:
++        ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
++        log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
++        check_expiry_alerts(_front_month_cache, send, PREFIX)
++    except Exception as e:
++        log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
++        send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
++        if DRY_RUN:
++            return
++
++    # ── 2. Señal: sin predictiva, funcion pura de la fecha ──
++    day_idx = trading_day_index(dt.date.today())
++    side = decide_side(day_idx, CFG.direction)
++    direction_str = {1: "LONG", -1: "SHORT"}[side]
++    log.info(f"Direccion (day_index={day_idx}, mode={CFG.direction}): {direction_str}")
++
++    # ── 2b. Reporte de arranque ──
++    progress = _paper_progress(paper_log, today_str)
++
++    if progress["yesterday"] is not None:
++        y = progress["yesterday"]
++        yesterday_line = f"{y['date']}: {y.get('direction', '?')} → {y['result']}  PnL=${y.get('pnl', 0):+,.2f}"
++    else:
++        yesterday_line = "(sin ciclo previo registrado)"
++
++    if progress["wr_empirico"] is not None:
++        gap_pp = (progress["wr_empirico"] - THEORETICAL_WR) * 100
++        wr_line = f"{progress['wr_empirico']:.1%} empirico vs {THEORETICAL_WR:.1%} teorico ({gap_pp:+.1f}pp)"
++    else:
++        wr_line = "sin ciclos resueltos todavia"
++
++    kickoff = (f"{PREFIX} | INICIO DE DIA\n"
++               f"Dia {progress['days_elapsed']} de paper  |  Ciclos completados: {progress['n_cycles']}\n"
++               f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={CFG.direction})\n"
++               f"Resultado de ayer: {yesterday_line}\n"
++               f"WR acumulado: {wr_line}\n"
++               f"{utc_now_str()}")
++    send(kickoff)
++    log.info(kickoff.replace("\n", " | "))
++
++    # ── 2c. Modo real (DRY_RUN=false): delega la ejecucion al Pi y termina (T4, 12-oct-2026) ──
++    if not DRY_RUN:
++        _hand_off_to_pi(side, direction_str, intento_actual, today_str)
++        return
++
++    # ── 3. Espera apertura (7:00 CT) + margen de propagacion de Massive ──
++    while ct_now().hour * 60 + ct_now().minute < RTH_OPEN_HOUR * 60 + RTH_OPEN_MINUTE:
++        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando apertura ({RTH_OPEN_HOUR}:{RTH_OPEN_MINUTE:02d} CT)...")
++        time.sleep(15)
++
++    wait_until = RTH_OPEN_HOUR * 60 + RTH_OPEN_MINUTE + ENTRY_WAIT_MINUTES
++    while ct_now().hour * 60 + ct_now().minute < wait_until:
++        log.info(f"[{ct_now().strftime('%H:%M')} CT] Esperando margen de propagacion de Massive "
++                  f"({ENTRY_WAIT_MINUTES} min post-apertura)...")
++        time.sleep(15)
++
++    entry_price = None
++    for attempt in range(20):
++        entry_price, entry_age = fetch_latest_price(ticker)
++        if entry_price is not None and (entry_age is None or entry_age <= STALE_BAR_MAX_AGE_SECONDS):
++            log.info(f"  {ticker}: precio recibido en intento {attempt+1}/20: {entry_price:.4f}"
++                     + (f" (barra de hace {entry_age/60:.1f} min)" if entry_age is not None else ""))
++            break
++        if entry_price is not None:
++            log.info(f"  {ticker}: barra recibida pero vieja ({entry_age/60:.1f} min > "
++                     f"{STALE_BAR_MAX_AGE_SECONDS/60:.0f} min) -- descartada, reintentando ({attempt+1}/20)...")
++            entry_price = None
++        else:
++            log.info(f"  Esperando precio {ticker} ({attempt+1}/20)...")
++        time.sleep(30)
++
++    if entry_price is None:
++        gave_up_at = ct_now().strftime("%H:%M:%S")
++        msg = (f"{PREFIX}\nSTATUS: ERROR\n"
++               f"ERROR: no entry data available\n"
++               f"Se rindio tras {attempt + 1} intentos a las {gave_up_at} CT")
++        send(msg)
++        paper_log.append({"date": today_str, "signal": True, "side": side,
++                          "pnl": 0, "note": "no_data_entry",
++                          "attempts_made": attempt + 1, "gave_up_at_ct": gave_up_at})
++        save_log(paper_log)
++        return
++
++    tp_price, sl_price = CFG.barrier_prices(entry_price, side)
++    tp_usd, sl_usd = CFG.dollar_tp_sl()
++
++    log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
++    log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
++
++    # Estado durable ANTES de la notificacion -- ver paso 0 arriba.
++    save_pending(_build_pending_record(
++        side, direction_str, entry_price, tp_price, sl_price, ticker,
++        today_str, intento_actual, CFG.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
++    ))
++
++    msg = (f"{PREFIX}\n"
++           f"[OPEN]\n"
++           f"Symbol: {CFG.spec.label} ({ticker})\n"
++           f"Direction: {direction_str}\n"
++           f"Entry: {entry_price:,.4f}\n"
++           f"Contracts: {CFG.nc}\n"
++           f"TP: {tp_price:,.4f}\n"
++           f"SL: {sl_price:,.4f}\n"
++           f"{utc_now_str()}")
++    send(msg)
++
++    # ── 4. Monitorea la posicion -- flatten obligatorio a las 14:30 CT ──
++    result = None
++    exit_price = entry_price
++    stale_alerted = False  # una sola alerta por corrida, mismo criterio anti-spam que check_expiry_alerts()
++
++    while True:
++        now = ct_now()
++        t = now.hour * 60 + now.minute
++
++        if is_flatten_time(now):   # 14:30 CT normal; antes en 27-nov y 24-dic (cierre anticipado), ver execution/session_calendar.py
++            price, age = fetch_latest_price(ticker)
++            stale = price is not None and age is not None and age > STALE_BAR_MAX_AGE_SECONDS
++            exit_price = price if (price is not None and not stale) else entry_price
++            result = "FLATTEN"
++            log.info(f"[{now.strftime('%H:%M')} CT] Cierre forzado de sesion (flatten {flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT) @ {exit_price:.4f}"
++                     + (" (ADVERTENCIA: precio Massive viejo, se uso entry_price como fallback)" if stale else ""))
++            if stale:
++                send(f"{PREFIX}\nSTATUS: ADVERTENCIA\n"
++                     f"Flatten de hoy usado con precio de respaldo (entry_price) -- Massive no tenia "
++                     f"una barra fresca ({age/60:.0f} min de antiguedad) para {ticker} al cierre.\n{utc_now_str()}")
++            break
++
++        price, age = fetch_latest_price(ticker)
++        if price is None or (age is not None and age > STALE_BAR_MAX_AGE_SECONDS):
++            if price is None:
++                log.info(f"[{now.strftime('%H:%M')} CT] Sin datos, reintentando...")
++            else:
++                log.info(f"[{now.strftime('%H:%M')} CT] Barra vieja ({age/60:.0f} min > "
++                         f"{STALE_BAR_MAX_AGE_SECONDS/60:.0f} min), ignorada, reintentando...")
++                if not stale_alerted:
++                    send(f"{PREFIX}\nSTATUS: ADVERTENCIA\n"
++                         f"Massive no tiene datos frescos de {ticker} ({age/60:.0f} min de antiguedad) -- "
++                         f"posicion {direction_str} sigue abierta, monitoreo pausado hasta que haya dato "
++                         f"fresco o llegue el flatten de las "
++                         f"{flatten_minutes_ct(now.date())//60}:{flatten_minutes_ct(now.date())%60:02d} CT.\n{utc_now_str()}")
++                    stale_alerted = True
++            time.sleep(POLL_INTERVAL)
++            continue
++
++        unreal = (price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
++
++        if side == 1:
++            if price <= sl_price:
++                exit_price = sl_price; result = "SL"; break
++            if price >= tp_price:
++                exit_price = tp_price; result = "TP"; break
++        else:
++            if price >= sl_price:
++                exit_price = sl_price; result = "SL"; break
++            if price <= tp_price:
++                exit_price = tp_price; result = "TP"; break
++
++        log.info(f"[{now.strftime('%H:%M')} CT] {direction_str} @ {price:.4f} | "
++                  f"unreal=${unreal:+.2f} | TP={tp_price:.4f} SL={sl_price:.4f}")
++        time.sleep(POLL_INTERVAL)
++
++    # ── 5. PnL y notificacion ──
++    pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
++    log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
++
++    msg = (f"{PREFIX}\n"
++           f"[CLOSE] [{result}]\n"
++           f"Symbol: {CFG.spec.label} ({ticker})\n"
++           f"Contracts: {CFG.nc}\n"
++           f"PnL: ${pnl:+,.2f}\n"
++           f"Dia de paper: {progress['days_elapsed']}\n"
++           f"{utc_now_str()}")
++    send(msg)
++
++    # ── 5a. Elegibilidad de payout (22-sep-2026, pedido explicito del
++    #         usuario; extendido el mismo dia con el profit-gate real
++    #         de Topstep a partir del segundo payout, ver
++    #         GLITCH_RESEARCH_LOG.md) -- capturar el estado del ciclo de
++    #         payout ANTES de agregar la entrada de hoy, para poder
++    #         detectar el CRUCE (nuevo evento disparado hoy, no solo el
++    #         nivel) y no reavisar en dias subsecuentes. intento_hoy se
++    #         guarda por separado porque intento_actual puede reasignarse
++    #         mas abajo (PASE/QUIEBRE) -- el cruce de elegibilidad de HOY
++    #         pertenece al intento en el que HOY realmente se tageo. ──
++    intento_hoy = intento_actual
++    payout_state_before = _replay_payout_cycles(paper_log, intento_hoy)
++
++    paper_log.append({
++        "date": today_str, "signal": True, "side": side,
++        "direction": direction_str, "entry": entry_price,
++        "exit": exit_price, "result": result,
++        "pnl": round(pnl, 2), "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
++        "nc": CFG.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
++        "intento": intento_actual,
++    })
++    save_log(paper_log)
++    save_pending({})  # posicion resuelta normalmente -- nada pendiente que reconciliar
++
++    payout_state_after = _replay_payout_cycles(paper_log, intento_hoy)
++
++    # ── 5b. Verificar reinicio de intento (PASE/QUIEBRE) -- 09-sep-2026,
++    #         ver GLITCH_RESEARCH_LOG.md. Mensaje separado del resumen
++    #         diario normal, enviado el mismo dia que ocurre. CORREGIDO
++    #         (16-sep-2026): floor TRAILING real, no MLL_THRESHOLD fijo
++    #         -- ver _attempt_trailing_floor() arriba. paper_log ya
++    #         incluye la entrada de HOY (append de arriba), asi que el
++    #         pico de hoy ya cuenta para el floor de este chequeo. ──
++    attempt_pnl_after = attempt_pnl_before + pnl
++
++    # ── 5a-bis. Alerta de elegibilidad de payout -- SOLO cuando HOY
++    #         dispara un evento NUEVO (nunca por seguir bloqueado en
++    #         >=5 dias ganadores esperando el profit-gate, ni por
++    #         seguir elegible tras ya haber avisado). "balance actual"
++    #         = payout_state_after["events"][-1]["balance"], que
++    #         coincide con attempt_pnl_after (el replay de arriba NO
++    #         resetea `balance` tras un payout -- mismo concepto que
++    #         core/funded_account.py::simulate_xfa_lifetime, PnL
++    #         acumulado desde $0 relativo al intento, NO el
++    #         account_size de $150,000). min(balance*50%, cap) -- misma
++    #         formula exacta del Monte Carlo ya validado
++    #         (XFA_150K.payout_pct_of_balance/payout_cap_usd), sin
++    #         reimplementarla con numeros nuevos. Se evalua ANTES del
++    #         chequeo de PASE/QUIEBRE de abajo porque ambos leen el
++    #         mismo intento_hoy/attempt_pnl_after -- si ademas hoy
++    #         cruza PASE/QUIEBRE, son dos eventos distintos y se avisan
++    #         los dos, cada uno con su propio mensaje. ──
++    if _check_payout_eligibility_crossed(payout_state_before["events"], payout_state_after["events"]):
++        nuevo_evento = payout_state_after["events"][-1]
++        payout_recomendado = min(nuevo_evento["balance"] * XFA_150K.payout_pct_of_balance, XFA_150K.payout_cap_usd)
++        ordinal = "primer" if nuevo_evento["n"] == 1 else f"#{nuevo_evento['n']}"
++        eligible_msg = (f"{PREFIX} [ELEGIBLE PARA PAYOUT]\n"
++                        f"ELEGIBLE PARA PAYOUT: {WINNING_DAYS_REQUIRED} dias ganadores acumulados "
++                        f"desde el ultimo payout (intento #{intento_hoy}, este es el {ordinal} payout"
++                        f"{' -- exento de la condicion de profit neto' if nuevo_evento['n'] == 1 else ''}).\n"
++                        f"Payout recomendado: 50% del balance actual (${nuevo_evento['balance']:,.2f}) = "
++                        f"${payout_recomendado:,.2f} (regla ya validada por Monte Carlo: retirar de "
++                        f"inmediato, no esperar).\n"
++                        f"{utc_now_str()}")
++        send(eligible_msg)
++        log.info(eligible_msg.replace("\n", " | "))
++
++    attempt_floor = _attempt_trailing_floor(paper_log, intento_actual)
++    event = _check_attempt_reset(attempt_pnl_after, PROFIT_TARGET, attempt_floor)
++    if event is not None:
++        attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
++        historic_progress = _paper_progress(paper_log, today_str)  # ya incluye el ciclo de hoy
++        if historic_progress["wr_empirico"] is not None:
++            gap_pp = (historic_progress["wr_empirico"] - THEORETICAL_WR) * 100
++            hist_wr_line = f"{historic_progress['wr_empirico']:.1%} vs {THEORETICAL_WR:.1%} ({gap_pp:+.1f}pp)"
++        else:
++            hist_wr_line = "—"
++
++        reset_msg = (f"{PREFIX} [INTENTO #{intento_actual} COMPLETADO: {event}]\n"
++                     f"PnL final del intento: ${attempt_pnl_after:+,.2f}\n"
++                     f"Dias que tomo este intento: {attempt_days}\n"
++                     f"WR acumulado historico: {hist_wr_line}\n"
++                     f"Iniciando intento #{intento_actual + 1} desde $0\n"
++                     f"{utc_now_str()}")
++        send(reset_msg)
++        log.info(reset_msg.replace("\n", " | "))
++        # CORREGIDO (10-sep-2026, mismo fix que geometry_scheduler.py): re-derivar
++        # via _current_intento() en vez de un "+= 1" local -- ese incremento nunca
++        # se persistia, asi que la corrida del dia siguiente volvia a calcular el
++        # mismo intento ya completado desde cero. _current_intento() ahora detecta
++        # este mismo caso directamente desde paper_log, asi que reusar la MISMA
++        # funcion aqui es lo que hace que el fix sea consistente para HOY y para
++        # MAÑANA -- una sola fuente de verdad.
++        intento_actual = _current_intento(paper_log)
++
++    progress = _paper_progress(paper_log, today_str)  # historico -- recalculado, incluye el ciclo de hoy
++
++    if progress["wr_empirico"] is not None:
++        gap_pp = (progress["wr_empirico"] - THEORETICAL_WR) * 100
++        wr_line = f"{progress['wr_empirico']:.1%} vs {THEORETICAL_WR:.1%} ({gap_pp:+.1f}pp)"
++    else:
++        wr_line = "—"
++
++    # Acotado al intento actual (ya incrementado arriba si hubo
++    # PASE/QUIEBRE hoy) -- si el intento acaba de reiniciarse, Equity y
++    # Dias vs. Estimado caen naturalmente en 0.00/0, consistente con
++    # "Iniciando intento #N+1 desde $0" del mensaje de reinicio de arriba.
++    #
++    # Next Payout: implementado (22-sep-2026) -- conteo real de dias
++    # ganadores (>=$150 neto) del intento actual, ver _attempt_winning_days().
++    # Usa intento_actual (no intento_hoy) a proposito: si PASE/QUIEBRE
++    # reinicio el intento arriba, el conteo del intento NUEVO es 0 por
++    # construccion (ningun dia registrado todavia) -- consistente con
++    # "Iniciando intento #N+1 desde $0" del mensaje de reinicio.
++    #
++    # Payout Total: SIGUE siendo placeholder deliberado -- distinto de
++    # Next Payout. Trackear el total de payouts ya COBRADOS requeriria
++    # modelar el evento "el usuario solicito y cobro el payout" (que no
++    # existe en este paper trading -- ver la alerta ELEGIBLE arriba, es
++    # una recomendacion, no una accion automatica). Fuera de alcance de
++    # este cambio, igual que antes.
++    #
++    # NOTA (22-sep-2026, CONFIRMADO no real -- ver GLITCH_RESEARCH_LOG.md):
++    # un comentario legado en este mismo modulo mencionaba una ruta
++    # alterna de elegibilidad ("balance >= $55k"). Rastreado con git
++    # blame hasta GLITCH_RESEARCH_LOG.md linea 113 (commit 286bc8d,
++    # 14-ago-2026 -- la fase mas temprana del proyecto, sin cita a
++    # ninguna fuente, en la misma zona del log ya marcada [NO
++    # VERIFICADO] por un incidente documentado de un numero fabricado
++    # por otra sesion de IA). Verificado contra help.topstep.com
++    # (Topstep Payout Policy + Express Funded Account Parameters,
++    # fuente oficial, mismo sitio ya usado para MLL/Scaling Plan/regla
++    # de 5 dias): NO existe ninguna ruta alterna por balance minimo
++    # para el PRIMER payout -- solo "5 dias ganadores de $150+". El
++    # $55k NO es una regla real de Topstep -- residuo/alucinacion de la
++    # fase inicial, NO implementado aqui a proposito.
++    attempt_equity = _attempt_pnl(paper_log, intento_actual)
++    attempt_peak = _attempt_peak(paper_log, intento_actual)  # PORTADO (16-sep-2026) desde geometry_scheduler.py -- gap de paridad
++    attempt_days = _attempt_days_elapsed(paper_log, intento_actual, today_str)
++    # Usa intento_actual (no intento_hoy) por la misma razon que
++    # attempt_equity/attempt_peak arriba -- si PASE/QUIEBRE reinicio el
++    # intento, el ciclo de payout del intento NUEVO arranca en 0/5 sin
++    # eventos, por construccion de _replay_payout_cycles().
++    payout_state_now = _replay_payout_cycles(paper_log, intento_actual)
++    winning_days_now = payout_state_now["winning_days_since_last"]
++    next_payout_line = f"{winning_days_now}/{WINNING_DAYS_REQUIRED} dias ganadores desde el ultimo payout"
++    if winning_days_now >= WINNING_DAYS_REQUIRED:
++        # 5+ dias ganadores pero SIN evento nuevo disparado hoy (si lo
++        # hubiera disparado, _replay_payout_cycles ya lo habria
++        # resetado a 0) -- solo puede significar que esta BLOQUEADO
++        # esperando el profit-gate del segundo payout en adelante.
++        profit_since = payout_state_now["balance"] - payout_state_now["events"][-1]["balance"]
++        next_payout_line += f" (BLOQUEADO -- profit neto desde el ultimo payout: ${profit_since:+,.2f}, requiere >= $0.01)"
++
++    summary = (f"{PREFIX}\n"
++               f"Next Payout: {next_payout_line}\n"
++               f"Payout Total: sin tracking de elegibilidad implementado todavia\n"
++               f"Equity: ${attempt_equity:,.2f}\n"
++               f"Peak: ${attempt_peak:,.2f}\n"
++               f"PnL Hoy: ${pnl:+,.2f}\n"
++               f"WR: {wr_line}\n"
++               f"Dias vs. Estimado: {attempt_days} / {DIAS_ESPERADOS} esperados\n"
++               f"{utc_now_str()}")
++    send(summary)
++    log.info("Done — saliendo")
++
++
++if __name__ == "__main__":
++    run()
+diff --git a/glitch/strategies/geometry_pure.py b/glitch/strategies/geometry_pure.py
+index 33070d5..58a214e 100644
+--- a/glitch/strategies/geometry_pure.py
++++ b/glitch/strategies/geometry_pure.py
+@@ -140,6 +140,16 @@ CANDIDATES = {
+     "MES": GeometryConfig(SPECS["MES"], sl_ticks=100, tp_ticks=32, max_holding_bars=100, nc=40, direction="alternate"),
+     "MGC": GeometryConfig(SPECS["MGC"], sl_ticks=136, tp_ticks=45, max_holding_bars=100, nc=30, direction="alternate"),
+     "M2K": GeometryConfig(SPECS["M2K"], sl_ticks=200, tp_ticks=80, max_holding_bars=100, nc=50, direction="alternate"),
++    # Cerebro 2 -- candidato de geometria pura para SOBREVIVIR en la XFA
++    # 150K una vez fondeado (NO para pasar el Combine -- ese es
++    # CANDIDATES["MGC"] arriba, geometria distinta, objetivo distinto,
++    # ver GLITCH_RESEARCH_LOG.md 06/07-sep-2026 para la confirmacion
++    # empirica de que optimizar uno no optimiza el otro: pass rate de
++    # Combine de ESTA geometria es solo 46.9%, vs ~81.4% de G2/MGC-combine).
++    # RR=1.0, WR=0.5 (validado empiricamente contra MGC real: 49.97%
++    # condicional, estable en 3 sub-periodos temporales independientes).
++    # Clave deliberadamente DISTINTA de "MGC" -- NO sobrescribir el
++    # candidato de Combine ya validado.
+ }
+ 
+ # ── Cerebro 2 (MGC, XFA): UNA sola fuente de verdad (T4, 12-oct-2026; NEEDS HUMAN REVIEW -- cambia que geometria usa el Pi) ──
+diff --git a/glitch/tests/test_funded_account.py b/glitch/tests/test_funded_account.py
+new file mode 100644
+index 0000000..104c1c3
+--- /dev/null
++++ b/glitch/tests/test_funded_account.py
+@@ -0,0 +1,277 @@
++"""
++Glitch — Tests de core/funded_account.py (01-sep-2026)
++==========================================================
++Ninguno de estos tests existia antes de esta sesion -- el modulo se
++usaba sin cobertura. Cubre la maquina de estados de XFAAccount, el
++toggle mll_reset_policy (agregado en esta misma sesion para poder
++correr AMBOS escenarios del MLL post-payout como sensibilidad, en vez
++de un solo comportamiento hardcodeado), y una verificacion basica de
++forma/sanidad de simulate_xfa_paths()/simulate_xfa_lifetime().
++"""
++import os
++import sys
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import numpy as np
++import pytest
++
++from core.funded_account import (
++    XFAAccount, XFASpec, XFAStatus, XFA_50K, XFA_100K, XFA_150K,
++    simulate_xfa_paths, simulate_xfa_lifetime,
++    simulate_xfa_lifetime_dynamic_nc, dynamic_nc_for_balance,
++    XFA_SCALING_PLAN, RATIO_MINI_TO_MICRO,
++)
++from scripts.camino_b_grid import ExactDayDist
++
++
++class TestXFAAccountBasics:
++
++    def test_starts_at_zero_balance_and_active(self):
++        acct = XFAAccount(XFA_50K)
++        assert acct.balance == 0.0
++        assert acct.status == XFAStatus.ACTIVE
++        assert acct.mll_floor == -XFA_50K.mll_distance
++
++    def test_winning_day_counts_only_when_net_pnl_meets_threshold(self):
++        acct = XFAAccount(XFA_50K)
++        acct.start_day()
++        acct.record_trade_pnl(149.99)  # justo debajo del umbral de $150
++        acct.end_of_day()
++        assert acct.winning_days_count == 0
++
++        acct.start_day()
++        acct.record_trade_pnl(150.0)  # exactamente en el umbral
++        acct.end_of_day()
++        assert acct.winning_days_count == 1
++
++    def test_losing_day_does_not_count_as_winning(self):
++        acct = XFAAccount(XFA_50K)
++        acct.start_day()
++        acct.record_trade_pnl(-500.0)
++        acct.end_of_day()
++        assert acct.winning_days_count == 0
++        assert acct.status == XFAStatus.ACTIVE
++
++    def test_five_winning_days_triggers_payout_eligible(self):
++        acct = XFAAccount(XFA_50K)
++        for _ in range(5):
++            acct.start_day()
++            acct.record_trade_pnl(200.0)
++            acct.end_of_day()
++        assert acct.winning_days_count == 5
++        assert acct.status == XFAStatus.PAYOUT_ELIGIBLE
++
++    def test_mll_breach_is_permanent(self):
++        acct = XFAAccount(XFA_50K)
++        acct.start_day()
++        acct.record_trade_pnl(-XFA_50K.mll_distance - 1)  # rompe el floor inicial
++        acct.end_of_day()
++        assert acct.status == XFAStatus.BLOWN_MLL
++        assert not acct.is_alive
++
++        # una vez tronada, mas trades no la reviven
++        acct.start_day()
++        acct.record_trade_pnl(10_000.0)
++        acct.end_of_day()
++        assert acct.status == XFAStatus.BLOWN_MLL
++
++    def test_floor_ratchets_up_only_and_locks_at_spec_distance(self):
++        acct = XFAAccount(XFA_50K)
++        acct.start_day()
++        acct.record_trade_pnl(5_000.0)
++        acct.end_of_day()
++        floor_after_gain = acct.mll_floor
++        assert floor_after_gain > -XFA_50K.mll_distance  # subio
++
++        acct.start_day()
++        acct.record_trade_pnl(-1_000.0)  # perdida, pero no rompe el floor ya subido
++        acct.end_of_day()
++        assert acct.mll_floor == floor_after_gain  # el floor NO baja
++        assert acct.is_alive
++
++    def test_inactivity_closes_account_after_threshold(self):
++        acct = XFAAccount(XFA_50K)
++        for _ in range(XFA_50K.inactivity_close_days - 1):
++            acct.end_of_day(no_trade_today=True)
++        assert acct.is_alive
++        acct.end_of_day(no_trade_today=True)
++        assert acct.status == XFAStatus.INACTIVE_CLOSED
++        assert not acct.is_alive
++
++
++class TestPayoutAndMLLResetPolicy:
++
++    def _make_eligible_account(self, mll_reset_policy: str) -> XFAAccount:
++        acct = XFAAccount(XFA_50K, mll_reset_policy=mll_reset_policy)
++        for _ in range(5):
++            acct.start_day()
++            acct.record_trade_pnl(1_000.0)  # dias ganadores grandes, para tener balance de sobra
++            acct.end_of_day()
++        assert acct.status == XFAStatus.PAYOUT_ELIGIBLE
++        return acct
++
++    def test_request_payout_reduces_balance_and_resets_winning_days(self):
++        acct = self._make_eligible_account("every_payout")
++        balance_before = acct.balance
++        take = acct.request_payout()
++        assert take > 0
++        assert acct.balance < balance_before
++        assert acct.winning_days_count == 0
++        assert acct.lifetime_payouts == 1
++        assert acct.status == XFAStatus.ACTIVE
++
++    def test_request_payout_raises_if_not_eligible(self):
++        acct = XFAAccount(XFA_50K)
++        with pytest.raises(RuntimeError):
++            acct.request_payout()
++
++    def test_every_payout_policy_resets_floor_to_zero_every_time(self):
++        acct = self._make_eligible_account("every_payout")
++        acct.request_payout()
++        assert acct.mll_floor == 0.0
++
++        # segundo ciclo de 5 dias ganadores -> segundo payout
++        for _ in range(5):
++            acct.start_day()
++            acct.record_trade_pnl(1_000.0)
++            acct.end_of_day()
++        floor_before_second_payout = acct.mll_floor
++        assert floor_before_second_payout != 0.0  # trailing normal lo subio de nuevo
++        acct.request_payout()
++        assert acct.mll_floor == 0.0  # "every_payout" lo fuerza a 0 OTRA VEZ
++
++    def test_first_payout_only_policy_does_not_reset_floor_on_second_payout(self):
++        acct = self._make_eligible_account("first_payout_only")
++        acct.request_payout()
++        assert acct.mll_floor == 0.0  # la primera vez SI se fuerza a 0
++
++        for _ in range(5):
++            acct.start_day()
++            acct.record_trade_pnl(1_000.0)
++            acct.end_of_day()
++        floor_before_second_payout = acct.mll_floor
++        assert floor_before_second_payout != 0.0
++        acct.request_payout()
++        # "first_payout_only": la segunda vez NO se fuerza -- el floor
++        # sigue exactamente donde el trailing normal ya lo tenia
++        assert acct.mll_floor == floor_before_second_payout
++
++    def test_both_policies_agree_on_first_payout(self):
++        """La ambiguedad es sobre pagos SUBSECUENTES, no el primero -- ambas politicas deben coincidir ahi."""
++        acct_a = self._make_eligible_account("every_payout")
++        acct_b = self._make_eligible_account("first_payout_only")
++        acct_a.request_payout()
++        acct_b.request_payout()
++        assert acct_a.mll_floor == acct_b.mll_floor == 0.0
++
++
++class _ConstantDist:
++    """Distribucion trivial para tests deterministas -- mismo pnl todos los dias."""
++    def __init__(self, daily_pnl: float):
++        self.daily_pnl = daily_pnl
++
++    def sample(self, n, rng):
++        return np.full(n, self.daily_pnl)
++
++
++class TestSimulateXfaPaths:
++
++    def test_all_paths_reach_eligible_with_strongly_positive_dist(self):
++        dist = _ConstantDist(300.0)  # siempre gana $300/dia, mucho mas que el minimo
++        result = simulate_xfa_paths(dist, spec=XFA_50K, n_paths=200, max_days=30, seed=1)
++        assert result["prob_eligible"] == 1.0
++        assert result["prob_blown"] == 0.0
++        assert result["avg_days_to_eligible"] == pytest.approx(5.0)
++
++    def test_all_paths_blow_with_strongly_negative_dist(self):
++        dist = _ConstantDist(-XFA_50K.mll_distance - 100)
++        result = simulate_xfa_paths(dist, spec=XFA_50K, n_paths=200, max_days=30, seed=1)
++        assert result["prob_blown"] == 1.0
++        assert result["prob_eligible"] == 0.0
++
++
++class TestSimulateXfaLifetime:
++
++    def test_returns_expected_keys_and_reasonable_values(self):
++        dist = _ConstantDist(300.0)
++        for policy in ("every_payout", "first_payout_only"):
++            result = simulate_xfa_lifetime(dist, spec=XFA_50K, mll_reset_policy=policy,
++                                            n_paths=100, max_days=60, seed=1)
++            assert result["mll_reset_policy"] == policy
++            assert result["avg_lifetime_payouts"] > 0
++            assert 0.0 <= result["prob_still_alive_at_horizon"] <= 1.0
++            assert 0.0 <= result["prob_never_reached_first_payout"] <= 1.0
++
++    def test_strongly_negative_dist_never_reaches_first_payout(self):
++        dist = _ConstantDist(-XFA_50K.mll_distance - 100)
++        result = simulate_xfa_lifetime(dist, spec=XFA_50K, n_paths=100, max_days=30, seed=1)
++        assert result["prob_never_reached_first_payout"] == 1.0
++        assert result["avg_lifetime_payouts"] == 0.0
++
++
++class TestDynamicNcForBalance:
++    """Scaling Plan real de la XFA (confirmado 04-sep-2026 contra
++    help.topstep.com) -- ver GLITCH_RESEARCH_LOG.md. El techo de cada
++    cuenta se alcanza exactamente en su propio mll_distance."""
++
++    def test_50k_thresholds(self):
++        bal = np.array([-2000.0, 500.0, 1_499.0, 1_500.0, 1_999.0, 2_000.0, 10_000.0])
++        nc = dynamic_nc_for_balance(bal, XFA_50K.mll_distance, "MGC")
++        assert list(nc) == [20, 20, 20, 30, 30, 50, 50]  # lotes x10 (MGC = ratio estandar)
++
++    def test_100k_thresholds(self):
++        bal = np.array([500.0, 1_500.0, 2_000.0, 2_999.0, 3_000.0, 10_000.0])
++        nc = dynamic_nc_for_balance(bal, XFA_100K.mll_distance, "MES")
++        assert list(nc) == [30, 40, 50, 50, 100, 100]
++
++    def test_150k_thresholds(self):
++        bal = np.array([500.0, 1_500.0, 2_000.0, 3_000.0, 4_499.0, 4_500.0, 10_000.0])
++        nc = dynamic_nc_for_balance(bal, XFA_150K.mll_distance, "MES")
++        assert list(nc) == [30, 40, 50, 100, 100, 150, 150]
++
++
++class TestSimulateXfaLifetimeDynamicNc:
++    """
++    Paridad mecanica contra simulate_xfa_lifetime(): con una tabla de
++    Scaling Plan degenerada (un solo tier -> nc constante para
++    cualquier balance), el resultado dinamico debe coincidir
++    bit-a-bit con el de nc fijo -- confirma que la aritmetica
++    dia-a-dia del $ dinamico replica exactamente la del $ fijo. No es
++    posible probar paridad con la tabla REAL desde balance=$0 (el nc
++    real cambia de tier necesariamente), asi que esto valida el
++    mecanismo, no un escenario real de principio a fin.
++    """
++
++    def test_matches_fixed_nc_under_degenerate_single_tier_table(self):
++        RATIO_MINI_TO_MICRO["_TEST_RATIO_1"] = 1
++        cases = [
++            (XFA_150K, 6, 364.0, 364.0, 1.92, 0.5, "every_payout"),
++            (XFA_150K, 4, 540.0, 810.0, 1.22, 0.4, "first_payout_only"),
++            (XFA_50K, 6, 100.0, 100.0, 1.92, 0.35, "every_payout"),
++        ]
++        try:
++            for spec, nc, sl_usd, tp_usd, comm, wr, policy in cases:
++                original_plan = XFA_SCALING_PLAN[spec.mll_distance]
++                XFA_SCALING_PLAN[spec.mll_distance] = {"bins": np.array([]), "lots": np.array([nc])}
++                try:
++                    dist = ExactDayDist(wr, tp_usd * nc, sl_usd * nc, comm * nc, trades_per_day=1)
++                    r_fixed = simulate_xfa_lifetime(dist, spec=spec, mll_reset_policy=policy,
++                                                     n_paths=300, max_days=300, seed=11)
++                    r_dyn = simulate_xfa_lifetime_dynamic_nc(
++                        wr, sl_usd, tp_usd, comm, spec=spec, product_code="_TEST_RATIO_1",
++                        mll_reset_policy=policy, n_paths=300, max_days=300, seed=11)
++                finally:
++                    XFA_SCALING_PLAN[spec.mll_distance] = original_plan
++
++                for key in r_fixed:
++                    v1, v2 = r_fixed[key], r_dyn[key]
++                    if isinstance(v1, tuple):
++                        for a, b in zip(v1, v2):
++                            assert a == pytest.approx(b), f"{key}: {v1} != {v2}"
++                    elif isinstance(v1, float):
++                        assert v1 == pytest.approx(v2), f"{key}: {v1} != {v2}"
++                    else:
++                        assert v1 == v2, f"{key}: {v1} != {v2}"
++        finally:
++            RATIO_MINI_TO_MICRO.pop("_TEST_RATIO_1", None)
+diff --git a/glitch/tests/test_geometry_mgc_scheduler.py b/glitch/tests/test_geometry_mgc_scheduler.py
+new file mode 100644
+index 0000000..e8c5f26
+--- /dev/null
++++ b/glitch/tests/test_geometry_mgc_scheduler.py
+@@ -0,0 +1,806 @@
++"""
++Glitch — Tests para scheduler/geometry_mgc_scheduler.py (09-sep-2026)
++
++Cubre la logica de reinicio de intento de Combine (misma logica que
++geometry_scheduler.py, ver tests/test_geometry_parity.py, pero con los
++umbrales de la cuenta 150K: profit_target=$9,000, mll_distance=$4,500,
++confirmados contra core/prop_firm.py::TOPSTEP_150K, distintos de los
++$3,000/$2,000 de G2/50K) y los umbrales de ENTRY_WAIT_MINUTES.
++"""
++import os
++
++os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++
++import pytest
++
++import scheduler.geometry_mgc_scheduler as scheduler
++
++
++class TestAttemptResetThresholds:
++    def test_profit_target_matches_topstep_150k(self):
++        from core.prop_firm import TOPSTEP_150K
++        assert scheduler.PROFIT_TARGET == TOPSTEP_150K.profit_target == 9_000
++
++    def test_mll_threshold_matches_topstep_150k_negated(self):
++        from core.prop_firm import TOPSTEP_150K
++        assert scheduler.MLL_THRESHOLD == -TOPSTEP_150K.mll_distance == -4_500
++
++    def test_thresholds_distinct_from_g2_50k(self):
++        """Confirma explicitamente que NO se reusaron por accidente los
++        umbrales de la cuenta 50K de G2 -- ver instruccion del usuario de
++        confirmar el tamaño de cuenta real antes de hardcodear."""
++        assert scheduler.PROFIT_TARGET != 3_000
++        assert scheduler.MLL_THRESHOLD != -2_000
++
++
++class TestCurrentIntento:
++    def test_empty_log_is_attempt_1(self):
++        assert scheduler._current_intento([]) == 1
++
++    def test_returns_highest_intento_seen(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-02", "result": "SL", "pnl": -300, "intento": 2},
++        ]
++        assert scheduler._current_intento(log) == 2
++
++    def test_entries_without_intento_field_default_to_1(self):
++        log = [{"date": "2026-09-01", "result": "TP", "pnl": 500}]
++        assert scheduler._current_intento(log) == 1
++
++
++class TestAttemptPnl:
++    def test_sums_only_current_attempt(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 9000, "intento": 1},
++            {"date": "2026-09-02", "result": "SL", "pnl": -600, "intento": 2},
++        ]
++        assert scheduler._attempt_pnl(log, 1) == 9000
++        assert scheduler._attempt_pnl(log, 2) == -600
++
++    def test_empty_attempt_is_zero(self):
++        assert scheduler._attempt_pnl([], 1) == 0
++
++
++class TestAttemptDaysElapsed:
++    def test_no_entries_yet_is_zero(self):
++        assert scheduler._attempt_days_elapsed([], 2, "2026-09-10") == 0
++
++    def test_counts_from_first_entry_of_that_attempt_only(self):
++        log = [
++            {"date": "2026-09-01", "result": "SL", "pnl": -4500, "intento": 1},
++            {"date": "2026-09-05", "result": "TP", "pnl": 600, "intento": 2},
++        ]
++        assert scheduler._attempt_days_elapsed(log, 2, "2026-09-08") == 4
++
++
++class TestCheckAttemptReset:
++    """Los 3 casos pedidos explicitamente, contra los umbrales reales de
++    la cuenta 150K de este candidato."""
++
++    def test_pase_at_exact_target(self):
++        assert scheduler._check_attempt_reset(9000, 9000, -4500) == "PASE"
++
++    def test_pase_when_overshooting_target(self):
++        assert scheduler._check_attempt_reset(9800, 9000, -4500) == "PASE"
++
++    def test_quiebre_at_exact_mll(self):
++        assert scheduler._check_attempt_reset(-4500, 9000, -4500) == "QUIEBRE"
++
++    def test_quiebre_when_overshooting_floor(self):
++        assert scheduler._check_attempt_reset(-5200, 9000, -4500) == "QUIEBRE"
++
++    def test_normal_case_no_event_between_thresholds(self):
++        assert scheduler._check_attempt_reset(2000, 9000, -4500) is None
++        assert scheduler._check_attempt_reset(-2000, 9000, -4500) is None
++        assert scheduler._check_attempt_reset(0, 9000, -4500) is None
++
++    def test_normal_case_just_short_of_either_threshold(self):
++        assert scheduler._check_attempt_reset(8999.99, 9000, -4500) is None
++        assert scheduler._check_attempt_reset(-4499.99, 9000, -4500) is None
++
++    def test_uses_scheduler_own_constants_correctly(self):
++        """Confirma que los umbrales reales del modulo (no numeros de
++        prueba) tambien producen el veredicto esperado."""
++        assert scheduler._check_attempt_reset(
++            scheduler.PROFIT_TARGET, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD
++        ) == "PASE"
++        assert scheduler._check_attempt_reset(
++            scheduler.MLL_THRESHOLD, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD
++        ) == "QUIEBRE"
++
++
++class TestAttemptPeak:
++    """PORTADO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md) desde
++    geometry_scheduler.py -- gap de paridad ya identificado. Tambien es
++    la base del floor trailing real (TestAttemptTrailingFloor abajo)."""
++
++    def test_tracks_running_max_within_attempt(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 3000, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 1000, "intento": 1},
++            {"date": "2026-09-03", "result": "SL", "pnl": -2000, "intento": 1},
++        ]
++        # running: 3000, 4000, 2000 -> peak=4000
++        assert scheduler._attempt_peak(log, 1) == 4000
++
++    def test_does_not_leak_across_attempts(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 9000, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 100, "intento": 2},
++        ]
++        assert scheduler._attempt_peak(log, 2) == 100
++
++
++class TestAttemptTrailingFloor:
++    """
++    CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): floor trailing
++    REAL de Topstep -- antes de este fix, _check_attempt_reset() siempre
++    comparaba contra MLL_THRESHOLD fijo, ignorando cualquier pico
++    intermedio. Verificado contra el Gist real de este mismo candidato
++    (auditoria retrospectiva, scripts/audit_mgc_trailing_mll_2026_09_16.py)
++    que la formula de abajo reproduce el mismo floor que el ratchet
++    completo de TopstepMonteCarloSimulator.
++    """
++
++    def test_no_peak_equals_flat_mll_threshold(self):
++        log = [
++            {"date": "2026-09-01", "result": "SL", "pnl": -1000, "intento": 1},
++        ]
++        assert scheduler._attempt_trailing_floor(log, 1) == scheduler.MLL_THRESHOLD == -4500
++
++    def test_floor_ratchets_up_with_a_real_peak(self):
++        """Mismo caso real auditado el 16-sep-2026: pico de $906 ->
++        floor sube a 906 + MLL_THRESHOLD = 906 - 4500 = -3594 (numero
++        real confirmado por el usuario contra el Gist)."""
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 906, "intento": 1},
++        ]
++        assert scheduler._attempt_trailing_floor(log, 1) == pytest.approx(906 + scheduler.MLL_THRESHOLD) == pytest.approx(-3594)
++
++    def test_floor_never_exceeds_zero(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 5000, "intento": 1},
++        ]
++        assert scheduler._attempt_trailing_floor(log, 1) == 0.0
++
++    def test_floor_does_not_leak_across_attempts(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 5000, "intento": 1},
++            {"date": "2026-09-02", "result": "SL", "pnl": -100, "intento": 2},
++        ]
++        assert scheduler._attempt_trailing_floor(log, 2) == scheduler.MLL_THRESHOLD
++
++
++class TestAttemptWinningDays:
++    """22-sep-2026, pedido explicito del usuario -- contador REAL de
++    elegibilidad de payout de Topstep (5 dias con PnL neto >= $150),
++    DISTINTO de equity/balance acumulado (_attempt_pnl)."""
++
++    def test_min_winning_day_usd_matches_xfa_150k(self):
++        from core.funded_account import XFA_150K
++        assert scheduler.MIN_WINNING_DAY_USD == XFA_150K.min_winning_day_usd == 150.0
++        assert scheduler.WINNING_DAYS_REQUIRED == XFA_150K.winning_days_required == 5
++
++    def test_counts_days_at_or_above_threshold_only(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 2184, "intento": 1},   # cuenta
++            {"date": "2026-09-02", "result": "SL", "pnl": -2196, "intento": 1},  # no cuenta
++            {"date": "2026-09-03", "result": "TP", "pnl": 149.99, "intento": 1},  # justo debajo, no cuenta
++            {"date": "2026-09-04", "result": "TP", "pnl": 150.0, "intento": 1},  # exacto, SI cuenta
++        ]
++        assert scheduler._attempt_winning_days(log, 1) == 2
++
++    def test_flatten_with_pnl_above_threshold_counts_too(self):
++        """La regla es sobre el PnL del dia, no sobre que barrera se
++        toco -- un FLATTEN que por lo que sea cerro en +$150 o mas
++        tambien es un dia ganador elegible."""
++        log = [{"date": "2026-09-01", "result": "FLATTEN", "pnl": 300, "intento": 1}]
++        assert scheduler._attempt_winning_days(log, 1) == 1
++
++    def test_does_not_leak_across_attempts(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 2184, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 2184, "intento": 2},
++        ]
++        assert scheduler._attempt_winning_days(log, 2) == 1
++
++    def test_reconciled_entry_never_counts_as_winning_day(self):
++        """Una posicion pendiente sin resolver (RECONCILED) nunca cuenta
++        como dia ganador, aunque su pnl estimado sea >= $150 -- misma
++        exclusion ya aplicada a equity/peak via _attempt_entries()."""
++        log = [{"date": "2026-09-01", "result": "RECONCILED", "pnl": 5000,
++                "pnl_estimated": True, "reconciled": True, "intento": 1}]
++        assert scheduler._attempt_winning_days(log, 1) == 0
++
++    def test_high_equity_with_zero_winning_days_is_possible(self):
++        """Confirma explicitamente que equity acumulado y dias ganadores
++        son criterios INDEPENDIENTES -- un intento puede tener equity
++        positivo alto sin ningun dia individual >= $150 (ej. muchos
++        dias pequeños), pedido explicito del usuario de no confundirlos."""
++        log = [{"date": f"2026-09-{d:02d}", "result": "TP", "pnl": 50, "intento": 1} for d in range(1, 11)]
++        assert scheduler._attempt_pnl(log, 1) == 500  # equity alto
++        assert scheduler._attempt_winning_days(log, 1) == 0  # pero ningun dia individual califica
++
++    def test_low_or_negative_equity_with_five_winning_days_is_possible(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 200, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 200, "intento": 1},
++            {"date": "2026-09-03", "result": "TP", "pnl": 200, "intento": 1},
++            {"date": "2026-09-04", "result": "TP", "pnl": 200, "intento": 1},
++            {"date": "2026-09-05", "result": "TP", "pnl": 200, "intento": 1},
++            {"date": "2026-09-06", "result": "SL", "pnl": -1200, "intento": 1},  # equity: 1000-1200=-200
++        ]
++        assert scheduler._attempt_pnl(log, 1) == -200
++        assert scheduler._attempt_winning_days(log, 1) == 5
++
++
++class TestReplayPayoutCycles:
++    """22-sep-2026, pedido explicito del usuario: extension real de
++    Topstep -- el conteo de 5 dias se REINICIA tras cada payout, y a
++    partir del SEGUNDO payout se exige ademas profit neto >= $0.01
++    desde el balance del payout anterior (el primero esta exento).
++    Verificado contra help.topstep.com, ver GLITCH_RESEARCH_LOG.md."""
++
++    def _tp(self, date, pnl=2184, intento=1):
++        return {"date": date, "result": "TP", "pnl": pnl, "intento": intento}
++
++    def _sl(self, date, pnl=-2196, intento=1):
++        return {"date": date, "result": "SL", "pnl": pnl, "intento": intento}
++
++    def test_no_entries_yet(self):
++        state = scheduler._replay_payout_cycles([], 1)
++        assert state == {"events": [], "winning_days_since_last": 0, "balance": 0.0, "is_first_payout": True}
++
++    def test_first_payout_fires_at_exactly_5_winning_days_no_profit_condition_needed(self):
++        """El primer payout esta EXENTO de la condicion de profit neto
++        -- 5 dias ganadores, aunque el intento venga de mucho antes con
++        equity bajo, es suficiente por si solo."""
++        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]
++        state = scheduler._replay_payout_cycles(log, 1)
++        assert len(state["events"]) == 1
++        assert state["events"][0] == {"date": "2026-09-05", "balance": 2184 * 5, "n": 1}
++        assert state["winning_days_since_last"] == 0  # se reinicio tras el payout
++        assert state["is_first_payout"] is False  # ya paso el primero
++
++    def test_winning_day_count_resets_after_first_payout_not_a_simple_modulo(self):
++        """Confirma que el reinicio es un evento REAL (fecha del payout),
++        no un simple modulo-5 acumulado -- dias 6,7,8,9 (4 mas, no 5
++        mas) NO deben disparar un segundo evento todavia."""
++        log = [self._tp(f"2026-09-{d:02d}") for d in range(1, 10)]  # 9 dias ganadores seguidos
++        state = scheduler._replay_payout_cycles(log, 1)
++        assert len(state["events"]) == 1  # solo el primero (dia 5) -- dia 10 haria falta para el segundo
++        assert state["winning_days_since_last"] == 4  # dias 6,7,8,9 desde el primer payout
++
++    def test_second_payout_fires_when_profit_since_last_payout_is_positive(self):
++        log = ([self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
++               + [self._tp(f"2026-09-{d:02d}") for d in range(6, 11)])  # 5 mas, balance=21840 (> 10920)
++        state = scheduler._replay_payout_cycles(log, 1)
++        assert len(state["events"]) == 2
++        assert state["events"][1]["balance"] == 2184 * 10
++        assert state["winning_days_since_last"] == 0
++
++    def test_second_payout_blocked_when_profit_since_last_payout_is_negative(self):
++        """El caso critico pedido explicitamente por el usuario: 5 dias
++        ganadores NUEVOS desde el ultimo payout, pero el balance total
++        cayo por debajo del balance del ultimo payout (perdidas grandes
++        intercaladas) -- el segundo payout NO debe dispararse."""
++        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
++        log.append(self._sl("2026-09-06", pnl=-15000))          # balance: 10920-15000=-4080
++        log += [self._tp(f"2026-09-{d:02d}") for d in (7, 8, 9, 10, 11)]  # balance final: -4080+10920=6840 (< 10920)
++        state = scheduler._replay_payout_cycles(log, 1)
++        assert len(state["events"]) == 1  # el segundo NO se disparo -- bloqueado
++        assert state["winning_days_since_last"] >= scheduler.WINNING_DAYS_REQUIRED  # sigue "listo", esperando el profit-gate
++        profit_since = state["balance"] - state["events"][-1]["balance"]
++        assert profit_since < 0.01  # confirma por que esta bloqueado
++
++    def test_blocked_payout_unblocks_on_a_later_day_once_profit_turns_positive(self):
++        """Una vez bloqueado, el profit-gate se re-evalua cada dia
++        siguiente -- incluyendo un dia que en si mismo NO es ganador,
++        si ese dia alcanza a mover el balance por encima del ultimo
++        payout."""
++        log = [self._tp(f"2026-09-0{d}") for d in range(1, 6)]  # payout 1, balance=10920
++        log.append(self._sl("2026-09-06", pnl=-15000))          # balance=-4080
++        log += [self._tp(f"2026-09-{d:02d}") for d in (7, 8, 9, 10, 11)]  # balance=6840, bloqueado (5 ganadores desde el payout 1)
++        log.append({"date": "2026-09-12", "result": "FLATTEN", "pnl": 4200, "intento": 1})  # balance=11040 (> 10920), NO es dia ganador (<150? no, 4200>=150 en realidad)
++        state = scheduler._replay_payout_cycles(log, 1)
++        assert len(state["events"]) == 2  # se libero -- el dia 12 empujo el profit-gate a positivo
++        assert state["events"][1]["date"] == "2026-09-12"
++
++    def test_does_not_leak_across_attempts(self):
++        log = [self._tp(f"2026-09-0{d}", intento=1) for d in range(1, 6)]
++        log += [self._tp(f"2026-09-{d:02d}", intento=2) for d in (6, 7)]
++        state = scheduler._replay_payout_cycles(log, 2)
++        assert state["events"] == []
++        assert state["winning_days_since_last"] == 2
++        assert state["is_first_payout"] is True  # el intento 2 nunca tuvo un payout propio
++
++
++class TestCheckPayoutEligibilityCrossed:
++    """Funcion PURA, mismo patron que TestCheckAttemptReset -- solo
++    dispara cuando HOY agrego un evento NUEVO al historial (el conteo
++    de eventos subio), nunca por seguir en el mismo numero de eventos
++    (incluyendo el caso bloqueado por el profit-gate)."""
++
++    def test_fires_when_a_new_event_appears(self):
++        assert scheduler._check_payout_eligibility_crossed([], [{"date": "d", "balance": 1, "n": 1}]) is True
++
++    def test_does_not_fire_when_event_count_is_unchanged(self):
++        one = [{"date": "d", "balance": 1, "n": 1}]
++        assert scheduler._check_payout_eligibility_crossed(one, one) is False
++
++    def test_does_not_fire_while_blocked_by_profit_gate(self):
++        """El caso critico pedido explicitamente: dias bloqueados (5+
++        ganadores desde el ultimo payout, profit-gate no cumplido)
++        siguen sin evento nuevo -- no deben re-avisar."""
++        one = [{"date": "d1", "balance": 1, "n": 1}]
++        assert scheduler._check_payout_eligibility_crossed(one, one) is False
++
++    def test_fires_on_the_second_event_too(self):
++        one = [{"date": "d1", "balance": 1, "n": 1}]
++        two = one + [{"date": "d2", "balance": 2, "n": 2}]
++        assert scheduler._check_payout_eligibility_crossed(one, two) is True
++
++
++class TestPayoutEligibilitySimulatedSequence:
++    """Simulacion de varios 'dias' compuestos con las funciones puras
++    reales (mismo patron que TestCurrentIntentoAdvancesPastCompletedAttempt
++    -- sin invocar run(), que hace I/O de red), para confirmar el
++    comportamiento end-to-end del contador + el disparo de una sola vez."""
++
++    def test_crosses_on_day_5_then_never_refires_through_day_8(self):
++        paper_log = []
++        intento = 1
++        fired_days = []
++        for day, pnl in enumerate([2184, 2184, 2184, 2184, 2184, 2184, 2184], start=1):
++            before = scheduler._replay_payout_cycles(paper_log, intento)["events"]
++            paper_log.append({"date": f"2026-09-{day:02d}", "result": "TP", "pnl": pnl, "intento": intento})
++            after = scheduler._replay_payout_cycles(paper_log, intento)["events"]
++            if scheduler._check_payout_eligibility_crossed(before, after):
++                fired_days.append(day)
++        assert fired_days == [5]  # dispara UNA sola vez, exactamente el dia que cruza a 5
++
++    def test_after_attempt_resets_the_next_attempt_starts_the_count_at_zero(self):
++        """Confirma que un intento NUEVO (post PASE/QUIEBRE) empieza su
++        propio conteo desde 0 -- consistente con 'Iniciando intento
++        #N+1 desde $0' del mensaje de reinicio ya existente. Escenario:
++        un intento QUE YA PASO (PASE real via profit_target), seguido
++        del intento siguiente, todavia sin ningun dia registrado."""
++        paper_log_tras_pase = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 4500, "intento": 1},  # 9000, PASE
++        ]
++        intento_nuevo = scheduler._current_intento(paper_log_tras_pase)
++        assert intento_nuevo == 2
++        state = scheduler._replay_payout_cycles(paper_log_tras_pase, intento_nuevo)
++        assert state["events"] == [] and state["winning_days_since_last"] == 0
++
++
++class TestAttemptResetIntegration:
++    def test_full_reset_cycle_after_pass(self):
++        # Intento 1: dos TP que acumulan a 9200 -> PASE.
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 5000, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 4200, "intento": 1},  # acumulado 9200 -> PASE
++        ]
++        attempt_pnl = scheduler._attempt_pnl(log, 1)
++        assert attempt_pnl == 9200
++        event = scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD)
++        assert event == "PASE"
++
++        # CORREGIDO (10-sep-2026): _current_intento() ahora detecta esto
++        # directamente desde los datos guardados, sin necesitar que ya
++        # exista ninguna entrada del intento 2 -- mismo fix portado desde
++        # geometry_scheduler.py, ver GLITCH_RESEARCH_LOG.md.
++        assert scheduler._current_intento(log) == 2
++
++        log.append({"date": "2026-09-03", "result": "SL", "pnl": -300, "intento": 2})
++        intento_nuevo = scheduler._current_intento(log)
++        assert intento_nuevo == 2
++        assert scheduler._attempt_pnl(log, intento_nuevo) == -300
++        assert scheduler._attempt_pnl(log, 1) == 9200  # intento 1 no se toca
++
++    def test_full_reset_cycle_after_blow(self):
++        log = [
++            {"date": "2026-09-01", "result": "SL", "pnl": -2500, "intento": 1},
++            {"date": "2026-09-02", "result": "SL", "pnl": -2100, "intento": 1},  # acumulado -4600 -> QUIEBRE
++        ]
++        attempt_pnl = scheduler._attempt_pnl(log, 1)
++        assert attempt_pnl == -4600
++        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) == "QUIEBRE"
++        assert scheduler._current_intento(log) == 2  # mismo fix del 10-sep-2026, caso QUIEBRE
++
++    def test_quiebre_detected_via_trailing_floor_even_when_flat_threshold_would_miss_it(self):
++        """
++        CORREGIDO (16-sep-2026, ver GLITCH_RESEARCH_LOG.md): reproduce
++        el patron real reportado por el usuario en este mismo candidato
++        (pico intermedio seguido de una caida que rompe el floor
++        TRAILING real sin romper el MLL_THRESHOLD fijo). Auditoria
++        retrospectiva contra el Gist real (scripts/audit_mgc_trailing_mll_2026_09_16.py)
++        confirmo que el intento actual real NO habia llegado a este
++        punto todavia -- este test usa numeros sinteticos mas extremos,
++        diseñados especificamente para forzar la divergencia y probar
++        que el fix la detecta cuando SI ocurre.
++        """
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 3000, "intento": 1},   # pico=3000, floor trailing sube a 3000-4500=-1500
++            {"date": "2026-09-02", "result": "SL", "pnl": -4600, "intento": 1},  # acumulado -1600 -- rompe el floor trailing (-1500) pero NO el fijo (-4500)
++        ]
++        attempt_pnl = scheduler._attempt_pnl(log, 1)
++        assert attempt_pnl == -1600
++
++        # El floor FIJO (el bug, pre-16-sep) NUNCA habria detectado esto.
++        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) is None
++
++        # El floor TRAILING real (el fix) SI lo detecta.
++        trailing_floor = scheduler._attempt_trailing_floor(log, 1)
++        assert trailing_floor == -1500
++        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, trailing_floor) == "QUIEBRE"
++
++        # _current_intento() usa el floor trailing internamente -- debe
++        # avanzar a intento 2, no quedarse en 1 como antes del fix.
++        assert scheduler._current_intento(log) == 2
++
++    def test_does_not_advance_when_drawdown_stays_within_trailing_floor(self):
++        """Guardia de regresion -- un pico seguido de una caida que NO
++        rompe ni el floor trailing ni el fijo no debe avanzar de intento."""
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 3000, "intento": 1},   # floor trailing = -1500
++            {"date": "2026-09-02", "result": "SL", "pnl": -1000, "intento": 1},  # acumulado 2000 -- ni cerca de ningun floor
++        ]
++        assert scheduler._current_intento(log) == 1
++
++    def test_historic_wr_and_cycles_never_reset_across_attempts(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 4600, "intento": 1},  # PASE
++            {"date": "2026-09-03", "result": "SL", "pnl": -600, "intento": 2},
++        ]
++        progress = scheduler._paper_progress(log, "2026-09-03")
++        assert progress["n_cycles"] == 3
++        assert progress["wr_empirico"] == pytest.approx(2 / 3)
++
++
++class TestCurrentIntentoAdvancesPastCompletedAttempt:
++    """
++    10-sep-2026, ver GLITCH_RESEARCH_LOG.md -- mismo fix portado desde
++    geometry_scheduler.py (bug real reportado en GEOMETRY/MES): el
++    `intento_actual += 1` de run() nunca se persistia -- era una
++    variable local, se perdia al salir del proceso, y la corrida del
++    dia siguiente volvia a calcular el mismo intento ya completado
++    desde cero. Estos tests confirman el mismo fix aqui, con los
++    umbrales reales de MGC/150K (PROFIT_TARGET=9000, MLL_THRESHOLD=-4500).
++    """
++
++    def test_reproduces_the_reported_bug_scenario(self):
++        paper_log = [
++            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},  # acumulado exacto: 9000
++        ]
++        assert scheduler._current_intento(paper_log) == 2  # antes del fix: 1 (el bug reportado)
++
++    def test_attempt_pnl_for_the_new_attempt_is_zero_not_stale_9000(self):
++        paper_log = [
++            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},
++        ]
++        intento = scheduler._current_intento(paper_log)
++        assert scheduler._attempt_pnl(paper_log, intento) == 0
++
++    def test_advances_past_a_completed_quiebre_too(self):
++        paper_log = [
++            {"date": "2026-09-08", "result": "SL", "pnl": -2500, "intento": 1},
++            {"date": "2026-09-09", "result": "SL", "pnl": -2100, "intento": 1},  # acumulado: -4600, cruza -4500
++        ]
++        assert scheduler._current_intento(paper_log) == 2
++
++    def test_does_not_advance_an_attempt_still_in_progress(self):
++        """Guardia de regresion -- un intento normal, todavia sin
++        cruzar ningun umbral, NO debe avanzar de mas."""
++        paper_log = [
++            {"date": "2026-09-08", "result": "TP", "pnl": 2000, "intento": 1},
++            {"date": "2026-09-09", "result": "SL", "pnl": -500, "intento": 1},  # acumulado: 1500, normal
++        ]
++        assert scheduler._current_intento(paper_log) == 1
++
++    def test_advances_correctly_even_with_a_reconciled_entry_in_the_mix(self):
++        paper_log = [
++            {"date": "2026-09-07", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-08", "result": "RECONCILED", "pnl": -9999,
++             "pnl_estimated": True, "reconciled": True, "intento": 1},
++            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},  # 4500+4500=9000, la RECONCILED no cuenta
++        ]
++        assert scheduler._current_intento(paper_log) == 2
++
++    def test_full_next_day_simulation_matches_expected_open_message(self):
++        paper_log = [
++            {"date": "2026-09-08", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-09", "result": "TP", "pnl": 4500, "intento": 1},
++        ]
++        intento_fin_dia1 = scheduler._current_intento(paper_log)
++
++        intento_inicio_dia2 = scheduler._current_intento(paper_log)
++        attempt_pnl_dia2 = scheduler._attempt_pnl(paper_log, intento_inicio_dia2)
++
++        assert intento_inicio_dia2 == intento_fin_dia1 == 2
++        assert attempt_pnl_dia2 == 0  # $0 / $9,000 (0.0%) -- NO $9,000 / $9,000 (100.0%)
++
++
++class TestPendingPositionWrappers:
++    """09-sep-2026, ver GLITCH_RESEARCH_LOG.md -- hallazgo de la posicion
++    SHORT MGCV6 que nunca recibio su CLOSE. Mismo mecanismo que
++    geometry_scheduler.py."""
++
++    def test_load_pending_calls_gist_store_with_mgc_pending_filename(self, monkeypatch):
++        captured = {}
++
++        def _fake_load_state(filename):
++            captured["filename"] = filename
++            return {"side": -1}
++
++        monkeypatch.setattr(scheduler, "_gist_load_state", _fake_load_state)
++        result = scheduler.load_pending()
++        assert captured["filename"] == "geometry_mgc_pending.json"
++        assert result == {"side": -1}
++
++    def test_save_pending_calls_gist_store_with_mgc_pending_filename_and_data(self, monkeypatch):
++        captured = {}
++        monkeypatch.setattr(scheduler, "_gist_save_state",
++                             lambda filename, data: captured.update(filename=filename, data=data))
++        scheduler.save_pending({"side": -1, "entry": 4415.80})
++        assert captured["filename"] == "geometry_mgc_pending.json"
++        assert captured["data"] == {"side": -1, "entry": 4415.80}
++
++
++class TestCurrentIntentoConsidersReconciledEntries:
++    """Mismo fix que geometry_scheduler.py -- encontrado al diseñar la
++    reconciliacion, aplicado aqui tambien (mismo bug, misma correccion)."""
++
++    def test_reconciled_only_entry_still_advances_current_intento(self):
++        log = [
++            {"date": "2026-09-01", "result": "TP", "pnl": 4500, "intento": 1},
++            {"date": "2026-09-02", "result": "TP", "pnl": 4600, "intento": 1},  # PASE -> intento 2
++            {"date": "2026-09-03", "result": "RECONCILED", "pnl": -1000,
++             "pnl_estimated": True, "reconciled": True, "intento": 2},
++        ]
++        assert scheduler._current_intento(log) == 2
++
++    def test_reconciled_entry_alone_never_triggers_reset(self):
++        log = [{"date": "2026-09-01", "result": "RECONCILED", "pnl": -8000,
++                "pnl_estimated": True, "reconciled": True, "intento": 1}]
++        attempt_pnl = scheduler._attempt_pnl(log, scheduler._current_intento(log))
++        assert attempt_pnl == 0
++        assert scheduler._check_attempt_reset(attempt_pnl, scheduler.PROFIT_TARGET, scheduler.MLL_THRESHOLD) is None
++
++
++class TestBuildPendingRecord:
++    def test_captures_everything_needed_to_reconcile(self):
++        record = scheduler._build_pending_record(
++            side=-1, direction_str="SHORT", entry_price=4415.80,
++            tp_price=4379.40, sl_price=4452.20, ticker="MGCV6",
++            today_str="2026-09-09", intento=1, nc=6, sl_ticks=364,
++            tp_ticks=364, product_key="MGC_XFA_150K", dry_run=True,
++        )
++        assert record == {
++            "date": "2026-09-09", "side": -1, "direction": "SHORT",
++            "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20,
++            "ticker": "MGCV6", "nc": 6, "sl_ticks": 364, "tp_ticks": 364,
++            "product": "MGC_XFA_150K", "dry_run": True, "intento": 1,
++        }
++
++
++class TestReconcilePendingPosition:
++    """
++    Reproduce el escenario real reportado: SHORT MGCV6, entry=4415.80,
++    TP=4379.40, SL=4452.20.
++    """
++
++    def _pending_short(self):
++        return {
++            "date": "2026-09-09", "side": -1, "direction": "SHORT",
++            "entry": 4415.80, "tp_price": 4379.40, "sl_price": 4452.20,
++            "ticker": "MGCV6", "nc": 6, "sl_ticks": 364, "tp_ticks": 364,
++            "product": "MGC_XFA_150K", "dry_run": True, "intento": 1,
++        }
++
++    def _pending_long(self):
++        return {
++            "date": "2026-09-09", "side": 1, "direction": "LONG",
++            "entry": 4415.80, "tp_price": 4452.20, "sl_price": 4379.40,
++            "ticker": "MGCV6", "nc": 6, "sl_ticks": 364, "tp_ticks": 364,
++            "product": "MGC_XFA_150K", "dry_run": True, "intento": 1,
++        }
++
++    def test_result_is_always_reconciled_never_a_normal_outcome(self):
++        for price in (4360.0, 4460.0, 4415.0):
++            entry = scheduler._reconcile_pending_position(self._pending_short(), price,
++                                                            tick_value_usd=1.00, tick_size=0.10)
++            assert entry["result"] == "RECONCILED"
++            assert entry["reconciled"] is True
++            assert entry["pnl_estimated"] is True
++
++    def test_short_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
++        pending = self._pending_short()
++        entry = scheduler._reconcile_pending_position(pending, 4360.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "TP"
++        assert entry["exit"] == pending["tp_price"]  # clipped, no el precio crudo
++        expected_pnl = (pending["tp_price"] - pending["entry"]) * -1 * 1.00 / 0.10 * pending["nc"]
++        assert entry["pnl"] == pytest.approx(round(expected_pnl, 2))
++        assert entry["pnl"] > 0
++
++    def test_short_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
++        pending = self._pending_short()
++        entry = scheduler._reconcile_pending_position(pending, 4460.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "SL"
++        assert entry["exit"] == pending["sl_price"]
++        assert entry["pnl"] < 0
++
++    def test_short_price_inconclusive_between_barriers(self):
++        pending = self._pending_short()
++        entry = scheduler._reconcile_pending_position(pending, 4415.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "INCONCLUSIVE"
++        assert entry["exit"] == 4415.0
++
++    def test_long_price_beyond_tp_estimates_tp_clipped_to_barrier(self):
++        pending = self._pending_long()
++        entry = scheduler._reconcile_pending_position(pending, 4460.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "TP"
++        assert entry["exit"] == pending["tp_price"]
++        assert entry["pnl"] > 0
++
++    def test_long_price_beyond_sl_estimates_sl_clipped_to_barrier(self):
++        pending = self._pending_long()
++        entry = scheduler._reconcile_pending_position(pending, 4360.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "SL"
++        assert entry["exit"] == pending["sl_price"]
++        assert entry["pnl"] < 0
++
++    def test_long_price_inconclusive_between_barriers(self):
++        pending = self._pending_long()
++        entry = scheduler._reconcile_pending_position(pending, 4415.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["estimated_outcome"] == "INCONCLUSIVE"
++        assert entry["exit"] == 4415.0
++
++    def test_preserves_intento_and_identity_fields(self):
++        pending = self._pending_short()
++        entry = scheduler._reconcile_pending_position(pending, 4415.0, tick_value_usd=1.00, tick_size=0.10)
++        assert entry["intento"] == 1
++        assert entry["date"] == "2026-09-09"
++        assert entry["product"] == "MGC_XFA_150K"
++        assert entry["nc"] == 6
++
++
++class TestPendingPositionFullCycle:
++    """Simula exactamente el escenario reportado: SHORT MGCV6 se abre,
++    el proceso 'muere' antes del CLOSE, la siguiente corrida reconcilia,
++    y un trade nuevo despues no colisiona."""
++
++    def test_interrupted_short_reconciled_then_new_trade_opens_clean(self):
++        paper_log = [{"date": "2026-09-05", "result": "TP", "pnl": 2000, "intento": 1}]
++
++        intento = scheduler._current_intento(paper_log)
++        pending = scheduler._build_pending_record(
++            side=-1, direction_str="SHORT", entry_price=4415.80,
++            tp_price=4379.40, sl_price=4452.20, ticker="MGCV6",
++            today_str="2026-09-09", intento=intento, nc=6, sl_ticks=364,
++            tp_ticks=364, product_key="MGC_XFA_150K", dry_run=True,
++        )
++        assert intento == 1
++
++        # La siguiente corrida reconcilia con el precio actual.
++        reconciled = scheduler._reconcile_pending_position(pending, 4420.0, tick_value_usd=1.00, tick_size=0.10)
++        paper_log.append(reconciled)
++        pending = {}  # save_pending({}) -- limpio
++
++        assert not pending
++        assert reconciled["result"] == "RECONCILED"
++        assert reconciled["estimated_outcome"] == "INCONCLUSIVE"  # 4420 esta entre TP y SL
++        assert scheduler._attempt_pnl(paper_log, 1) == 2000  # sin cambio -- la reconciliada no cuenta
++
++        # Trade nuevo, real, mismo intento.
++        paper_log.append({"date": "2026-09-10", "result": "TP", "pnl": 2184, "intento": 1})
++        assert scheduler._current_intento(paper_log) == 1
++        assert scheduler._attempt_pnl(paper_log, 1) == 4184  # 2000 + 2184, la reconciliada sigue sin contar
++
++
++class TestEarlyCloseHolidays:
++    """25-sep-2026: mismo tratamiento que GEOMETRY (MES) -- 27-nov y 24-dic se operan con flatten temprano; 26-nov, 25-dic y
++    1-ene-2027 no se operan. Fuente: help.topstep.com/13350348."""
++
++    def _trading(self, monkeypatch, y, m, d):
++        import datetime as dt
++        monkeypatch.setattr(scheduler, "ct_now", lambda: dt.datetime(y, m, d, 7, 0, tzinfo=scheduler.CT))
++        return scheduler.is_trading_day()
++
++    def test_closed_days_are_not_trading_days(self, monkeypatch):
++        assert self._trading(monkeypatch, 2026, 11, 26) is False
++        assert self._trading(monkeypatch, 2026, 12, 25) is False
++        assert self._trading(monkeypatch, 2027, 1, 1) is False
++
++    def test_early_close_days_are_still_trading_days(self, monkeypatch):
++        assert self._trading(monkeypatch, 2026, 11, 27) is True
++        assert self._trading(monkeypatch, 2026, 12, 24) is True
++
++    def test_scheduler_loop_uses_the_conditional_flatten(self):
++        import inspect
++        src = inspect.getsource(scheduler.run)
++        assert "is_flatten_time(now)" in src
++        assert "FLATTEN_HOUR * 60 + FLATTEN_MINUTE" not in src
++
++    def test_mgc_entry_window_fits_before_the_early_flatten(self):
++        """La entrada de MGC (7:13 CT) queda bien antes del flatten temprano (11:30 CT) -- el trade tiene ventana en esos dias."""
++        from execution.session_calendar import flatten_minutes_ct
++        import datetime as dt
++        entry = scheduler.RTH_OPEN_HOUR * 60 + scheduler.RTH_OPEN_MINUTE + scheduler.ENTRY_WAIT_MINUTES
++        assert entry < flatten_minutes_ct(dt.date(2026, 11, 27))
++        assert entry < flatten_minutes_ct(dt.date(2026, 12, 24))
++
++
++class TestFetchLatestPriceStaleness:
++    """
++    01-oct-2026: incidente real donde Massive no publico ninguna barra
++    nueva de MGCV6 por 700+ minutos y fetch_latest_price() la acepto sin
++    cuestionarla (unreal=$0.00 reportado como si fuera precio en vivo
++    todo ese tiempo). Verifica que ahora SI reporte la antiguedad de la
++    barra, y que el umbral quede fijado en el valor documentado (20 min
++    = ~2x el delay normal de Massive/MGC ya confirmado el 09-sep-2026,
++    9.43-9.50 min promedio, 9.94 min maximo observado).
++    """
++
++    @staticmethod
++    def _mock_response(close, age_seconds, monkeypatch):
++        import datetime as _dt
++        bar_time = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=age_seconds)
++        window_start_ns = int(bar_time.timestamp() * 1e9)
++
++        class _Resp:
++            def raise_for_status(self_):
++                pass
++
++            def json(self_):
++                return {"results": [{"close": close, "window_start": window_start_ns}]}
++
++        monkeypatch.setattr(scheduler.requests, "get", lambda *a, **k: _Resp())
++
++    def test_stale_threshold_matches_documented_value(self):
++        """20 min, no un numero arbitrario -- ver comentario junto a la constante."""
++        assert scheduler.STALE_BAR_MAX_AGE_SECONDS == 20 * 60
++
++    def test_fresh_bar_reports_small_age(self, monkeypatch):
++        self._mock_response(4172.8, age_seconds=30, monkeypatch=monkeypatch)
++        price, age = scheduler.fetch_latest_price("MGCV6")
++        assert price == 4172.8
++        assert age < scheduler.STALE_BAR_MAX_AGE_SECONDS
++
++    def test_stale_bar_still_returned_but_flagged_old(self, monkeypatch):
++        """fetch_latest_price() NO filtra -- solo reporta; el llamador decide. Esto reproduce
++        el incidente real: una barra de hace 700 min (>> 20 min) sigue viniendo con su precio,
++        pero ahora con la antiguedad real adjunta en vez de pasar por precio en vivo."""
++        self._mock_response(4175.3, age_seconds=700 * 60, monkeypatch=monkeypatch)
++        price, age = scheduler.fetch_latest_price("MGCV6")
++        assert price == 4175.3
++        assert age > scheduler.STALE_BAR_MAX_AGE_SECONDS
++
++    def test_no_results_returns_none_none(self, monkeypatch):
++        class _Resp:
++            def raise_for_status(self_):
++                pass
++
++            def json(self_):
++                return {"results": []}
++
++        monkeypatch.setattr(scheduler.requests, "get", lambda *a, **k: _Resp())
++        price, age = scheduler.fetch_latest_price("MGCV6")
++        assert price is None and age is None
++
++    def test_request_exception_returns_none_none(self, monkeypatch):
++        def _raise(*a, **k):
++            raise ConnectionError("boom")
++
++        monkeypatch.setattr(scheduler.requests, "get", _raise)
++        price, age = scheduler.fetch_latest_price("MGCV6")
++        assert price is None and age is None
+diff --git a/glitch/tests/test_mgc_handoff.py b/glitch/tests/test_mgc_handoff.py
+new file mode 100644
+index 0000000..0ebf928
+--- /dev/null
++++ b/glitch/tests/test_mgc_handoff.py
+@@ -0,0 +1,161 @@
++"""T4 (12-oct-2026) -- handoff real de Cerebro 2 (MGC) al Pi, alineacion de geometria y regla de roll del oro. Sin red: Gist, Telegram y Massive se sustituyen por dobles."""
++import datetime as dt
++import importlib
++import os
++import sys
++
++os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import strategies.geometry_pure as geo
++from execution import contracts as C
++
++
++class TestGeometryAlignment:
++    def test_mgc_is_the_xfa_50k_geometry(self):
++        c = geo.CANDIDATES["MGC"]
++        assert (c.sl_ticks, c.tp_ticks, c.nc) == (364, 364, 3)
++
++    def test_sizes_and_paper_alias(self):
++        assert geo.CANDIDATES["MGC_XFA_100K"].nc == 4 and geo.CANDIDATES["MGC_XFA_150K"].nc == 6
++        assert all(geo.CANDIDATES[k].sl_ticks == geo.CANDIDATES[k].tp_ticks == 364 for k in ("MGC", "MGC_XFA_100K", "MGC_XFA_150K"))
++
++    def test_never_above_official_cap(self):
++        """El tope oficial de MGC en Combine/XFA es 30 micros (Risk Adjustments); SPECS['MGC'].nc_cap = 30."""
++        for k in ("MGC", "MGC_XFA_100K", "MGC_XFA_150K"):
++            assert geo.CANDIDATES[k].nc <= geo.CANDIDATES[k].spec.nc_cap == 30
++
++    def test_legacy_combine_candidate_kept_only_as_reference(self):
++        l = geo.CANDIDATES["MGC_COMBINE_LEGACY"]
++        assert (l.sl_ticks, l.tp_ticks, l.nc) == (136, 45, 30)
++
++    def test_invalid_size_rejected(self):
++        with pytest.raises(ValueError):
++            geo.xfa_mgc_config("25K")
++
++
++class TestGoldRollRule:
++    CANDS = [("MGCV6", "2026-10-28"), ("MGCX6", "2026-11-25"), ("MGCZ6", "2026-12-29"), ("MGCG7", "2027-02-24")]
++
++    def test_first_notice_day(self):
++        assert C.first_notice_day(2026, 10) == dt.date(2026, 9, 30)
++        assert C.first_notice_day(2026, 12) == dt.date(2026, 11, 30)
++        assert C.first_notice_day(2027, 2) == dt.date(2027, 1, 29)       # 31-ene-2027 es domingo -> viernes 29
++
++    def test_october_contract_dropped_before_its_fnd(self):
++        pick = lambda d: C.apply_roll_rule("MGC", self.CANDS, d)[0][0]
++        assert pick(dt.date(2026, 9, 25)) == "MGCV6"
++        assert pick(dt.date(2026, 9, 28)) == "MGCZ6"            # FND 30-sep, 2 dias habiles antes
++        assert pick(dt.date(2026, 10, 1)) == "MGCZ6"            # el dia del incidente: MGCV6 sin barras, el front es Z6
++        assert pick(dt.date(2026, 10, 28)) == "MGCZ6"
++
++    def test_non_active_months_are_skipped(self):
++        assert all(t != "MGCX6" for t, _ in C.apply_roll_rule("MGC", self.CANDS, dt.date(2026, 9, 1)))
++
++    def test_december_rolls_to_february(self):
++        assert C.apply_roll_rule("MGC", self.CANDS, dt.date(2026, 11, 20))[0][0] == "MGCZ6"
++        assert C.apply_roll_rule("MGC", self.CANDS, dt.date(2026, 12, 1))[0][0] == "MGCG7"
++
++    def test_falls_back_when_filter_would_empty_the_list(self):
++        only_v6 = [("MGCV6", "2026-10-28")]
++        assert C.apply_roll_rule("MGC", only_v6, dt.date(2026, 10, 1)) == only_v6
++
++    def test_other_products_untouched(self):
++        mes = [("MESZ6", "2026-12-18"), ("MESH7", "2027-03-19")]
++        assert C.apply_roll_rule("MES", mes, dt.date(2026, 12, 17)) == mes
++
++    def test_resolve_front_month_uses_the_rule(self, monkeypatch):
++        monkeypatch.setattr(C, "_get", lambda path, params, max_pages=20: [
++            {"ticker": t, "last_trade_date": l, "type": "single"} for t, l in self.CANDS] + [{"ticker": "MGCV6-MGCZ6", "last_trade_date": "2026-10-28", "type": "spread"}])
++        assert C.resolve_front_month("MGC", today=dt.date(2026, 10, 1))[0] == "MGCZ6"
++        assert C.resolve_front_month("MGC", today=dt.date(2026, 9, 24))[0] == "MGCV6"
++
++
++@pytest.fixture
++def real_sched(monkeypatch):
++    monkeypatch.setenv("DRY_RUN", "false"); monkeypatch.setenv("GLITCH_PRODUCT", "MGC")
++    import scheduler.geometry_mgc_scheduler as s
++    s = importlib.reload(s)
++    yield s
++    monkeypatch.delenv("DRY_RUN", raising=False); monkeypatch.delenv("GLITCH_PRODUCT", raising=False)
++    importlib.reload(s)
++
++
++class Env:
++    """Dobles: Gist en memoria, Telegram, reloj."""
++    def __init__(self, s, monkeypatch, hh=7, mm=20, flatten_min=14 * 60 + 30, existing=None):
++        self.sent = []; self.store = {s.ORDER_FILE: existing or {}}
++        monkeypatch.setattr(s, "send", lambda m: self.sent.append(m))
++        monkeypatch.setattr(s, "_gist_load_state", lambda f: dict(self.store.get(f, {})))
++        monkeypatch.setattr(s, "_gist_save_state", lambda f, d: self.store.__setitem__(f, d))
++        monkeypatch.setattr(s, "ct_now", lambda: dt.datetime(2026, 10, 19, hh, mm, tzinfo=s.CT))
++        monkeypatch.setattr(s, "flatten_minutes_ct", lambda d: flatten_min)
++        monkeypatch.setattr(s, "is_trading_day", lambda: True)
++        monkeypatch.setattr(s, "load_log", lambda: [])
++        monkeypatch.setattr(s, "save_log", lambda l: None)
++        monkeypatch.setattr(s, "load_pending", lambda: {})
++        monkeypatch.setattr(s, "get_front_month", lambda *a, **k: "MGCZ6")
++        monkeypatch.setattr(s, "check_expiry_alerts", lambda *a, **k: None)
++        monkeypatch.setattr(s.time, "sleep", lambda *_: None)
++
++
++class TestHandoff:
++    def test_writes_signal_with_pi_contract(self, real_sched, monkeypatch):
++        e = Env(real_sched, monkeypatch)
++        real_sched.run()
++        sig = e.store["orden_pendiente_mgc.json"]
++        assert sig["product"] == "MGC" and sig["product_code"] == "MGC" and sig["dry_run"] is False
++        assert (sig["nc"], sig["sl_ticks"], sig["tp_ticks"]) == (3, 364, 364)
++        assert sig["side"] in (1, -1) and sig["direction"] == ("LONG" if sig["side"] == 1 else "SHORT") and sig["date"] == str(dt.date.today())
++        assert set(sig) == {"date", "side", "direction", "ticker", "product_code", "nc", "sl_ticks", "tp_ticks", "product", "intento", "dry_run"}   # mismo contrato que MES
++        assert any("SEÑAL ENVIADA AL PI" in m for m in e.sent)
++
++    def test_product_matches_the_pi_product_key(self, real_sched, monkeypatch):
++        """pi_executor._is_test_signal compara signal['product'] con GLITCH_PRODUCT: si difieren, el Pi la trata como ensayo (<= 2 contratos, sin marcador)."""
++        e = Env(real_sched, monkeypatch); real_sched.run()
++        assert e.store[real_sched.ORDER_FILE]["product"] == real_sched.REAL_PRODUCT_KEY == os.environ["GLITCH_PRODUCT"]
++
++    def test_never_overwrites_an_unconsumed_signal(self, real_sched, monkeypatch):
++        prev = {"date": "2026-10-16", "side": 1, "nc": 3}
++        e = Env(real_sched, monkeypatch, existing=prev)
++        real_sched.run()
++        assert e.store[real_sched.ORDER_FILE] == prev and any("BLOCKED" in m for m in e.sent)
++
++    def test_refuses_after_flatten_including_early_close(self, real_sched, monkeypatch):
++        e = Env(real_sched, monkeypatch, hh=11, mm=45, flatten_min=11 * 60 + 30)       # cierre anticipado 27-nov / 24-dic
++        real_sched.run()
++        assert e.store[real_sched.ORDER_FILE] == {} and any("despues del cierre" in m for m in e.sent)
++
++    def test_front_month_failure_does_not_block_the_signal(self, real_sched, monkeypatch):
++        e = Env(real_sched, monkeypatch)
++        def boom(*a, **k): raise RuntimeError("Massive caido")
++        monkeypatch.setattr(real_sched, "get_front_month", boom)
++        real_sched.run()
++        assert e.store[real_sched.ORDER_FILE].get("product") == "MGC"
++
++    def test_waits_for_the_entry_gate(self, real_sched, monkeypatch):
++        e = Env(real_sched, monkeypatch, hh=7, mm=5)
++        ticks = {"n": 0}
++        def sleep(_):
++            ticks["n"] += 1
++            monkeypatch.setattr(real_sched, "ct_now", lambda: dt.datetime(2026, 10, 19, 7, 14, tzinfo=real_sched.CT))
++        monkeypatch.setattr(real_sched.time, "sleep", sleep)
++        real_sched.run()
++        assert ticks["n"] >= 1 and e.store[real_sched.ORDER_FILE].get("product") == "MGC"
++        assert real_sched.ENTRY_GATE_MINUTES == 7 * 60 + 13
++
++    def test_real_mode_uses_50k_thresholds_paper_keeps_150k(self, real_sched):
++        from core.prop_firm import TOPSTEP_50K
++        assert real_sched.PROFIT_TARGET == TOPSTEP_50K.profit_target == 3_000 and real_sched.MLL_THRESHOLD == -TOPSTEP_50K.mll_distance == -2_000
++
++    def test_paper_mode_unchanged(self, monkeypatch):
++        monkeypatch.delenv("DRY_RUN", raising=False); monkeypatch.delenv("GLITCH_PRODUCT", raising=False)
++        import scheduler.geometry_mgc_scheduler as s
++        s = importlib.reload(s)
++        assert s.DRY_RUN is True and s.PROFIT_TARGET == 9_000 and s.MLL_THRESHOLD == -4_500 and s.CFG.nc == 6
+diff --git a/glitch/tests/test_session_calendar.py b/glitch/tests/test_session_calendar.py
+new file mode 100644
+index 0000000..9729bee
+--- /dev/null
++++ b/glitch/tests/test_session_calendar.py
+@@ -0,0 +1,48 @@
++"""Tests de execution/session_calendar.py -- flatten condicional en dias de cierre anticipado (25-sep-2026)."""
++import datetime as dt
++from zoneinfo import ZoneInfo
++
++from execution import session_calendar as sc
++
++CT = ZoneInfo("America/Chicago")
++
++
++def _at(y, m, d, hh, mm):
++    return dt.datetime(y, m, d, hh, mm, tzinfo=CT)
++
++
++class TestFlattenMinutes:
++    def test_normal_day_is_1430(self):
++        assert sc.flatten_minutes_ct(dt.date(2026, 9, 28)) == 14 * 60 + 30
++
++    def test_day_after_thanksgiving_flattens_30min_before_1200(self):
++        assert sc.flatten_minutes_ct(dt.date(2026, 11, 27)) == 11 * 60 + 30
++
++    def test_christmas_eve_flattens_30min_before_1200(self):
++        assert sc.flatten_minutes_ct(dt.date(2026, 12, 24)) == 11 * 60 + 30
++
++    def test_thanksgiving_defense_in_depth(self):
++        assert sc.flatten_minutes_ct(dt.date(2026, 11, 26)) == 11 * 60 + 15
++
++    def test_early_close_is_always_earlier_than_normal(self):
++        for d in sc.EARLY_CLOSE_BY_CT:
++            assert sc.flatten_minutes_ct(d) < sc.NORMAL_FLATTEN_MIN
++
++    def test_flatten_is_always_before_official_close_by(self):
++        for d, (h, m) in sc.EARLY_CLOSE_BY_CT.items():
++            assert sc.flatten_minutes_ct(d) < h * 60 + m
++
++
++class TestIsFlattenTime:
++    def test_normal_day_before_and_at_1430(self):
++        assert sc.is_flatten_time(_at(2026, 9, 28, 14, 29)) is False
++        assert sc.is_flatten_time(_at(2026, 9, 28, 14, 30)) is True
++
++    def test_early_close_day_flattens_at_1130_not_1430(self):
++        assert sc.is_flatten_time(_at(2026, 11, 27, 11, 29)) is False
++        assert sc.is_flatten_time(_at(2026, 11, 27, 11, 30)) is True
++        assert sc.is_flatten_time(_at(2026, 11, 27, 13, 0)) is True   # con el flatten fijo viejo (14:30) esto seguia siendo False
++
++    def test_christmas_eve(self):
++        assert sc.is_flatten_time(_at(2026, 12, 24, 11, 30)) is True
++        assert sc.is_flatten_time(_at(2026, 12, 24, 10, 0)) is False

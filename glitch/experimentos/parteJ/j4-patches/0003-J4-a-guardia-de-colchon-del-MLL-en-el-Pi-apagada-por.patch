@@ -1,0 +1,244 @@
+From a52296c9c37d336a4448e18dbca0fe8473b8d44b Mon Sep 17 00:00:00 2001
+From: Eric Trevino <eric.trevino@udem.edu>
+Date: Mon, 26 Oct 2026 18:58:13 -0600
+Subject: [PATCH 3/5] J4-a: guardia de colchon del MLL en el Pi (apagada por
+ defecto; el modelo dice que baja el cobrado) (NEEDS HUMAN REVIEW)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ glitch/execution/mll_guard.py     | 43 ++++++++++++++
+ glitch/pi/pi_executor.py          | 47 +++++++++++++++
+ glitch/tests/test_j4_mll_guard.py | 99 +++++++++++++++++++++++++++++++
+ 3 files changed, 189 insertions(+)
+ create mode 100644 glitch/execution/mll_guard.py
+ create mode 100644 glitch/tests/test_j4_mll_guard.py
+
+diff --git a/glitch/execution/mll_guard.py b/glitch/execution/mll_guard.py
+new file mode 100644
+index 0000000..8648489
+--- /dev/null
++++ b/glitch/execution/mll_guard.py
+@@ -0,0 +1,43 @@
++"""
++Glitch — Guardia de colchon del MLL (J4-a, 26-oct-2026; NEEDS HUMAN REVIEW; APAGADA por defecto)
++=================================================================================================
++Funciones PURAS y deterministas (CLAUDE.md regla 1: ningun limite de riesgo duro es una llamada a un LLM). Dado el colchon actual de la cuenta
++(balance − piso del MLL), limita el numero de contratos a los que caben con su pérdida maxima DENTRO del colchon; si no cabe ni uno, bloquea la entrada.
++
++ADVERTENCIA (resultado del modelo, J4-a): como regla de TAMAÑO esta guardia BAJA el cobrado esperado por XFA (−$77 a −$226 segun la variante, diferencias
++distinguibles; ver parteJ/resultados_J4a.md) porque una cuenta que ya no puede operar no cobra. Se entrega para que Eric decida SI quiere priorizar la
++supervivencia de la cuenta sobre el cobro; no se recomienda encenderla por defecto.
++"""
++from __future__ import annotations
++
++import math
++
++
++def risk_per_contract(sl_ticks: int, tick_usd: float, fee_usd: float, margin_ticks: float = 3.0) -> float:
++    """Perdida maxima por contrato: SL + comision round-turn + margen de slippage de salida (en ticks)."""
++    return sl_ticks * tick_usd + fee_usd + margin_ticks * tick_usd
++
++
++def cushion_usd(balance: float, floor: float) -> float:
++    """Colchon = balance − piso del MLL (ambos absolutos, en USD). Nunca negativo."""
++    return max(float(balance) - float(floor), 0.0)
++
++
++def max_contracts_for_cushion(cushion: float, sl_ticks: int, tick_usd: float, fee_usd: float, margin_ticks: float = 3.0) -> int:
++    """Mayor numero de contratos cuya perdida maxima conjunta cabe ESTRICTAMENTE dentro del colchon (0 si no cabe ni uno)."""
++    r = risk_per_contract(sl_ticks, tick_usd, fee_usd, margin_ticks)
++    if r <= 0 or cushion <= 0:
++        return 0
++    n = math.floor(cushion / r)
++    return int(n - 1) if n * r >= cushion else int(n)          # estricto: si el colchon es exactamente n·r, n contratos lo liquidarian justo
++
++
++def decide(nc_requested: int, cushion: float, sl_ticks: int, tick_usd: float, fee_usd: float, margin_ticks: float = 3.0):
++    """(nc_permitido, motivo). nc_permitido = 0 significa BLOQUEAR la entrada de hoy."""
++    allowed = max_contracts_for_cushion(cushion, sl_ticks, tick_usd, fee_usd, margin_ticks)
++    nc = min(int(nc_requested), allowed)
++    if nc >= nc_requested:
++        return nc_requested, "ok"
++    if nc <= 0:
++        return 0, f"colchon ${cushion:,.0f} < perdida maxima de 1 contrato (${risk_per_contract(sl_ticks, tick_usd, fee_usd, margin_ticks):,.0f})"
++    return nc, f"colchon ${cushion:,.0f}: se reduce de {nc_requested} a {nc} contratos"
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 3e32927..8be4c72 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -135,6 +135,7 @@ require_env(
+ 
+ from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
+ from execution.ct_logging import setup_ct_logging
++from execution.mll_guard import cushion_usd, decide as _mll_decide
+ from execution.roll_rules import apply_roll_rule
+ from execution.session_calendar import flatten_minutes_ct
+ from execution.gist_store import load_log as _gist_load_log
+@@ -1091,6 +1092,44 @@ def _parse_nc_cap(raw: Optional[str]) -> Optional[int]:
+ 
+ NC_MAX = _parse_nc_cap(os.getenv("GLITCH_PI_NC_MAX"))
+ 
++# Guardia de colchon del MLL (J4-a, 26-oct-2026; NEEDS HUMAN REVIEW). APAGADA por defecto. Con GLITCH_PI_MLL_GUARD=si el Pi calcula el colchon como
++# (balance de la cuenta fijada, leido de la API) − GLITCH_PI_MLL_FLOOR_USD (piso ABSOLUTO del MLL en USD, que mantiene el operador: sube con el balance de
++# cierre hasta fijarse en el balance inicial) y limita los contratos a los que caben con su perdida maxima dentro del colchon. Falla CERRADO: guardia
++# encendida y sin piso valido ⇒ no se opera. Ver execution/mll_guard.py (y su advertencia: baja el cobrado esperado).
++MLL_GUARD = os.getenv("GLITCH_PI_MLL_GUARD", "no").strip().lower() == "si"
++
++
++def _mll_floor_from_env() -> Optional[float]:
++    try:
++        v = float(os.environ.get("GLITCH_PI_MLL_FLOOR_USD", "").strip())
++        return v if v > 0 else None
++    except ValueError:
++        return None
++
++
++def _account_balance(client, account_id) -> Optional[float]:
++    for a in client.get_accounts(only_active=True):
++        if str(a.get("id")) == str(account_id) and a.get("balance") is not None:
++            return float(a["balance"])
++    return None
++
++
++def _apply_mll_guard(client, account_id, signal: dict):
++    """Devuelve (signal_ajustada | None, motivo). None = bloquear la entrada de hoy. Si la guardia esta apagada devuelve la señal intacta."""
++    if not MLL_GUARD:
++        return signal, "guardia apagada"
++    floor = _mll_floor_from_env()
++    balance = _account_balance(client, account_id)
++    if floor is None or balance is None:
++        return None, "guardia de MLL encendida pero falta un dato (GLITCH_PI_MLL_FLOOR_USD valido o el balance de la API): no se opera"
++    nc, why = _mll_decide(signal["nc"], cushion_usd(balance, floor), signal["sl_ticks"], CFG.spec.tick_value_usd, CFG.spec.commission_roundturn)
++    if nc <= 0:
++        return None, why
++    if nc == signal["nc"]:
++        return signal, why
++    adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc
++    return adj, why
++
+ 
+ def _apply_nc_cap(signal: dict) -> dict:
+     """Devuelve la señal con nc = min(nc, tope). Se aplica ANTES de operar, asi TODO lo que sigue (ordenes, confirmacion
+@@ -1204,6 +1243,14 @@ def run_once():
+             )
+             return
+ 
++        signal, _mll_why = _apply_mll_guard(client, account_id, signal)       # J4-a (apagada por defecto)
++        if signal is None:
++            _notify_blocked_once_per_day(f"Guardia de colchon del MLL: NO se opera hoy -- {_mll_why}. Se descarta la señal del dia.")
++            save_order_signal({})
++            return
++        if MLL_GUARD:
++            log.info(f"guardia de MLL: {_mll_why}")
++
+         reference_price = _reference_price(client, contract_id)
+         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
+         sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
+diff --git a/glitch/tests/test_j4_mll_guard.py b/glitch/tests/test_j4_mll_guard.py
+new file mode 100644
+index 0000000..bacb3ef
+--- /dev/null
++++ b/glitch/tests/test_j4_mll_guard.py
+@@ -0,0 +1,99 @@
++"""
++Glitch — Pruebas del parche J4-a (26-oct-2026): guardia de colchon del MLL (apagada por defecto). NEEDS HUMAN REVIEW. Sin red.
++"""
++import datetime as dt
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++from execution import mll_guard as mg
++from tests.test_pi_executor import FakeClient, _signal, fake_gist, sent, _fixed_clock, _entry_deadline_off  # noqa: F401
++
++
++class TestPureFunctions:
++    def test_risk_per_contract_mgc(self):
++        assert mg.risk_per_contract(364, 1.0, 1.92) == pytest.approx(364 + 1.92 + 3.0)
++
++    def test_cushion_never_negative(self):
++        assert mg.cushion_usd(49_000, 49_500) == 0.0 and mg.cushion_usd(50_000, 48_000) == 2_000.0
++
++    @pytest.mark.parametrize("cushion,expected", [(2000, 5), (1100, 2), (368.0, 0), (0, 0)])
++    def test_max_contracts(self, cushion, expected):
++        assert mg.max_contracts_for_cushion(cushion, 364, 1.0, 1.92) == expected
++
++    def test_strict_inequality_at_the_boundary(self):
++        # riesgo por contrato = 100 + 0 + 3 = 103 (enteros: sin ambiguedad de punto flotante)
++        assert mg.max_contracts_for_cushion(206.0, 100, 1.0, 0.0) == 1          # 2 contratos perderian EXACTAMENTE el colchon: no caben
++        assert mg.max_contracts_for_cushion(206.01, 100, 1.0, 0.0) == 2
++
++    def test_decide_ok_reduce_block(self):
++        assert mg.decide(3, 2000, 364, 1.0, 1.92) == (3, "ok")
++        nc, why = mg.decide(3, 908, 364, 1.0, 1.92); assert nc == 2 and "reduce" in why
++        nc, why = mg.decide(3, 300, 364, 1.0, 1.92); assert nc == 0 and "colchon" in why
++
++
++class TestPiHook:
++    def _setup(self, monkeypatch, fake_gist, balance, floor, guard=True):
++        client = FakeClient()
++        client.accounts = [{"id": 555, "balance": balance}]
++        monkeypatch.setattr(pe, "authenticate", lambda: client)
++        monkeypatch.setattr(pe, "PHASE3_ENABLED", True)
++        monkeypatch.setattr(pe, "_load_verified_side_map", lambda: {"BUY_SIDE_INT": 9, "SELL_SIDE_INT": 7})
++        monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(2026, 9, 29, 14, 31, tzinfo=pe.CT))      # corta el poll de inmediato
++        monkeypatch.setattr(pe, "MLL_GUARD", guard)
++        if floor is None:
++            monkeypatch.delenv("GLITCH_PI_MLL_FLOOR_USD", raising=False)
++        else:
++            monkeypatch.setenv("GLITCH_PI_MLL_FLOOR_USD", str(floor))
++        fake_gist[pe.ORDER_FILE] = _signal()                                                            # MES: nc 40, SL 100
++        return client
++
++    def test_guard_is_off_by_default(self):
++        assert pe.MLL_GUARD is False or os.environ.get("GLITCH_PI_MLL_GUARD") == "si"
++
++    def test_off_leaves_the_signal_untouched(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=50_000.0, floor=49_999.0, guard=False)
++        pe.run_once()
++        assert client.placed_orders[0]["size"] == 40
++
++    def test_on_with_room_trades_full_size(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=60_000.0, floor=50_000.0)             # colchon 10,000 > 40 · 129.97
++        pe.run_once()
++        assert client.placed_orders[0]["size"] == 40
++
++    def test_on_reduces_contracts_to_what_fits(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=54_000.0, floor=50_000.0)             # colchon 4,000 -> 30 contratos de MES
++        pe.run_once()
++        assert client.placed_orders[0]["size"] == 30
++        assert fake_gist["geometry_mes_log.json"][0]["nc"] == 30
++
++    def test_on_blocks_when_not_even_one_fits(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=50_050.0, floor=50_000.0)             # colchon 50 < 129.97
++        pe.run_once()
++        assert client.placed_orders == []
++        assert fake_gist[pe.ORDER_FILE] == {}                                                       # se descarta la señal del dia
++        assert any("Guardia de colchon" in m for m in sent)
++
++    def test_on_without_floor_fails_closed(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=60_000.0, floor=None)
++        pe.run_once()
++        assert client.placed_orders == []
++        assert any("falta un dato" in m for m in sent)
++
++    def test_on_without_balance_fails_closed(self, fake_gist, sent, monkeypatch):
++        client = self._setup(monkeypatch, fake_gist, balance=60_000.0, floor=50_000.0)
++        client.accounts = [{"id": 555}]                                                             # sin `balance`
++        pe.run_once()
++        assert client.placed_orders == []
+-- 
+2.50.1 (Apple Git-155)
+

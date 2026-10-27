@@ -1,0 +1,335 @@
+From 6a5fac634ed71626a8632e10ae7284ea8e1f0beb Mon Sep 17 00:00:00 2001
+From: Eric Trevino <eric.trevino@udem.edu>
+Date: Mon, 26 Oct 2026 18:52:23 -0600
+Subject: [PATCH 2/5] J4-f: el Pi aplica la regla de roll del oro cuando la API
+ no trae activeContract; ROLL_RULES pasa a execution/roll_rules.py (sin
+ MASSIVE_API_KEY) (NEEDS HUMAN REVIEW)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ glitch/execution/contracts.py      |  67 +------------------
+ glitch/execution/roll_rules.py     |  73 +++++++++++++++++++++
+ glitch/pi/pi_executor.py           |  12 +++-
+ glitch/tests/test_j4_roll_guard.py | 102 +++++++++++++++++++++++++++++
+ glitch/tests/test_t4_pi_mgc.py     |   5 +-
+ 5 files changed, 192 insertions(+), 67 deletions(-)
+ create mode 100644 glitch/execution/roll_rules.py
+ create mode 100644 glitch/tests/test_j4_roll_guard.py
+
+diff --git a/glitch/execution/contracts.py b/glitch/execution/contracts.py
+index 88f62f3..52bddae 100644
+--- a/glitch/execution/contracts.py
++++ b/glitch/execution/contracts.py
+@@ -110,70 +110,9 @@ def _get(path: str, params: dict, max_pages: int = 20) -> list[dict]:
+     return out
+ 
+ 
+-_MONTH_CODES = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
+-
+-# Regla de roll por producto (T4, 12-oct-2026; NEEDS HUMAN REVIEW). Topstep exige operar el front month = el vencimiento de mayor VOLUMEN
+-# (help.topstep.com/8284108), no el de vencimiento mas cercano. Para el oro (GC/MGC) la liquidez migra del contrato bimestral que entra en mes de
+-# entrega al siguiente ANTES del primer dia de aviso (FND = ultimo dia habil del mes previo al de entrega): MGCV6 (oct-2026) se quedo sin barras el
+-# 1-oct-2026 (incidente de 700+ min sin datos, GLITCH_RESEARCH_LOG.md) -- justo despues de su FND (30-sep). `resolve_front_month` elegia el vencimiento
+-# mas cercano, o sea MGCV6 hasta su ultimo dia de negociacion (~28-oct). Regla determinista (no depende de la API): se descarta el contrato cuando
+-# faltan <= `bdays_before_fnd` dias habiles (solo fines de semana; feriados no modelados) para su FND. Los meses activos limitan los candidatos
+-# (oro: feb/abr/jun/ago/oct/dic); si el filtro dejara cero candidatos, se vuelve al comportamiento anterior.
+-ROLL_RULES = {
+-    "MGC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
+-    "GC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
+-}
+-
+-
+-def _ticker_month_year(product: str, ticker: str, ref_year: int):
+-    m = re.match(rf"^{re.escape(product)}([FGHJKMNQUVXZ])(\d{{1,2}})$", ticker)
+-    if not m:
+-        return None
+-    month = _MONTH_CODES[m.group(1)]
+-    yy = int(m.group(2))
+-    year = (ref_year // 100) * 100 + yy if yy >= 10 else (ref_year // 10) * 10 + yy
+-    if year < ref_year - 5:
+-        year += 10
+-    return month, year
+-
+-
+-def _add_business_days(d: dt.date, n: int) -> dt.date:
+-    step = 1 if n >= 0 else -1
+-    left = abs(n)
+-    while left:
+-        d += dt.timedelta(days=step)
+-        if d.weekday() < 5:
+-            left -= 1
+-    return d
+-
+-
+-def first_notice_day(year: int, month: int) -> dt.date:
+-    """FND de un contrato de metales con entrega en (year, month): ultimo dia habil (lun-vie) del mes anterior."""
+-    first = dt.date(year, month, 1)
+-    d = first - dt.timedelta(days=1)
+-    while d.weekday() >= 5:
+-        d -= dt.timedelta(days=1)
+-    return d
+-
+-
+-def apply_roll_rule(product: str, candidates: list, today: dt.date) -> list:
+-    """candidates: [(ticker, last_trade_date_iso)] ordenados por vencimiento. Aplica ROLL_RULES[product] si existe; si el filtro vaciara la lista, devuelve la original."""
+-    rule = ROLL_RULES.get(product)
+-    if not rule:
+-        return candidates
+-    kept = []
+-    for ticker, ltd in candidates:
+-        my = _ticker_month_year(product, ticker, today.year)
+-        if my is None:
+-            continue
+-        month, year = my
+-        if month not in rule["active_months"]:
+-            continue
+-        cutoff = _add_business_days(first_notice_day(year, month), -rule["bdays_before_fnd"])
+-        if today >= cutoff:
+-            continue
+-        kept.append((ticker, ltd))
+-    return kept or candidates
++from execution.roll_rules import (  # noqa: E402,F401  -- re-exportados: los mismos nombres de siempre (J4-f)
++    _MONTH_CODES, ROLL_RULES, _add_business_days, _ticker_month_year, apply_roll_rule, first_notice_day,
++)
+ 
+ 
+ def resolve_front_month(product: str, today: "dt.date | None" = None) -> tuple[str, str]:
+diff --git a/glitch/execution/roll_rules.py b/glitch/execution/roll_rules.py
+new file mode 100644
+index 0000000..3b1d8d6
+--- /dev/null
++++ b/glitch/execution/roll_rules.py
+@@ -0,0 +1,73 @@
++"""
++Glitch — Regla de roll del oro (J4-f, 26-oct-2026): funciones PURAS, sin red y sin variables de entorno.
++Movidas SIN cambios desde execution/contracts.py (T4, 12-oct-2026) para que pi/pi_executor.py pueda usarlas: execution/contracts.py exige MASSIVE_API_KEY al
++importarse (los schedulers de Railway la tienen; el Pi NO -- ver el comentario de arranque de pi_executor.py) y por eso el Pi no puede importarlo.
++execution/contracts.py las re-exporta con los mismos nombres. NEEDS HUMAN REVIEW.
++"""
++import datetime as dt
++import re
++
++_MONTH_CODES = {"F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6, "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12}
++
++# Regla de roll por producto (T4, 12-oct-2026; NEEDS HUMAN REVIEW). Topstep exige operar el front month = el vencimiento de mayor VOLUMEN
++# (help.topstep.com/8284108), no el de vencimiento mas cercano. Para el oro (GC/MGC) la liquidez migra del contrato bimestral que entra en mes de
++# entrega al siguiente ANTES del primer dia de aviso (FND = ultimo dia habil del mes previo al de entrega): MGCV6 (oct-2026) se quedo sin barras el
++# 1-oct-2026 (incidente de 700+ min sin datos, GLITCH_RESEARCH_LOG.md) -- justo despues de su FND (30-sep). `resolve_front_month` elegia el vencimiento
++# mas cercano, o sea MGCV6 hasta su ultimo dia de negociacion (~28-oct). Regla determinista (no depende de la API): se descarta el contrato cuando
++# faltan <= `bdays_before_fnd` dias habiles (solo fines de semana; feriados no modelados) para su FND. Los meses activos limitan los candidatos
++# (oro: feb/abr/jun/ago/oct/dic); si el filtro dejara cero candidatos, se vuelve al comportamiento anterior.
++ROLL_RULES = {
++    "MGC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
++    "GC": {"active_months": {2, 4, 6, 8, 10, 12}, "bdays_before_fnd": 2},
++}
++
++
++def _ticker_month_year(product: str, ticker: str, ref_year: int):
++    m = re.match(rf"^{re.escape(product)}([FGHJKMNQUVXZ])(\d{{1,2}})$", ticker)
++    if not m:
++        return None
++    month = _MONTH_CODES[m.group(1)]
++    yy = int(m.group(2))
++    year = (ref_year // 100) * 100 + yy if yy >= 10 else (ref_year // 10) * 10 + yy
++    if year < ref_year - 5:
++        year += 10
++    return month, year
++
++
++def _add_business_days(d: dt.date, n: int) -> dt.date:
++    step = 1 if n >= 0 else -1
++    left = abs(n)
++    while left:
++        d += dt.timedelta(days=step)
++        if d.weekday() < 5:
++            left -= 1
++    return d
++
++
++def first_notice_day(year: int, month: int) -> dt.date:
++    """FND de un contrato de metales con entrega en (year, month): ultimo dia habil (lun-vie) del mes anterior."""
++    first = dt.date(year, month, 1)
++    d = first - dt.timedelta(days=1)
++    while d.weekday() >= 5:
++        d -= dt.timedelta(days=1)
++    return d
++
++
++def apply_roll_rule(product: str, candidates: list, today: dt.date) -> list:
++    """candidates: [(ticker, last_trade_date_iso)] ordenados por vencimiento. Aplica ROLL_RULES[product] si existe; si el filtro vaciara la lista, devuelve la original."""
++    rule = ROLL_RULES.get(product)
++    if not rule:
++        return candidates
++    kept = []
++    for ticker, ltd in candidates:
++        my = _ticker_month_year(product, ticker, today.year)
++        if my is None:
++            continue
++        month, year = my
++        if month not in rule["active_months"]:
++            continue
++        cutoff = _add_business_days(first_notice_day(year, month), -rule["bdays_before_fnd"])
++        if today >= cutoff:
++            continue
++        kept.append((ticker, ltd))
++    return kept or candidates
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 6239526..3e32927 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -135,6 +135,7 @@ require_env(
+ 
+ from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
+ from execution.ct_logging import setup_ct_logging
++from execution.roll_rules import apply_roll_rule
+ from execution.session_calendar import flatten_minutes_ct
+ from execution.gist_store import load_log as _gist_load_log
+ from execution.gist_store import load_log_strict as _gist_load_log_strict
+@@ -349,11 +350,18 @@ def resolve_contract_id(client: ProjectXClient, product_code: str) -> dict:
+         raise RuntimeError(f"No se encontro contrato para product_code={product_code!r} en ProjectX.")
+     active = [c for c in matches if c.get("activeContract") is True]
+     pool = active or matches
++    if not active:
++        # J4-f (26-oct-2026; NEEDS HUMAN REVIEW): sin la marca `activeContract` el "mas cercano" es, para el oro, el contrato que ya paso su aviso de
++        # entrega (MGCV6 vence ~28-oct). Se aplica la MISMA regla de roll determinista que usan los schedulers (execution/contracts.py::ROLL_RULES); para
++        # productos sin regla (MES) no cambia nada. Si la regla vaciara la lista, apply_roll_rule devuelve la original.
++        by_exp = sorted(matches, key=lambda c: c.get("expirationDate", ""))
++        kept = {n for n, _ in apply_roll_rule(product_code, [(c.get("name", ""), c.get("expirationDate", "")) for c in by_exp], ct_now().date())}
++        pool = [c for c in by_exp if c.get("name", "") in kept] or matches
+     pool.sort(key=lambda c: c.get("expirationDate", ""))
+     chosen = pool[0]
+     if not active:
+-        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano "
+-                    f"({chosen.get('name')}), que puede NO ser el front month por volumen.")
++        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano que no "
++                    f"haya pasado su ventana de roll ({chosen.get('name')}), que puede NO ser el front month por volumen.")
+     else:
+         nearest = sorted(matches, key=lambda c: c.get("expirationDate", ""))[0]
+         if nearest.get("id") != chosen.get("id"):
+diff --git a/glitch/tests/test_j4_roll_guard.py b/glitch/tests/test_j4_roll_guard.py
+new file mode 100644
+index 0000000..a9274c2
+--- /dev/null
++++ b/glitch/tests/test_j4_roll_guard.py
+@@ -0,0 +1,102 @@
++"""
++Glitch — Pruebas del parche J4-f (26-oct-2026): el Pi aplica la regla de roll del oro cuando la API no trae `activeContract`.
++Motivo: sin la marca, el "vencimiento mas cercano" del oro en la semana del 28-oct es MGCV6 (aviso de entrega 30-sep, vence ~28-oct). NEEDS HUMAN REVIEW.
++Sin red.
++"""
++import datetime as dt
++import os
++import sys
++
++for k, v in (("TOPSTEP_USERNAME", "u"), ("TOPSTEP_API_KEY", "k"), ("TOPSTEP_ACCOUNT_ID", "555"), ("TELEGRAM_BOT_TOKEN", "t"), ("TELEGRAM_CHAT_ID", "c"),
++             ("GITHUB_GIST_TOKEN", "g"), ("GIST_ID", "i"), ("GLITCH_PRODUCT", "MES")):
++    os.environ.setdefault(k, v)
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++import strategies.geometry_pure as geo
++
++
++class _C:
++    def __init__(self, contracts): self._c = contracts
++    def get_contracts(self, live=False): return list(self._c)
++
++
++def _gold(flag):
++    base = [{"id": "CON.F.US.MGC.V26", "name": "MGCV6", "expirationDate": "2026-10-28", "tickSize": 0.1, "tickValue": 1.0},
++            {"id": "CON.F.US.MGC.Z26", "name": "MGCZ6", "expirationDate": "2026-12-29", "tickSize": 0.1, "tickValue": 1.0},
++            {"id": "CON.F.US.MGC.G27", "name": "MGCG7", "expirationDate": "2027-02-24", "tickSize": 0.1, "tickValue": 1.0}]
++    if flag is None:
++        return base
++    return [dict(c, activeContract=(c["name"] == flag)) for c in base]
++
++
++@pytest.fixture
++def at(monkeypatch):
++    monkeypatch.setattr(pe, "CFG", geo.CANDIDATES["MGC"])
++    monkeypatch.setattr(pe, "send", lambda m: None)
++    pe._SPEC_WARNED.clear()
++
++    def _set(y, m, d):
++        monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(y, m, d, 8, 0, tzinfo=pe.CT))
++    return _set
++
++
++class TestGoldRollWithoutActiveFlag:
++    def test_28_oct_without_flag_picks_december_not_the_expiring_october(self, at):
++        at(2026, 10, 28)
++        assert pe.resolve_contract_id(_C(_gold(None)), "MGC")["name"] == "MGCZ6"
++
++    def test_26_oct_without_flag_picks_december(self, at):
++        at(2026, 10, 26)
++        assert pe.resolve_contract_id(_C(_gold(None)), "MGC")["name"] == "MGCZ6"
++
++    def test_before_the_roll_window_the_nearest_is_still_chosen(self, at):
++        at(2026, 9, 1)
++        assert pe.resolve_contract_id(_C(_gold(None)), "MGC")["name"] == "MGCV6"
++
++    def test_if_the_rule_would_empty_the_list_it_falls_back_to_all(self, at):
++        at(2026, 10, 28)
++        only_old = [c for c in _gold(None) if c["name"] == "MGCV6"]
++        assert pe.resolve_contract_id(_C(only_old), "MGC")["name"] == "MGCV6"
++
++
++class TestActiveFlagStillWins:
++    def test_api_flag_is_trusted_even_if_it_marks_the_nearest(self, at):
++        at(2026, 10, 28)
++        assert pe.resolve_contract_id(_C(_gold("MGCV6")), "MGC")["name"] == "MGCV6"     # decision de la API; no se sobrescribe
++
++    def test_api_flag_on_december(self, at):
++        at(2026, 10, 28)
++        assert pe.resolve_contract_id(_C(_gold("MGCZ6")), "MGC")["name"] == "MGCZ6"
++
++
++class TestOtherProductsUnchanged:
++    def test_mes_without_flag_still_picks_nearest(self, monkeypatch):
++        monkeypatch.setattr(pe, "CFG", geo.CANDIDATES["MES"])
++        monkeypatch.setattr(pe, "send", lambda m: None)
++        monkeypatch.setattr(pe, "ct_now", lambda: dt.datetime(2026, 10, 28, 8, 0, tzinfo=pe.CT))
++        pe._SPEC_WARNED.clear()
++        mes = [{"id": "CON.MES.Z26", "name": "MESZ6", "expirationDate": "2026-12-18", "tickSize": 0.25, "tickValue": 1.25},
++               {"id": "CON.MES.H27", "name": "MESH7", "expirationDate": "2027-03-19", "tickSize": 0.25, "tickValue": 1.25}]
++        assert pe.resolve_contract_id(_C(mes), "MES")["name"] == "MESZ6"
++
++
++class TestPiDoesNotNeedMassiveKey:
++    """El Pi no tiene MASSIVE_API_KEY (ver el comentario de arranque de pi_executor.py): importar execution/contracts.py ahi lo tumbaria al arrancar."""
++
++    def test_pi_executor_imports_without_massive_or_polygon_key(self):
++        import subprocess
++        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++        env = {k: v for k, v in os.environ.items() if k not in ("MASSIVE_API_KEY", "POLYGON_API_KEY")}
++        env.update(TOPSTEP_USERNAME="u", TOPSTEP_API_KEY="k", TOPSTEP_ACCOUNT_ID="5", TELEGRAM_BOT_TOKEN="t", TELEGRAM_CHAT_ID="c",
++                   GITHUB_GIST_TOKEN="g", GIST_ID="i", GLITCH_PRODUCT="MGC")
++        r = subprocess.run([sys.executable, "-c", "import pi.pi_executor"], cwd=root, env=env, capture_output=True, text=True, timeout=60)
++        assert r.returncode == 0, r.stderr[-400:]
++
++    def test_roll_rules_module_has_no_env_requirement(self, monkeypatch):
++        monkeypatch.setenv("MASSIVE_API_KEY", "test-not-real")      # execution.contracts SI la exige (Railway la tiene); solo se importa aqui para comparar
++        import execution.roll_rules as rr
++        import execution.contracts as ct
++        assert ct.apply_roll_rule is rr.apply_roll_rule and ct.ROLL_RULES is rr.ROLL_RULES      # re-exportados: un solo codigo
+diff --git a/glitch/tests/test_t4_pi_mgc.py b/glitch/tests/test_t4_pi_mgc.py
+index c8ad5b5..d2ee823 100644
+--- a/glitch/tests/test_t4_pi_mgc.py
++++ b/glitch/tests/test_t4_pi_mgc.py
+@@ -53,7 +53,10 @@ class TestResolveContract:
+     def test_prefers_active_over_nearest_expiry(self, mgc_cfg):
+         assert pe.resolve_contract_id(FakeClient(GOLD), "MGC")["name"] == "MGCZ6"
+ 
+-    def test_falls_back_to_nearest_with_warning_when_no_flag(self, mgc_cfg, caplog):
++    def test_falls_back_to_nearest_with_warning_when_no_flag(self, mgc_cfg, caplog, monkeypatch):
++        # J4-f (26-oct-2026): el "mas cercano" solo es correcto ANTES de la ventana de roll de MGCV6 (aviso de entrega 30-sep); despues manda la regla
++        # (ver tests/test_j4_roll_guard.py). Se fija el reloj para conservar el sentido original de esta prueba.
++        monkeypatch.setattr(pe, "ct_now", lambda: __import__("datetime").datetime(2026, 9, 1, 8, 0, tzinfo=pe.CT))
+         flagless = [{k: v for k, v in c.items() if k != "activeContract"} for c in GOLD]
+         with caplog.at_level("WARNING"):
+             assert pe.resolve_contract_id(FakeClient(flagless), "MGC")["name"] == "MGCV6"
+-- 
+2.50.1 (Apple Git-155)
+

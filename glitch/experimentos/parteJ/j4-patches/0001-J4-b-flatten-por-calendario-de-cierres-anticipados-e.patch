@@ -1,0 +1,190 @@
+From 4a15755ef71739cc4be5799b23fefa7084a5c457 Mon Sep 17 00:00:00 2001
+From: Eric Trevino <eric.trevino@udem.edu>
+Date: Mon, 26 Oct 2026 18:51:16 -0600
+Subject: [PATCH 1/5] J4-b: flatten por calendario de cierres anticipados en el
+ Pi y en el scheduler MES (NEEDS HUMAN REVIEW)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ glitch/pi/pi_executor.py                 | 16 ++++-
+ glitch/scheduler/geometry_scheduler.py   |  8 ++-
+ glitch/tests/test_j4_flatten_calendar.py | 89 ++++++++++++++++++++++++
+ 3 files changed, 107 insertions(+), 6 deletions(-)
+ create mode 100644 glitch/tests/test_j4_flatten_calendar.py
+
+diff --git a/glitch/pi/pi_executor.py b/glitch/pi/pi_executor.py
+index 916ecff..6239526 100644
+--- a/glitch/pi/pi_executor.py
++++ b/glitch/pi/pi_executor.py
+@@ -135,6 +135,7 @@ require_env(
+ 
+ from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
+ from execution.ct_logging import setup_ct_logging
++from execution.session_calendar import flatten_minutes_ct
+ from execution.gist_store import load_log as _gist_load_log
+ from execution.gist_store import load_log_strict as _gist_load_log_strict
+ from execution.gist_store import save_log_strict as _gist_save_log_strict
+@@ -744,11 +745,20 @@ def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
+ 
+ 
+ # ── 5. poll_position_until_closed ────────────────────────────────────────
++def _flatten_cutoff_minutes(now, flatten_hour: Optional[int] = None, flatten_minute: Optional[int] = None) -> int:
++    """Minuto CT (desde medianoche) a partir del cual se aplana HOY. J4-b (26-oct-2026; NEEDS HUMAN REVIEW): 14:30 en un dia normal, pero ANTES en los
++    cierres anticipados publicados por Topstep (26-nov, 27-nov, 24-dic; `execution/session_calendar.py`): ahi Topstep liquida las posiciones abiertas a
++    la hora publicada y el flatten fijo de las 14:30 llegaria despues, sin registro fiel del resultado. Si el llamador pasa hora Y minuto explicitos se usan tal cual."""
++    if flatten_hour is not None and flatten_minute is not None:
++        return flatten_hour * 60 + flatten_minute
++    return flatten_minutes_ct(now.date())
++
++
+ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract_id,
+                                 tp_order_id, sl_order_id, tp_price: float, sl_price: float,
+                                 poll_interval: int = POSITION_POLL_INTERVAL,
+-                                flatten_hour: int = FLATTEN_HOUR,
+-                                flatten_minute: int = FLATTEN_MINUTE) -> dict:
++                                flatten_hour: Optional[int] = None,
++                                flatten_minute: Optional[int] = None) -> dict:
+     """
+     Monitorea el bracket hasta que se resuelve: TP lleno (cancela SL), SL
+     lleno (cancela TP), o cierre forzado de sesion (cancela ambos y
+@@ -765,7 +775,7 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
+     polls = 0
+     while True:
+         now = ct_now()
+-        if now.hour * 60 + now.minute >= flatten_hour * 60 + flatten_minute:
++        if now.hour * 60 + now.minute >= _flatten_cutoff_minutes(now, flatten_hour, flatten_minute):
+             leftover = _cancel_orders_verified(client, account_id, [tp_order_id, sl_order_id])
+             if leftover:
+                 send(f"{PREFIX}\nSTATUS: ALERTA\nTras el cierre de sesion siguen ABIERTAS las ordenes {leftover} "
+diff --git a/glitch/scheduler/geometry_scheduler.py b/glitch/scheduler/geometry_scheduler.py
+index d060307..f024285 100644
+--- a/glitch/scheduler/geometry_scheduler.py
++++ b/glitch/scheduler/geometry_scheduler.py
+@@ -87,6 +87,7 @@ CT = ZoneInfo("America/Chicago")
+ # anterior, format="%(asctime)s CT" via basicConfig, dependia
+ # silenciosamente del TZ del contenedor).
+ from execution.ct_logging import setup_ct_logging
++from execution.session_calendar import flatten_minutes_ct
+ log = setup_ct_logging("geometry")
+ 
+ # ── Config ────────────────────────────────────────────────────────────────
+@@ -632,9 +633,10 @@ def run():
+         # Misma hora de entrada que el paper (ver ENTRY_GATE_MINUTES): se espera ANTES de escribir la señal.
+         _wait_for_entry_gate()
+         _now = ct_now()
+-        if _now.hour * 60 + _now.minute >= SESSION_FLATTEN_MINUTES:
++        _flat_min = flatten_minutes_ct(date.today())      # J4-b: 14:30 normal; antes en los cierres anticipados de Topstep
++        if _now.hour * 60 + _now.minute >= _flat_min:
+             msg = (f"{PREFIX}\nSTATUS: ERROR\n"
+-                   f"ERROR: el scheduler llego despues del cierre de sesion ({_now.strftime('%H:%M')} CT >= 14:30) "
++                   f"ERROR: el scheduler llego despues del cierre de sesion ({_now.strftime('%H:%M')} CT >= {_flat_min // 60}:{_flat_min % 60:02d}) "
+                    f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
+             send(msg)
+             log.error(msg.replace("\n", " | "))
+@@ -761,7 +763,7 @@ def run():
+         now = ct_now()
+         t = now.hour * 60 + now.minute
+ 
+-        if t >= 14 * 60 + 30:
++        if t >= flatten_minutes_ct(now.date()):      # J4-b: 14:30 normal; antes en los cierres anticipados
+             bars = fetch_intraday(CFG.spec.yf_ticker)
+             exit_price = float(bars.iloc[-1]['close']) if bars is not None and len(bars) > 0 else entry_price
+             result = "FLATTEN"
+diff --git a/glitch/tests/test_j4_flatten_calendar.py b/glitch/tests/test_j4_flatten_calendar.py
+new file mode 100644
+index 0000000..7f803ff
+--- /dev/null
++++ b/glitch/tests/test_j4_flatten_calendar.py
+@@ -0,0 +1,89 @@
++"""
++Glitch — Pruebas del parche J4-b (26-oct-2026): flatten por calendario de cierres anticipados en el Pi y en el scheduler MES.
++Sin red: FakeClient de tests/test_pi_executor.py y reloj inyectado. NEEDS HUMAN REVIEW (toca el camino de ejecucion de capital real).
++"""
++import datetime as dt
++import os
++import sys
++
++os.environ.setdefault("TOPSTEP_USERNAME", "test-user-not-real")
++os.environ.setdefault("TOPSTEP_API_KEY", "test-key-not-real")
++os.environ.setdefault("TOPSTEP_ACCOUNT_ID", "555")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++os.environ.setdefault("GLITCH_PRODUCT", "MES")
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import pytest
++
++import pi.pi_executor as pe
++from tests.test_pi_executor import FakeClient  # noqa: F401
++
++
++class _StopPolling(Exception):
++    pass
++
++
++def _at(y, m, d, hh, mm):
++    return dt.datetime(y, m, d, hh, mm, tzinfo=pe.CT)
++
++
++class TestFlattenCutoffMinutes:
++    def test_normal_day_is_1430(self):
++        assert pe._flatten_cutoff_minutes(_at(2026, 10, 28, 9, 0)) == 14 * 60 + 30
++
++    @pytest.mark.parametrize("day,expected", [
++        (dt.date(2026, 11, 26), 11 * 60 + 15),     # Topstep: cerrar por 11:45 CT -> flatten 30 min antes
++        (dt.date(2026, 11, 27), 11 * 60 + 30),     # cierre 12:00 CT
++        (dt.date(2026, 12, 24), 11 * 60 + 30),
++    ])
++    def test_early_close_days(self, day, expected):
++        assert pe._flatten_cutoff_minutes(dt.datetime.combine(day, dt.time(8, 0), tzinfo=pe.CT)) == expected
++
++    def test_explicit_hour_and_minute_win(self):
++        assert pe._flatten_cutoff_minutes(_at(2026, 11, 27, 8, 0), 9, 5) == 9 * 60 + 5
++
++    def test_only_one_of_hour_minute_falls_back_to_calendar(self):
++        assert pe._flatten_cutoff_minutes(_at(2026, 11, 27, 8, 0), 9, None) == 11 * 60 + 30
++
++
++class TestPollFlattensAtTheCalendarTime:
++    def _poll(self, client, monkeypatch, now):
++        monkeypatch.setattr(pe, "ct_now", lambda: now)
++        monkeypatch.setattr(pe, "send", lambda m: None)
++        return pe.poll_position_until_closed(client, 555, "CON.MES.Z26", 1, 2, 6050.0, 5975.0, poll_interval=0)
++
++    def test_early_close_day_flattens_at_1131(self, monkeypatch):
++        client = FakeClient()
++        client.open_order_ids = {1, 2}
++        out = self._poll(client, monkeypatch, _at(2026, 11, 27, 11, 31))
++        assert out["result"] == "FLATTEN"
++        assert client.closed_contracts == [(555, "CON.MES.Z26")]
++
++    def test_normal_day_does_NOT_flatten_at_1131(self, monkeypatch):
++        client = FakeClient()
++        client.open_order_ids = {1, 2}
++
++        def _stop(_):
++            raise _StopPolling()
++        monkeypatch.setattr(pe.time, "sleep", _stop)
++        with pytest.raises(_StopPolling):
++            self._poll(client, monkeypatch, _at(2026, 11, 30, 11, 31))
++        assert client.closed_contracts == []                      # sigue monitoreando, no cerro nada
++
++    def test_normal_day_still_flattens_at_1431(self, monkeypatch):
++        client = FakeClient()
++        client.open_order_ids = {1, 2}
++        out = self._poll(client, monkeypatch, _at(2026, 11, 30, 14, 31))
++        assert out["result"] == "FLATTEN"
++
++
++class TestMesSchedulerUsesTheCalendar:
++    def test_both_flatten_checks_use_the_calendar_function(self):
++        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scheduler", "geometry_scheduler.py"), encoding="utf-8").read()
++        code = [l for l in src.splitlines() if not l.strip().startswith("#")]
++        assert sum("flatten_minutes_ct(" in l for l in code) >= 2          # modo real (llegada tarde) y flatten del paper
++        assert not any("t >= 14 * 60 + 30" in l for l in code)             # ya no queda la constante en el loop del paper
+-- 
+2.50.1 (Apple Git-155)
+

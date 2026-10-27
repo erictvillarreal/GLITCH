@@ -23,7 +23,7 @@
 | producto / geometría | días FOMC / total | rango de la ventana FOMC ÷ resto | fracción decidida FOMC vs resto | P(TP | decidido) en días FOMC [IC exacto] | % de días SIN resolver a las 13:00 CT (resto) | (FOMC) |
 |---|---|---|---|---|---|---|
 | MES nc 40, TP 32 / liquidación 40 | 16 / 492 | ×1.30 | 100 % vs 100 % | 19/32 = 59 % [41, 76] | 1 % | 0 % |
-| MGC 3×364 | 16 / 488 | ×1.28 | 62 % vs 43 % | 10/20 = 50 % [27, 73] | 80 % | 81 % |
+| MGC 3×364 | 16 / 488 | ×1.28 | 62 % vs 43 % | 10/20 = 50 % [27, 73] | ~~80 %~~ **58 %** (corregido en J8: el script ignoraba el SL de 364 ticks) | ~~81 %~~ **56 %** |
 
 **Lectura.** (1) Con n = 16 días FOMC el IC de cualquier proporción es de ±25 pp: **sin potencia** para decir que el FOMC cambia P(TP). (2) El rango sí sube (consistente con ×1.43 en el S&P diario 2021–26, T5 de G2). (3) **Exposición:** en MES **solo ≈ 1 % de los días (0 % en los 16 FOMC) sigue sin resolver a las 13:00 CT**: casi todo se resuelve por TP o liquidación antes del anuncio, así que el FOMC **casi no toca al Combine de MES**; en MGC **≈ 80 % de los días siguen abiertos a esa hora** (son los FLATTEN), por eso el FOMC sí es un riesgo de la XFA (tres micros abiertos con MLL de $2,000 al momento del anuncio). El anuncio afecta sobre todo a las posiciones **abiertas a las 13:00**.
 

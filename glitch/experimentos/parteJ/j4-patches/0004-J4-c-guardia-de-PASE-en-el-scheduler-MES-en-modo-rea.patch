@@ -1,0 +1,119 @@
+From 9271f487b00e577e5dc20794aab5a4be070c14bc Mon Sep 17 00:00:00 2001
+From: Eric Trevino <eric.trevino@udem.edu>
+Date: Mon, 26 Oct 2026 18:59:24 -0600
+Subject: [PATCH 4/5] J4-c: guardia de PASE en el scheduler MES en modo real
+ (NEEDS HUMAN REVIEW)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ glitch/scheduler/geometry_scheduler.py | 26 +++++++++++++
+ glitch/tests/test_j4_pase_guard.py     | 53 ++++++++++++++++++++++++++
+ 2 files changed, 79 insertions(+)
+ create mode 100644 glitch/tests/test_j4_pase_guard.py
+
+diff --git a/glitch/scheduler/geometry_scheduler.py b/glitch/scheduler/geometry_scheduler.py
+index f024285..73df456 100644
+--- a/glitch/scheduler/geometry_scheduler.py
++++ b/glitch/scheduler/geometry_scheduler.py
+@@ -318,6 +318,26 @@ def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_thr
+     return None
+ 
+ 
++def _pase_guard_reason(paper_log: list, ack: str) -> Optional[str]:
++    """J4-c (26-oct-2026; NEEDS HUMAN REVIEW). Funcion PURA. En modo real, si el intento MAS ALTO del historial ya cruzo PROFIT_TARGET (el Combine de
++    Cerebro 1 se paso), el scheduler NO debe seguir mandando señales de MES: la cuenta se cierra al pasar y la cuenta fijada del Pi deja de existir. Antes
++    el scheduler solo incrementaba la etiqueta `intento` y seguia enviando (el Pi fallaba despues con 'cuenta no esta entre las activas').
++    Devuelve None si se puede enviar; si no, el texto del bloqueo. `ack` = GLITCH_ACK_PASE_INTENTO: el numero de intento que el operador ya reconocio
++    (p. ej. para seguir con otra Combine). La comparacion es contra P&L del intento (no verifica el criterio de consistencia ni los dias minimos de Topstep):
++    es una ALERTA CONSERVADORA que el humano confirma en TopstepX, no una declaracion de PASE."""
++    tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
++    if not tags:
++        return None
++    latest = max(tags)
++    pnl = _attempt_pnl(paper_log, latest)
++    if _check_attempt_reset(pnl, PROFIT_TARGET, _attempt_trailing_floor(paper_log, latest)) != "PASE":
++        return None
++    if str(ack).strip() == str(latest):
++        return None
++    return (f"el intento #{latest} acumula ${pnl:,.2f} >= meta de ${PROFIT_TARGET:,.0f}: posible PASE del Combine. No se envian mas señales de MES hasta que lo "
++            f"confirmes en TopstepX y reconozcas el intento con GLITCH_ACK_PASE_INTENTO={latest} (o detengas este servicio).")
++
++
+ def _build_pending_record(side: int, direction_str: str, entry_price: float, tp_price: float,
+                            sl_price: float, ticker: str, today_str: str, intento: int,
+                            nc: int, sl_ticks: int, tp_ticks: int, product_key: str, dry_run: bool) -> dict:
+@@ -630,6 +650,12 @@ def run():
+     #         mercado real de ProjectX en el momento en que el Pi coloca la
+     #         orden (ver pi_executor.py::_reference_price).
+     if not DRY_RUN:
++        _pase_why = _pase_guard_reason(paper_log, os.getenv("GLITCH_ACK_PASE_INTENTO", ""))      # J4-c
++        if _pase_why:
++            msg = f"{PREFIX}\nSTATUS: PASE DETECTADO\n{_pase_why}\n{utc_now_str()}"
++            send(msg)
++            log.error(msg.replace("\n", " | "))
++            return
+         # Misma hora de entrada que el paper (ver ENTRY_GATE_MINUTES): se espera ANTES de escribir la señal.
+         _wait_for_entry_gate()
+         _now = ct_now()
+diff --git a/glitch/tests/test_j4_pase_guard.py b/glitch/tests/test_j4_pase_guard.py
+new file mode 100644
+index 0000000..786a9f5
+--- /dev/null
++++ b/glitch/tests/test_j4_pase_guard.py
+@@ -0,0 +1,53 @@
++"""
++Glitch — Pruebas del parche J4-c (26-oct-2026): el scheduler MES en modo real deja de enviar señales cuando el intento ya cruzo la meta del Combine
++(posible PASE) hasta que el operador lo reconoce. NEEDS HUMAN REVIEW. Sin red.
++"""
++import os
++import sys
++
++os.environ.setdefault("MASSIVE_API_KEY", "test-key-not-real")
++os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-not-real")
++os.environ.setdefault("TELEGRAM_CHAT_ID", "test-chat-not-real")
++os.environ.setdefault("GITHUB_GIST_TOKEN", "test-gist-token-not-real")
++os.environ.setdefault("GIST_ID", "test-gist-id-not-real")
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++import scheduler.geometry_scheduler as gs
++
++
++def _e(date, result, pnl, intento):
++    return {"date": date, "result": result, "pnl": pnl, "intento": intento}
++
++
++class TestPaseGuardReason:
++    def test_empty_log_allows(self):
++        assert gs._pase_guard_reason([], "") is None
++
++    def test_below_target_allows(self):
++        assert gs._pase_guard_reason([_e("2026-10-26", "TP", 1551.2, 1)], "") is None
++
++    def test_two_tps_cross_the_target_and_block(self):
++        log = [_e("2026-10-26", "TP", 1551.2, 1), _e("2026-10-27", "TP", 1551.2, 1)]
++        why = gs._pase_guard_reason(log, "")
++        assert why and "PASE" in why and "#1" in why and "GLITCH_ACK_PASE_INTENTO=1" in why
++
++    def test_acknowledging_the_intento_releases_the_block(self):
++        log = [_e("2026-10-26", "TP", 1551.2, 1), _e("2026-10-27", "TP", 1551.2, 1)]
++        assert gs._pase_guard_reason(log, "1") is None
++
++    def test_a_different_ack_does_not_release(self):
++        log = [_e("2026-10-26", "TP", 1551.2, 3), _e("2026-10-27", "TP", 1551.2, 3)]
++        assert gs._pase_guard_reason(log, "2") is not None
++
++    def test_only_the_latest_intento_counts(self):
++        log = [_e("2026-10-01", "TP", 1551.2, 1), _e("2026-10-02", "TP", 1551.2, 1),       # intento 1 ya paso (historico)
++               _e("2026-10-20", "TP", 1551.2, 2)]                                           # intento 2 sigue por debajo de la meta
++        assert gs._pase_guard_reason(log, "") is None
++
++    def test_entries_without_intento_are_ignored(self):
++        assert gs._pase_guard_reason([{"date": "2026-10-26", "pnl": 5000, "result": "TP"}], "") is None
++
++    def test_paper_mode_is_not_affected_by_the_guard_source_check(self):
++        src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scheduler", "geometry_scheduler.py"), encoding="utf-8").read()
++        i = src.index("_pase_why = _pase_guard_reason(")
++        assert "if not DRY_RUN:" in src[i - 120:i]                                          # la guardia vive SOLO dentro del bloque de modo real
+-- 
+2.50.1 (Apple Git-155)
+

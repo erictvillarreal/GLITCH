@@ -26,7 +26,7 @@ def stats(dd, label, nc, cush, sl, tp, fee, tv, sf):
     ntp = int((kk == 0).sum()); nd = int((kk != 3).sum())
     lo, hi = cp(ntp, nd) if nd else (float("nan"),) * 2
     # exposicion al anuncio: dia sin resolver a las 13:00 CT (barra que termina a las 13:00)
-    fav, adv, cl, _ = dd.side_view(1, 0.0); liq_trig = -(cush / (nc * tv)); i_tp = np.where((fav >= tp).any(1), (fav >= tp).argmax(1), 10 ** 6); i_adv = np.where((adv <= liq_trig).any(1), (adv <= liq_trig).argmax(1), 10 ** 6)
+    fav, adv, cl, _ = dd.side_view(1, 0.0); liq_trig = -min(sl, cush / (nc * tv))   # barrera adversa efectiva: el menor entre el SL y la liquidación por colchón (corregido 26-oct: antes ignoraba el SL en MGC); i_tp = np.where((fav >= tp).any(1), (fav >= tp).argmax(1), 10 ** 6); i_adv = np.where((adv <= liq_trig).any(1), (adv <= liq_trig).argmax(1), 10 ** 6)
     first = np.minimum(i_tp, i_adv); ref_m = dd_ref_m; end_m = ref_m + 5 * (first + 1)
     unresolved_at_13 = (end_m > 13 * 60)
     P(f"| {label} | {int(fm.sum())} / {len(dates)} | ×{R[fm].mean() / R[~fm].mean():.2f} | {dec(kk) * 100:.0f} % vs {dec(ko) * 100:.0f} % | {ntp}/{nd} = {ntp / max(nd, 1) * 100:.0f} % [{lo * 100:.0f}, {hi * 100:.0f}] | {np.mean(unresolved_at_13[~fm]) * 100:.0f} % | {np.mean(unresolved_at_13[fm]) * 100:.0f} % |")
