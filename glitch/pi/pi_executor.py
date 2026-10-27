@@ -135,6 +135,7 @@ require_env(
 
 from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
 from execution.ct_logging import setup_ct_logging
+from execution.mll_guard import cushion_usd, decide as _mll_decide
 from execution.roll_rules import apply_roll_rule
 from execution.session_calendar import flatten_minutes_ct
 from execution.gist_store import load_log as _gist_load_log
@@ -1091,6 +1092,44 @@ def _parse_nc_cap(raw: Optional[str]) -> Optional[int]:
 
 NC_MAX = _parse_nc_cap(os.getenv("GLITCH_PI_NC_MAX"))
 
+# Guardia de colchon del MLL (J4-a, 26-oct-2026; NEEDS HUMAN REVIEW). APAGADA por defecto. Con GLITCH_PI_MLL_GUARD=si el Pi calcula el colchon como
+# (balance de la cuenta fijada, leido de la API) − GLITCH_PI_MLL_FLOOR_USD (piso ABSOLUTO del MLL en USD, que mantiene el operador: sube con el balance de
+# cierre hasta fijarse en el balance inicial) y limita los contratos a los que caben con su perdida maxima dentro del colchon. Falla CERRADO: guardia
+# encendida y sin piso valido ⇒ no se opera. Ver execution/mll_guard.py (y su advertencia: baja el cobrado esperado).
+MLL_GUARD = os.getenv("GLITCH_PI_MLL_GUARD", "no").strip().lower() == "si"
+
+
+def _mll_floor_from_env() -> Optional[float]:
+    try:
+        v = float(os.environ.get("GLITCH_PI_MLL_FLOOR_USD", "").strip())
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _account_balance(client, account_id) -> Optional[float]:
+    for a in client.get_accounts(only_active=True):
+        if str(a.get("id")) == str(account_id) and a.get("balance") is not None:
+            return float(a["balance"])
+    return None
+
+
+def _apply_mll_guard(client, account_id, signal: dict):
+    """Devuelve (signal_ajustada | None, motivo). None = bloquear la entrada de hoy. Si la guardia esta apagada devuelve la señal intacta."""
+    if not MLL_GUARD:
+        return signal, "guardia apagada"
+    floor = _mll_floor_from_env()
+    balance = _account_balance(client, account_id)
+    if floor is None or balance is None:
+        return None, "guardia de MLL encendida pero falta un dato (GLITCH_PI_MLL_FLOOR_USD valido o el balance de la API): no se opera"
+    nc, why = _mll_decide(signal["nc"], cushion_usd(balance, floor), signal["sl_ticks"], CFG.spec.tick_value_usd, CFG.spec.commission_roundturn)
+    if nc <= 0:
+        return None, why
+    if nc == signal["nc"]:
+        return signal, why
+    adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc
+    return adj, why
+
 
 def _apply_nc_cap(signal: dict) -> dict:
     """Devuelve la señal con nc = min(nc, tope). Se aplica ANTES de operar, asi TODO lo que sigue (ordenes, confirmacion
@@ -1203,6 +1242,14 @@ def run_once():
                 f"estado) -- no se coloca una orden nueva encima. Requiere revision manual."
             )
             return
+
+        signal, _mll_why = _apply_mll_guard(client, account_id, signal)       # J4-a (apagada por defecto)
+        if signal is None:
+            _notify_blocked_once_per_day(f"Guardia de colchon del MLL: NO se opera hoy -- {_mll_why}. Se descarta la señal del dia.")
+            save_order_signal({})
+            return
+        if MLL_GUARD:
+            log.info(f"guardia de MLL: {_mll_why}")
 
         reference_price = _reference_price(client, contract_id)
         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
