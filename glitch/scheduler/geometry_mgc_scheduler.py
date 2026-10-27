@@ -89,8 +89,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # 07-sep-2026, punto 5).
 from execution.env_check import require_env
 
+# K1-a (27-oct-2026; NEEDS HUMAN REVIEW): ver geometry_scheduler.py. En modo real la llave de Massive es opcional.
+_REAL_MODE_AT_STARTUP = os.getenv("DRY_RUN", "true").strip().lower() == "false"
 require_env(
-    [("MASSIVE_API_KEY", "POLYGON_API_KEY"), "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    ([] if _REAL_MODE_AT_STARTUP else [("MASSIVE_API_KEY", "POLYGON_API_KEY")]) + ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
      "GITHUB_GIST_TOKEN", "GIST_ID"],
     "GEOMETRY-MGC-XFA",
 )
@@ -99,7 +101,7 @@ import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el 
 
 from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
-from execution.contracts import get_front_month, check_expiry_alerts  # noqa: E402
+from execution.contracts import get_front_month, check_expiry_alerts, have_key  # noqa: E402
 from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
 from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state  # noqa: E402
@@ -772,15 +774,18 @@ def run():
     # ── 1. Resuelve el contrato en uso (en modo real es solo informativo: el Pi resuelve su propio contrato en ProjectX; un fallo aqui NO debe
     #        impedir la señal) ──
     ticker = None
-    try:
-        ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
-        log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
-        check_expiry_alerts(_front_month_cache, send, PREFIX)
-    except Exception as e:
-        log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
-        send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
-        if DRY_RUN:
-            return
+    if not DRY_RUN and not have_key():
+        log.info("modo real sin MASSIVE_API_KEY: se omite la resolucion del contrato y las alertas de vencimiento (informativas; el Pi resuelve su propio contrato)")
+    else:
+        try:
+            ticker = get_front_month(CFG.spec.product_code, _front_month_cache)
+            log.info(f"Contrato en uso ({CFG.spec.product_code}): {ticker}")
+            check_expiry_alerts(_front_month_cache, send, PREFIX)
+        except Exception as e:
+            log.error(f"No se pudo resolver front-month para {CFG.spec.product_code}: {e}")
+            send(f"{PREFIX}\nSTATUS: ERROR\nERROR: front-month resolution failed: {e}")
+            if DRY_RUN:
+                return
 
     # ── 2. Señal: sin predictiva, funcion pura de la fecha ──
     day_idx = trading_day_index(dt.date.today())

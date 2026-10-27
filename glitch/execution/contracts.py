@@ -27,15 +27,24 @@ from typing import Callable, Optional
 import numpy as np
 import requests
 
-MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
-if not MASSIVE_API_KEY:
-    raise RuntimeError(
-        "FATAL: falta MASSIVE_API_KEY (o POLYGON_API_KEY) en el entorno. "
-        "Sin fallback -- nunca hardcodear la key (ver auditoria 25-ago-2026)."
-    )
+MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")      # puede ser None (K1-a): el modo real no la necesita
+
+
+def have_key() -> bool:
+    """True si hay llave de Massive en el entorno AHORA (K1-a, 27-oct-2026; NEEDS HUMAN REVIEW). Antes este modulo lanzaba al importarse si faltaba:
+    eso impedia cancelar Massive Futures aunque el modo real solo la usa para el nombre del contrato y las alertas de vencimiento (informativos)."""
+    return bool(os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY"))
+
+
+def _headers() -> dict:
+    key = os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY")
+    if not key:
+        raise RuntimeError("falta MASSIVE_API_KEY (o POLYGON_API_KEY): sin fallback, nunca hardcodear la key (ver auditoria 25-ago-2026). "
+                           "Solo el modo paper y COMBO2D la necesitan; el modo real tolera su ausencia.")
+    return {"Authorization": f"Bearer {key}"}
+
 
 BASE = "https://api.massive.com"
-HEADERS = {"Authorization": f"Bearer {MASSIVE_API_KEY}"}
 
 # Puntos de control para la alerta de vencimiento (09-sep-2026) -- antes
 # alertaba TODOS los dias dentro de la ventana de 10 dias habiles,
@@ -98,7 +107,7 @@ def _get(path: str, params: dict, max_pages: int = 20) -> list[dict]:
     url = BASE + path
     out = []
     for _ in range(max_pages):
-        r = requests.get(url, headers=HEADERS, params=params, timeout=20)
+        r = requests.get(url, headers=_headers(), params=params, timeout=20)
         r.raise_for_status()
         data = r.json()
         out.extend(data.get("results", []))
