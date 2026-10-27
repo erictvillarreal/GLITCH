@@ -135,6 +135,7 @@ require_env(
 
 from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
 from execution.ct_logging import setup_ct_logging
+from execution.session_calendar import flatten_minutes_ct
 from execution.gist_store import load_log as _gist_load_log
 from execution.gist_store import load_log_strict as _gist_load_log_strict
 from execution.gist_store import save_log_strict as _gist_save_log_strict
@@ -744,11 +745,20 @@ def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
 
 
 # ── 5. poll_position_until_closed ────────────────────────────────────────
+def _flatten_cutoff_minutes(now, flatten_hour: Optional[int] = None, flatten_minute: Optional[int] = None) -> int:
+    """Minuto CT (desde medianoche) a partir del cual se aplana HOY. J4-b (26-oct-2026; NEEDS HUMAN REVIEW): 14:30 en un dia normal, pero ANTES en los
+    cierres anticipados publicados por Topstep (26-nov, 27-nov, 24-dic; `execution/session_calendar.py`): ahi Topstep liquida las posiciones abiertas a
+    la hora publicada y el flatten fijo de las 14:30 llegaria despues, sin registro fiel del resultado. Si el llamador pasa hora Y minuto explicitos se usan tal cual."""
+    if flatten_hour is not None and flatten_minute is not None:
+        return flatten_hour * 60 + flatten_minute
+    return flatten_minutes_ct(now.date())
+
+
 def poll_position_until_closed(client: ProjectXClient, account_id: int, contract_id,
                                 tp_order_id, sl_order_id, tp_price: float, sl_price: float,
                                 poll_interval: int = POSITION_POLL_INTERVAL,
-                                flatten_hour: int = FLATTEN_HOUR,
-                                flatten_minute: int = FLATTEN_MINUTE) -> dict:
+                                flatten_hour: Optional[int] = None,
+                                flatten_minute: Optional[int] = None) -> dict:
     """
     Monitorea el bracket hasta que se resuelve: TP lleno (cancela SL), SL
     lleno (cancela TP), o cierre forzado de sesion (cancela ambos y
@@ -765,7 +775,7 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
     polls = 0
     while True:
         now = ct_now()
-        if now.hour * 60 + now.minute >= flatten_hour * 60 + flatten_minute:
+        if now.hour * 60 + now.minute >= _flatten_cutoff_minutes(now, flatten_hour, flatten_minute):
             leftover = _cancel_orders_verified(client, account_id, [tp_order_id, sl_order_id])
             if leftover:
                 send(f"{PREFIX}\nSTATUS: ALERTA\nTras el cierre de sesion siguen ABIERTAS las ordenes {leftover} "

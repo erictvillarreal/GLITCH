@@ -87,6 +87,7 @@ CT = ZoneInfo("America/Chicago")
 # anterior, format="%(asctime)s CT" via basicConfig, dependia
 # silenciosamente del TZ del contenedor).
 from execution.ct_logging import setup_ct_logging
+from execution.session_calendar import flatten_minutes_ct
 log = setup_ct_logging("geometry")
 
 # ── Config ────────────────────────────────────────────────────────────────
@@ -632,9 +633,10 @@ def run():
         # Misma hora de entrada que el paper (ver ENTRY_GATE_MINUTES): se espera ANTES de escribir la señal.
         _wait_for_entry_gate()
         _now = ct_now()
-        if _now.hour * 60 + _now.minute >= SESSION_FLATTEN_MINUTES:
+        _flat_min = flatten_minutes_ct(date.today())      # J4-b: 14:30 normal; antes en los cierres anticipados de Topstep
+        if _now.hour * 60 + _now.minute >= _flat_min:
             msg = (f"{PREFIX}\nSTATUS: ERROR\n"
-                   f"ERROR: el scheduler llego despues del cierre de sesion ({_now.strftime('%H:%M')} CT >= 14:30) "
+                   f"ERROR: el scheduler llego despues del cierre de sesion ({_now.strftime('%H:%M')} CT >= {_flat_min // 60}:{_flat_min % 60:02d}) "
                    f"-- no se envia señal al Pi hoy (abriria y aplanaria de inmediato).\n{utc_now_str()}")
             send(msg)
             log.error(msg.replace("\n", " | "))
@@ -761,7 +763,7 @@ def run():
         now = ct_now()
         t = now.hour * 60 + now.minute
 
-        if t >= 14 * 60 + 30:
+        if t >= flatten_minutes_ct(now.date()):      # J4-b: 14:30 normal; antes en los cierres anticipados
             bars = fetch_intraday(CFG.spec.yf_ticker)
             exit_price = float(bars.iloc[-1]['close']) if bars is not None and len(bars) > 0 else entry_price
             result = "FLATTEN"
