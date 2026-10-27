@@ -318,6 +318,26 @@ def _check_attempt_reset(attempt_pnl_after: float, profit_target: float, mll_thr
     return None
 
 
+def _pase_guard_reason(paper_log: list, ack: str) -> Optional[str]:
+    """J4-c (26-oct-2026; NEEDS HUMAN REVIEW). Funcion PURA. En modo real, si el intento MAS ALTO del historial ya cruzo PROFIT_TARGET (el Combine de
+    Cerebro 1 se paso), el scheduler NO debe seguir mandando señales de MES: la cuenta se cierra al pasar y la cuenta fijada del Pi deja de existir. Antes
+    el scheduler solo incrementaba la etiqueta `intento` y seguia enviando (el Pi fallaba despues con 'cuenta no esta entre las activas').
+    Devuelve None si se puede enviar; si no, el texto del bloqueo. `ack` = GLITCH_ACK_PASE_INTENTO: el numero de intento que el operador ya reconocio
+    (p. ej. para seguir con otra Combine). La comparacion es contra P&L del intento (no verifica el criterio de consistencia ni los dias minimos de Topstep):
+    es una ALERTA CONSERVADORA que el humano confirma en TopstepX, no una declaracion de PASE."""
+    tags = [e.get("intento") for e in paper_log if e.get("intento") is not None]
+    if not tags:
+        return None
+    latest = max(tags)
+    pnl = _attempt_pnl(paper_log, latest)
+    if _check_attempt_reset(pnl, PROFIT_TARGET, _attempt_trailing_floor(paper_log, latest)) != "PASE":
+        return None
+    if str(ack).strip() == str(latest):
+        return None
+    return (f"el intento #{latest} acumula ${pnl:,.2f} >= meta de ${PROFIT_TARGET:,.0f}: posible PASE del Combine. No se envian mas señales de MES hasta que lo "
+            f"confirmes en TopstepX y reconozcas el intento con GLITCH_ACK_PASE_INTENTO={latest} (o detengas este servicio).")
+
+
 def _build_pending_record(side: int, direction_str: str, entry_price: float, tp_price: float,
                            sl_price: float, ticker: str, today_str: str, intento: int,
                            nc: int, sl_ticks: int, tp_ticks: int, product_key: str, dry_run: bool) -> dict:
@@ -630,6 +650,12 @@ def run():
     #         mercado real de ProjectX en el momento en que el Pi coloca la
     #         orden (ver pi_executor.py::_reference_price).
     if not DRY_RUN:
+        _pase_why = _pase_guard_reason(paper_log, os.getenv("GLITCH_ACK_PASE_INTENTO", ""))      # J4-c
+        if _pase_why:
+            msg = f"{PREFIX}\nSTATUS: PASE DETECTADO\n{_pase_why}\n{utc_now_str()}"
+            send(msg)
+            log.error(msg.replace("\n", " | "))
+            return
         # Misma hora de entrada que el paper (ver ENTRY_GATE_MINUTES): se espera ANTES de escribir la señal.
         _wait_for_entry_gate()
         _now = ct_now()
