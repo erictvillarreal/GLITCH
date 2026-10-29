@@ -147,6 +147,7 @@ from execution.gist_store import save_state as _gist_save_state
 from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, slippage_ticks
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES
+from strategies.sizing_pure import XFA_START_BALANCE_USD, parse_xfa_size_rule, xfa_nc_for_balance
 
 CT = ZoneInfo("America/Chicago")
 log = setup_ct_logging("pi_executor")
@@ -1150,6 +1151,40 @@ def _apply_mll_guard(client, account_id, signal: dict):
     return adj, why
 
 
+# Regla de tamaño de la XFA (28-oct-2026; NEEDS HUMAN REVIEW). APAGADA por defecto. GLITCH_PI_XFA_SIZE_RULE='hi:U:lo' (p. ej. '5:1500:1'): opera `hi` micros mientras el saldo de la XFA
+# (balance de la API − GLITCH_PI_XFA_START_BALANCE_USD, 50000 por defecto) sea < U dolares y `lo` despues (ver strategies/sizing_pure.py y optimo/resultados_OPT_XFA_ROBUSTEZ.md).
+# Solo MGC. Se aplica DESPUES de validar la señal (la validacion exige nc <= CFG.nc, que es 3) y ANTES de la guardia de MLL y del tope local GLITCH_PI_NC_MAX, que siguen mandando.
+# Sin balance de la API o con la regla mal formada se conserva el tamaño de la señal (no se bloquea ni se adivina). NO combinar con GLITCH_PI_MLL_GUARD=si cuando el bracket es 728:
+# la guardia limita los contratos a los que caben con su stop DENTRO del colchon (728 ticks por micro > $2,000 / 3) y reduciria o bloquearia la entrada.
+try:
+    XFA_SIZE_RULE = parse_xfa_size_rule(os.getenv("GLITCH_PI_XFA_SIZE_RULE"))
+except ValueError as _e:
+    log.error(f"GLITCH_PI_XFA_SIZE_RULE invalida ({_e}) -- la regla queda APAGADA; se usa el tamaño de la señal.")
+    XFA_SIZE_RULE = None
+try:
+    XFA_START_BALANCE = float(os.getenv("GLITCH_PI_XFA_START_BALANCE_USD", "").strip() or XFA_START_BALANCE_USD)
+except ValueError:
+    log.error("GLITCH_PI_XFA_START_BALANCE_USD no es un numero -- se usa 50000.")
+    XFA_START_BALANCE = XFA_START_BALANCE_USD
+
+
+def _apply_xfa_size_rule(client, account_id, signal: dict) -> dict:
+    """Devuelve la señal con nc segun la regla de tamaño de la XFA, o intacta si la regla esta apagada, la señal es de ensayo, el producto no es MGC o falta el balance."""
+    if XFA_SIZE_RULE is None or _is_test_signal(signal) or CFG.spec.product_code != "MGC":
+        return signal
+    balance = _account_balance(client, account_id)
+    if balance is None:
+        log.warning("regla de tamaño XFA: sin balance de la API -- se conserva el tamaño de la señal.")
+        return signal
+    hi, u, lo = XFA_SIZE_RULE
+    nc = xfa_nc_for_balance(balance, XFA_START_BALANCE, hi, u, lo)
+    log.info(f"regla de tamaño XFA {hi}:{u:g}:{lo}: saldo ${balance - XFA_START_BALANCE:,.2f} -> {nc} micros (señal: {signal['nc']})")
+    if nc == signal["nc"]:
+        return signal
+    adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc
+    return adj
+
+
 def _apply_nc_cap(signal: dict) -> dict:
     """Devuelve la señal con nc = min(nc, tope). Se aplica ANTES de operar, asi TODO lo que sigue (ordenes, confirmacion
     del fill, P&L, historial, estado del Pi) usa los contratos realmente operados. Conserva el original en nc_signal."""
@@ -1268,6 +1303,7 @@ def run_once():
             )
             return
 
+        signal = _apply_nc_cap(_apply_xfa_size_rule(client, account_id, signal))   # regla de tamaño XFA (apagada por defecto); el tope local sigue mandando
         signal, _mll_why = _apply_mll_guard(client, account_id, signal)       # J4-a (apagada por defecto)
         if signal is None:
             _notify_blocked_once_per_day(f"Guardia de colchon del MLL: NO se opera hoy -- {_mll_why}. Se descarta la señal del dia.")

@@ -51,6 +51,7 @@ producto elegido y su horario RTH real).
 """
 import os
 import sys
+import dataclasses
 import logging
 import time
 from datetime import datetime, date
@@ -79,12 +80,16 @@ require_env(
 
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index
+from strategies.sizing_pure import MODES as _NC_MODES, nc_for_day, combine_need_usd
 from execution.contracts import get_front_month, check_expiry_alerts, have_key
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log
 from execution.gist_store import load_state as _gist_load_state, save_state as _gist_save_state
 from core.prop_firm import TOPSTEP_50K
 
 CT = ZoneInfo("America/Chicago")
+# PROPUESTA (28-oct-2026; NEEDS HUMAN REVIEW): sizing diario del Combine. "fixed" (default) = comportamiento actual, CFG.nc todos los dias.
+# "finish_line" = se achica solo cuando un TP ya cubre el faltante a la meta, con la regla de consistencia de Topstep (ver strategies/sizing_pure.py).
+ADAPTIVE_NC_MODE = os.getenv("GLITCH_ADAPTIVE_NC", "fixed").strip().lower()
 # Logging con timestamp SIEMPRE en America/Chicago -- fix del
 # 07-sep-2026, ver execution/ct_logging.py para el por que (el patron
 # anterior, format="%(asctime)s CT" via basicConfig, dependia
@@ -275,6 +280,15 @@ def _attempt_peak(paper_log: list, intento: int) -> float:
         if running > peak:
             peak = running
     return peak
+
+
+def _attempt_best_day(paper_log: list, intento: int) -> float:
+    """Mejor dia (P&L diario agregado por fecha) dentro de un intento; 0 si no hay dias ganadores. Es el insumo de la regla de consistencia de Topstep
+    (mejor dia <= 55 % de la meta; si no, la meta sube a mejor_dia / 0.55)."""
+    by_day: dict = {}
+    for e in _attempt_entries(paper_log, intento):
+        by_day[e.get("date")] = by_day.get(e.get("date"), 0.0) + e.get("pnl", 0)
+    return max(max(by_day.values(), default=0.0), 0.0)
 
 
 def _attempt_trailing_floor(paper_log: list, intento: int) -> float:
@@ -585,6 +599,20 @@ def run():
         intento_actual = _current_intento(paper_log)
         attempt_pnl_before = _attempt_pnl(paper_log, intento_actual)
 
+    # ── 0b. Sizing de HOY (PROPUESTA, NEEDS HUMAN REVIEW). Funcion pura y determinista; solo REDUCE respecto a CFG.nc. Con el modo "fixed" (default)
+    #        cfg_today == CFG y nada cambia. `attempt_pnl_before` sale del log (puede diferir del neto de TopstepX por comisiones: el error hace que se
+    #        opere un poco mas o menos, nunca por encima de CFG.nc). La meta efectiva incluye la consistencia: max(meta, mejor_dia/0.55). ──
+    if ADAPTIVE_NC_MODE not in _NC_MODES:
+        log.error(f"GLITCH_ADAPTIVE_NC={ADAPTIVE_NC_MODE!r} invalido ({_NC_MODES}) -- se usa 'fixed'")
+        _mode = "fixed"
+    else:
+        _mode = ADAPTIVE_NC_MODE
+    _need = combine_need_usd(attempt_pnl_before, _attempt_best_day(paper_log, intento_actual), PROFIT_TARGET)
+    nc_today = nc_for_day(_mode, CFG.nc, need_usd=_need, tp_ticks=CFG.tp_ticks, tick_value_usd=CFG.spec.tick_value_usd,
+                          commission_roundturn=CFG.spec.commission_roundturn)
+    cfg_today = dataclasses.replace(CFG, nc=nc_today)
+    log.info(f"Sizing hoy: modo={_mode} nc={nc_today} (config {CFG.nc}), faltante efectivo=${_need:,.2f}")
+
     # ── 1. Resuelve el contrato en uso (para logging/alertas de vencimiento --
     #        ver docstring de arriba: el feed de precio en vivo usa el simbolo
     #        continuo de yfinance, no requiere el ticker exacto de Massive) ──
@@ -689,11 +717,11 @@ def run():
         save_order_signal({
             "date": today_str, "side": side, "direction": direction_str,
             "ticker": CFG.spec.yf_ticker, "product_code": CFG.spec.product_code,
-            "nc": CFG.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
+            "nc": cfg_today.nc, "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
             "product": PRODUCT_KEY, "intento": intento_actual, "dry_run": False,
         })
         real_msg = (f"{PREFIX}\n[SEÑAL ENVIADA AL PI]\n"
-                    f"Direction: {direction_str}\nContracts: {CFG.nc}\n"
+                    f"Direction: {direction_str}\nContracts: {cfg_today.nc}\n"
                     f"SL/TP: {CFG.sl_ticks}/{CFG.tp_ticks} ticks\n"
                     f"Intento #{intento_actual}\n"
                     f"Ejecucion real delegada a pi_executor.py -- este scheduler no coloca la "
@@ -756,10 +784,10 @@ def run():
 
     entry_price = float(entry_bars.iloc[-1]['close'])
     tp_price, sl_price = CFG.barrier_prices(entry_price, side)
-    tp_usd, sl_usd = CFG.dollar_tp_sl()
+    tp_usd, sl_usd = cfg_today.dollar_tp_sl()
 
     log.info(f"Entrada: {direction_str} @ {entry_price:.4f}")
-    log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={CFG.nc}")
+    log.info(f"TP={tp_price:.4f} (+${tp_usd:.0f})  SL={sl_price:.4f} (-${sl_usd:.0f})  NC={cfg_today.nc}")
 
     # Estado durable ANTES de la notificacion -- si el proceso muere en
     # cualquier punto desde aqui hasta el cierre normal, la PROXIMA
@@ -771,7 +799,7 @@ def run():
     # necesita el mismo simbolo que el monitoreo en vivo habria usado.
     save_pending(_build_pending_record(
         side, direction_str, entry_price, tp_price, sl_price, CFG.spec.yf_ticker,
-        today_str, intento_actual, CFG.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
+        today_str, intento_actual, cfg_today.nc, CFG.sl_ticks, CFG.tp_ticks, PRODUCT_KEY, DRY_RUN,
     ))
 
     pct_target_before = attempt_pnl_before / PROFIT_TARGET * 100
@@ -780,7 +808,7 @@ def run():
            f"Symbol: {CFG.spec.label} ({ticker})\n"
            f"Direction: {direction_str}\n"
            f"Entry: {entry_price:,.4f}\n"
-           f"Contracts: {CFG.nc}\n"
+           f"Contracts: {cfg_today.nc}\n"
            f"TP: {tp_price:,.4f}\n"
            f"SL: {sl_price:,.4f}\n"
            f"Progreso a Target: ${attempt_pnl_before:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_before:.1f}%)\n"
@@ -811,7 +839,7 @@ def run():
             continue
 
         price = float(bars.iloc[-1]['close'])
-        unreal = (price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
+        unreal = (price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * cfg_today.nc
 
         if side == 1:
             if price <= sl_price:
@@ -829,7 +857,7 @@ def run():
         time.sleep(POLL_INTERVAL)
 
     # ── 5. PnL y notificacion ──────────────────────────────────────────────
-    pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * CFG.nc
+    pnl = (exit_price - entry_price) * side * CFG.spec.tick_value_usd / CFG.spec.tick_size * cfg_today.nc
     log.info(f"EXIT {result} @ {exit_price:.4f} | PnL={pnl:+.2f}")
 
     attempt_pnl_after = attempt_pnl_before + pnl
@@ -838,7 +866,7 @@ def run():
            f"[CLOSE] [{result}]\n"
            f"Symbol: {CFG.spec.label} ({ticker})\n"
            f"PnL: ${pnl:+,.2f}\n"
-           f"Contracts: {CFG.nc}\n"
+           f"Contracts: {cfg_today.nc}\n"
            f"Progreso a Target: ${attempt_pnl_after:,.2f} / ${PROFIT_TARGET:,.0f} ({pct_target_acumulado:.1f}%)\n"
            f"Dia de paper: {progress['days_elapsed']}\n"
            f"Pass Rate: {pass_rate_line}\n"
@@ -850,7 +878,7 @@ def run():
         "direction": direction_str, "entry": entry_price,
         "exit": exit_price, "result": result,
         "pnl": round(pnl, 2), "sl_ticks": CFG.sl_ticks, "tp_ticks": CFG.tp_ticks,
-        "nc": CFG.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
+        "nc": cfg_today.nc, "dry_run": DRY_RUN, "product": PRODUCT_KEY,
         "intento": intento_actual,
     })
     save_log(paper_log)

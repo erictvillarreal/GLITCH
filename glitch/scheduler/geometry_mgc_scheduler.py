@@ -73,6 +73,7 @@ verano -- verificar DST vigente al momento de configurar el cron real):
 """
 import os
 import sys
+import dataclasses
 import logging
 import time
 import datetime as dt
@@ -101,6 +102,7 @@ import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el 
 
 from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
+from strategies.sizing_pure import xfa_bracket_from_env  # noqa: E402
 from execution.contracts import get_front_month, check_expiry_alerts, have_key  # noqa: E402
 from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
@@ -146,6 +148,13 @@ if not DRY_RUN and REAL_PRODUCT_KEY not in CANDIDATES:
     print(f"FATAL: GLITCH_PRODUCT={REAL_PRODUCT_KEY!r} no esta en CANDIDATES ({sorted(CANDIDATES)}).", file=sys.stderr)
     sys.exit(1)
 REAL_CFG = CANDIDATES[REAL_PRODUCT_KEY] if REAL_PRODUCT_KEY in CANDIDATES else CFG
+# PROPUESTA (28-oct-2026; NEEDS HUMAN REVIEW): bracket de la XFA real. GLITCH_XFA_BRACKET_TICKS=728 duplica SL = TP (364 -> 728 ticks de MGC); solo 364 y 728 estan
+# evaluados (strategies/sizing_pure.py::XFA_BRACKETS). Sin la variable (o con un valor no evaluado) la señal conserva el bracket de hoy. Topstep Support confirmo que un stop
+# mayor que el MLL esta permitido: con 728 el MLL (tiempo real, P&L no realizado) liquida antes de que el stop se alcance. Solo aplica a la cuenta MGC real.
+if REAL_PRODUCT_KEY.startswith("MGC"):
+    _XFA_BRACKET = xfa_bracket_from_env(os.getenv("GLITCH_XFA_BRACKET_TICKS"), REAL_CFG.sl_ticks)
+    if _XFA_BRACKET != REAL_CFG.sl_ticks:
+        REAL_CFG = dataclasses.replace(REAL_CFG, sl_ticks=_XFA_BRACKET, tp_ticks=_XFA_BRACKET)
 ORDER_FILE = f"orden_pendiente_{REAL_PRODUCT_KEY.lower()}.json"
 REAL_ACCOUNT_SIZE = {"MGC": "50K", "MGC_XFA_100K": "100K", "MGC_XFA_150K": "150K"}.get(REAL_PRODUCT_KEY, "50K")
 
