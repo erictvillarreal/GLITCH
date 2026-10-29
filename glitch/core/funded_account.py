@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from enum import Enum
 
+import numpy as np
+
 
 class XFAStatus(Enum):
     ACTIVE          = "active"
@@ -110,6 +112,16 @@ class XFAAccount:
     """
     spec: XFASpec = field(default_factory=lambda: XFA_50K)
 
+    # SIN RESOLVER contra fuente primaria completa (01-sep-2026): ¿el MLL
+    # se fija en $0 SOLO en el primer payout, o EN CADA payout? El codigo
+    # anterior a este cambio asumia "cada payout" de forma hardcodeada,
+    # sin exponer la alternativa -- eso NO es lo mismo que "confirmado".
+    # "every_payout" preserva el comportamiento anterior (default, para no
+    # romper nada que ya dependiera de el); "first_payout_only" es la
+    # alternativa sin probar. NUNCA reportar un numero de negocio usando
+    # solo uno de los dos sin el otro al lado como sensibilidad.
+    mll_reset_policy: str = "every_payout"  # "every_payout" | "first_payout_only"
+
     balance: float           = field(init=False)
     mll_floor: float         = field(init=False)
     status: XFAStatus        = field(init=False)
@@ -120,6 +132,7 @@ class XFAAccount:
     lifetime_payout_usd: float = field(default=0.0, init=False)
     days_since_last_trade: int = field(default=0, init=False)
     day_log: List[DayRecord] = field(default_factory=list, init=False)
+    _has_had_first_payout: bool = field(default=False, init=False)
 
     def __post_init__(self):
         self.balance   = 0.0
@@ -181,9 +194,16 @@ class XFAAccount:
         trader_take = gross * self.spec.profit_split_trader
 
         self.balance -= gross
-        # CONFIRMADO via help.topstep.com: despues del primer payout el MLL
-        # se fija en $0 permanentemente. Ya no hace trailing.
-        self.mll_floor = 0.0
+        # SIN RESOLVER (ver mll_reset_policy arriba): la cita original de
+        # help.topstep.com decia "el MLL se fija en $0 tras el primer
+        # payout" -- pero nunca se verifico si eso aplica SOLO la primera
+        # vez o CADA vez. "every_payout" fuerza el floor a 0 siempre (el
+        # comportamiento que este codigo tenia hardcodeado antes de esto);
+        # "first_payout_only" solo lo fuerza la primera vez, dejando que
+        # el trailing normal de end_of_day() gobierne despues.
+        if self.mll_reset_policy == "every_payout" or not self._has_had_first_payout:
+            self.mll_floor = 0.0
+        self._has_had_first_payout = True
         self.winning_days_count = 0
         self.lifetime_payouts += 1
         self.lifetime_payout_usd += trader_take
@@ -268,3 +288,310 @@ def simulate_xfa_paths(dist, spec: XFASpec = XFA_50K, n_paths: int = 5000,
         "avg_days_to_eligible": float(np.mean(days_to_eligible)) if days_to_eligible else None,
         "payout": payouts_usd,
     }
+
+
+def simulate_xfa_lifetime(dist, spec: XFASpec = XFA_50K, mll_reset_policy: str = "every_payout",
+                           n_paths: int = 5000, max_days: int = 756, seed: int = 7) -> dict:
+    """
+    Simula la VIDA COMPLETA de N cuentas XFA -- a diferencia de
+    simulate_xfa_paths() (que se detiene en el primer payout o blow),
+    esto encadena payouts sucesivos: la cuenta sigue operando despues de
+    cada payout (balance reducido, NO reseteado a cero) hasta que truena
+    (BLOWN_MLL) o se acaba max_days sin haber truenado (right-censored --
+    ver prob_still_alive_at_horizon, un promedio que ignora esto
+    SUBESTIMA el verdadero valor esperado).
+
+    max_days=756 (~3 años habiles) por default -- horizonte largo a
+    proposito, no un numero de negocio en si.
+
+    mll_reset_policy: "every_payout" o "first_payout_only" -- ver
+    XFAAccount.mll_reset_policy. SIEMPRE correr ambos y reportarlos
+    lado a lado, nunca uno solo como respuesta final (pregunta sin
+    resolver contra fuente primaria completa -- ver docstring del modulo
+    y GLITCH_RESEARCH_LOG.md).
+
+    Vectorizado sobre el eje de paths (04-sep-2026): la version anterior
+    era un loop Python escalar path-por-path/dia-por-dia -- su costo
+    real depende de cuantos dias corre cada path antes de tronar
+    (`break` temprano), y ese costo varia ~75x entre combinaciones de
+    bajo blow-rate (WR cerca de WR_natural, ~12ms/corrida) y alto
+    blow-rate cercano a 0 -- osea alta supervivencia, RR/WR altos, que
+    corren el horizonte casi completo (~900ms/corrida). Un benchmark de
+    un solo punto no representa ese rango. Validado bit-a-bit contra la
+    version escalar anterior en 32 casos (deterministas y estocasticos,
+    las 3 cuentas, ambas politicas, WR/RR bajos y altos) antes de
+    reemplazarla -- ver GLITCH_RESEARCH_LOG.md.
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    pnls = dist.sample(n_paths * max_days, rng).reshape(n_paths, max_days)
+
+    mll_distance = spec.mll_distance
+    floor_lock_level = spec.floor_lock_level
+    min_winning_day_usd = spec.min_winning_day_usd
+    winning_days_required = spec.winning_days_required
+    payout_pct = spec.payout_pct_of_balance
+    payout_cap = spec.payout_cap_usd
+    split = spec.profit_split_trader
+
+    balance = np.zeros(n_paths)
+    mll_floor = np.full(n_paths, spec.floor_start)
+    alive = np.ones(n_paths, dtype=bool)
+    winning_days_count = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payouts = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payout_usd = np.zeros(n_paths)
+    has_had_first_payout = np.zeros(n_paths, dtype=bool)
+    day_number = np.zeros(n_paths, dtype=np.int64)
+
+    for day in range(max_days):
+        active_at_start = alive
+        day_pnl = pnls[:, day]
+
+        balance = np.where(active_at_start, balance + day_pnl, balance)
+        day_number = np.where(active_at_start, day + 1, day_number)
+
+        new_floor_candidate = balance - mll_distance
+        floor_should_update = active_at_start & (new_floor_candidate > mll_floor)
+        mll_floor = np.where(floor_should_update, np.minimum(new_floor_candidate, floor_lock_level), mll_floor)
+
+        newly_blown = active_at_start & (balance <= mll_floor)
+        alive = alive & ~newly_blown
+
+        still_active_today = active_at_start & ~newly_blown
+        counted = still_active_today & (day_pnl >= min_winning_day_usd)
+        winning_days_count = np.where(counted, winning_days_count + 1, winning_days_count)
+
+        eligible = still_active_today & (winning_days_count >= winning_days_required)
+        if eligible.any():
+            gross = np.minimum(balance[eligible] * payout_pct, payout_cap)
+            trader_take = gross * split
+            balance = balance.copy()
+            balance[eligible] -= gross
+            if mll_reset_policy == "every_payout":
+                mll_floor = mll_floor.copy()
+                mll_floor[eligible] = 0.0
+            else:
+                reset_now = eligible & (~has_had_first_payout)
+                if reset_now.any():
+                    mll_floor = mll_floor.copy()
+                    mll_floor[reset_now] = 0.0
+            has_had_first_payout = has_had_first_payout.copy()
+            has_had_first_payout[eligible] = True
+            winning_days_count = winning_days_count.copy()
+            winning_days_count[eligible] = 0
+            lifetime_payouts = lifetime_payouts.copy()
+            lifetime_payouts[eligible] += 1
+            lifetime_payout_usd = lifetime_payout_usd.copy()
+            lifetime_payout_usd[eligible] += trader_take
+
+    n_never_eligible = int((lifetime_payouts == 0).sum())
+    n_still_alive_at_horizon = int(alive.sum())
+    payouts_arr = lifetime_payouts.astype(float)
+    days_arr = day_number.astype(float)
+    usd_arr = lifetime_payout_usd
+
+    return {
+        "n_paths": n_paths,
+        "mll_reset_policy": mll_reset_policy,
+        "max_days_horizon": max_days,
+        "prob_still_alive_at_horizon": n_still_alive_at_horizon / n_paths,
+        "prob_never_reached_first_payout": n_never_eligible / n_paths,
+        "avg_lifetime_payouts": float(payouts_arr.mean()),
+        "median_lifetime_payouts": float(np.median(payouts_arr)),
+        "payouts_p10_p90": (float(np.percentile(payouts_arr, 10)), float(np.percentile(payouts_arr, 90))),
+        "avg_lifetime_days": float(days_arr.mean()),
+        "median_lifetime_days": float(np.median(days_arr)),
+        "avg_lifetime_payout_usd": float(usd_arr.mean()),
+        "median_lifetime_payout_usd": float(np.median(usd_arr)),
+        "payout_usd_p10_p90": (float(np.percentile(usd_arr, 10)), float(np.percentile(usd_arr, 90))),
+    }
+
+
+# ── XFA Scaling Plan (04-sep-2026) ──────────────────────────────────────────
+# Tabla confirmada por el usuario contra la imagen oficial de
+# help.topstep.com ("What is the Scaling Plan?"). La transcripcion cruda
+# tenia una ambiguedad en las filas de 100K/150K (una fila generica
+# "$3,000-$4,500" con un valor de 100K que choca con una fila aparte
+# "> $3,000 (100K) -> 10"). Se resuelve aqui usando el patron que el
+# propio usuario senalo como no-coincidencia: el techo de contratos de
+# CADA cuenta se alcanza exactamente en su propio mll_distance (50K: 5
+# lotes en $2,000; 100K: 10 lotes en $3,000; 150K: 15 lotes en $4,500).
+# Bins/lots por cuenta, indexados por mll_distance (clave inequivoca ya
+# usada en todo el repo para identificar tamano de cuenta XFA):
+#   bins[i]  = umbral de balance donde empieza el siguiente tier
+#   lots[i]  = lotes mini-equivalentes permitidos en ese tier
+# np.searchsorted(bins, balance, side="right") da el indice correcto en
+# `lots` para cualquier balance (incluye balances negativos -> tier 0).
+XFA_SCALING_PLAN = {
+    2_000.0: {  # 50K
+        "bins": np.array([1_500.0, 2_000.0]),
+        "lots": np.array([2, 3, 5]),
+    },
+    3_000.0: {  # 100K
+        "bins": np.array([1_500.0, 2_000.0, 3_000.0]),
+        "lots": np.array([3, 4, 5, 10]),
+    },
+    4_500.0: {  # 150K
+        "bins": np.array([1_500.0, 2_000.0, 3_000.0, 4_500.0]),
+        "lots": np.array([3, 4, 5, 10, 15]),
+    },
+}
+
+# Ratio lote-mini : contrato-micro. Default 10:1 (la gran mayoria de
+# micros, incluye MES/MGC/M2K/MCL/M6E). Excepciones documentadas en el
+# mismo articulo de Topstep -- ninguno de los 7 productos en
+# strategies/geometry_pure.py.SPECS cae en estas excepciones hoy, se
+# deja lista para cuando se agregue SIL/MBT/MET.
+RATIO_MINI_TO_MICRO = {"SIL": 5, "MBT": 1, "MET": 1}
+
+
+def dynamic_nc_for_balance(balance: "np.ndarray", mll_distance: float, product_code: str = "") -> "np.ndarray":
+    """
+    Contratos MICRO maximos permitidos, vectorizado sobre `balance`
+    (shape (n_paths,) o escalar), segun el Scaling Plan real de la
+    cuenta identificada por `mll_distance` (2000/3000/4500).
+    """
+    plan = XFA_SCALING_PLAN[mll_distance]
+    tier_idx = np.searchsorted(plan["bins"], balance, side="right")
+    lots = plan["lots"][tier_idx]
+    ratio = RATIO_MINI_TO_MICRO.get(product_code, 10)
+    return lots * ratio
+
+
+def simulate_xfa_lifetime_dynamic_nc(wr: float, sl_usd_per_contract: float, tp_usd_per_contract: float,
+                                      commission_roundturn: float, spec: XFASpec = XFA_50K,
+                                      product_code: str = "", nc_designed: float | None = None,
+                                      mll_reset_policy: str = "every_payout",
+                                      n_paths: int = 5000, max_days: int = 756, seed: int = 7,
+                                      return_raw: bool = False) -> dict:
+    """
+    Misma mecanica que simulate_xfa_lifetime(), pero el numero de
+    contratos (`nc`) se recalcula CADA DIA para CADA path segun el
+    balance de inicio de ese dia, siguiendo el Scaling Plan real de la
+    XFA (dynamic_nc_for_balance()) -- no un `nc` fijo elegido una sola
+    vez por derive_nc(). A diferencia de la version de nc fijo, aqui la
+    entrada no es un `dist` con avg_win_usd/avg_loss_usd ya horneados
+    con un nc especifico -- es la economia POR CONTRATO
+    (sl_usd_per_contract/tp_usd_per_contract/commission_roundturn), para
+    que el $ del dia escale con el nc real de ese dia.
+
+    nc_designed: el `nc` que el diseno de riesgo (derive_nc(), k
+    consecutivo) eligio para este candidato. Si se da, `nc_today =
+    min(nc_designed, nc_permitido_por_scaling_plan)` -- el Scaling Plan
+    es un TECHO LEGAL adicional, no una orden de operar el maximo
+    posible. Omitirlo (None) simula "siempre el maximo legal", que es
+    una estrategia DISTINTA (mucho mas grande/riesgosa), no una
+    validacion del candidato original -- error cometido y corregido en
+    esta misma sesion, ver GLITCH_RESEARCH_LOG.md 04-sep-2026: al
+    validar los top-5 candidatos [P] sin este cap, el resultado
+    reflejaba una posicion ~5x mas grande que la diseñada, no el
+    candidato real.
+
+    Vectorizado sobre el eje de paths igual que simulate_xfa_lifetime()
+    -- un solo loop Python de `max_days` iteraciones; dynamic_nc_for_balance()
+    usa np.searchsorted sobre el array de balance completo en cada
+    iteracion, NO un loop escalar por path (ver GLITCH_RESEARCH_LOG.md,
+    incidente de rendimiento del 04-sep-2026 -- mismo error que ya se
+    diagnostico y arreglo para nc fijo, no repetirlo aqui).
+    """
+    rng = np.random.default_rng(seed)
+    is_win = rng.random((n_paths, max_days)) < wr
+
+    mll_distance = spec.mll_distance
+    floor_lock_level = spec.floor_lock_level
+    min_winning_day_usd = spec.min_winning_day_usd
+    winning_days_required = spec.winning_days_required
+    payout_pct = spec.payout_pct_of_balance
+    payout_cap = spec.payout_cap_usd
+    split = spec.profit_split_trader
+
+    balance = np.zeros(n_paths)
+    mll_floor = np.full(n_paths, spec.floor_start)
+    alive = np.ones(n_paths, dtype=bool)
+    winning_days_count = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payouts = np.zeros(n_paths, dtype=np.int64)
+    lifetime_payout_usd = np.zeros(n_paths)
+    has_had_first_payout = np.zeros(n_paths, dtype=bool)
+    day_number = np.zeros(n_paths, dtype=np.int64)
+
+    for day in range(max_days):
+        active_at_start = alive
+
+        # nc de HOY = Scaling Plan aplicado al balance de AYER (inicio
+        # de sesion) -- "max contracts do not increase mid-session" --
+        # acotado por nc_designed si se dio (el Scaling Plan es un
+        # techo legal ADICIONAL, no una orden de operar el maximo).
+        nc_today = dynamic_nc_for_balance(balance, mll_distance, product_code)
+        if nc_designed is not None:
+            nc_today = np.minimum(nc_today, nc_designed)
+        net_win = nc_today * (tp_usd_per_contract - commission_roundturn)
+        net_loss = -nc_today * (sl_usd_per_contract + commission_roundturn)
+        day_pnl = np.where(is_win[:, day], net_win, net_loss)
+
+        balance = np.where(active_at_start, balance + day_pnl, balance)
+        day_number = np.where(active_at_start, day + 1, day_number)
+
+        new_floor_candidate = balance - mll_distance
+        floor_should_update = active_at_start & (new_floor_candidate > mll_floor)
+        mll_floor = np.where(floor_should_update, np.minimum(new_floor_candidate, floor_lock_level), mll_floor)
+
+        newly_blown = active_at_start & (balance <= mll_floor)
+        alive = alive & ~newly_blown
+
+        still_active_today = active_at_start & ~newly_blown
+        counted = still_active_today & (day_pnl >= min_winning_day_usd)
+        winning_days_count = np.where(counted, winning_days_count + 1, winning_days_count)
+
+        eligible = still_active_today & (winning_days_count >= winning_days_required)
+        if eligible.any():
+            gross = np.minimum(balance[eligible] * payout_pct, payout_cap)
+            trader_take = gross * split
+            balance = balance.copy()
+            balance[eligible] -= gross
+            if mll_reset_policy == "every_payout":
+                mll_floor = mll_floor.copy()
+                mll_floor[eligible] = 0.0
+            else:
+                reset_now = eligible & (~has_had_first_payout)
+                if reset_now.any():
+                    mll_floor = mll_floor.copy()
+                    mll_floor[reset_now] = 0.0
+            has_had_first_payout = has_had_first_payout.copy()
+            has_had_first_payout[eligible] = True
+            winning_days_count = winning_days_count.copy()
+            winning_days_count[eligible] = 0
+            lifetime_payouts = lifetime_payouts.copy()
+            lifetime_payouts[eligible] += 1
+            lifetime_payout_usd = lifetime_payout_usd.copy()
+            lifetime_payout_usd[eligible] += trader_take
+
+    n_never_eligible = int((lifetime_payouts == 0).sum())
+    n_still_alive_at_horizon = int(alive.sum())
+    payouts_arr = lifetime_payouts.astype(float)
+    days_arr = day_number.astype(float)
+    usd_arr = lifetime_payout_usd
+
+    result = {
+        "n_paths": n_paths,
+        "mll_reset_policy": mll_reset_policy,
+        "max_days_horizon": max_days,
+        "prob_still_alive_at_horizon": n_still_alive_at_horizon / n_paths,
+        "prob_never_reached_first_payout": n_never_eligible / n_paths,
+        "avg_lifetime_payouts": float(payouts_arr.mean()),
+        "median_lifetime_payouts": float(np.median(payouts_arr)),
+        "payouts_p10_p90": (float(np.percentile(payouts_arr, 10)), float(np.percentile(payouts_arr, 90))),
+        "avg_lifetime_days": float(days_arr.mean()),
+        "median_lifetime_days": float(np.median(days_arr)),
+        "avg_lifetime_payout_usd": float(usd_arr.mean()),
+        "median_lifetime_payout_usd": float(np.median(usd_arr)),
+        "payout_usd_p10_p90": (float(np.percentile(usd_arr, 10)), float(np.percentile(usd_arr, 90))),
+    }
+    if return_raw:
+        # Arrays por path -- para combinar con OTRAS corridas (seeds
+        # distintos = independientes) y estudiar sumas/joint-probabilities
+        # sobre multiples cuentas simultaneas (Camino C). No usado por el
+        # camino normal de un candidato individual.
+        result["raw_lifetime_payout_usd"] = usd_arr
+        result["raw_lifetime_payouts"] = payouts_arr
+        result["raw_lifetime_days"] = days_arr
+    return result

@@ -53,7 +53,10 @@ class TestResolveContract:
     def test_prefers_active_over_nearest_expiry(self, mgc_cfg):
         assert pe.resolve_contract_id(FakeClient(GOLD), "MGC")["name"] == "MGCZ6"
 
-    def test_falls_back_to_nearest_with_warning_when_no_flag(self, mgc_cfg, caplog):
+    def test_falls_back_to_nearest_with_warning_when_no_flag(self, mgc_cfg, caplog, monkeypatch):
+        # J4-f (26-oct-2026): el "mas cercano" solo es correcto ANTES de la ventana de roll de MGCV6 (aviso de entrega 30-sep); despues manda la regla
+        # (ver tests/test_j4_roll_guard.py). Se fija el reloj para conservar el sentido original de esta prueba.
+        monkeypatch.setattr(pe, "ct_now", lambda: __import__("datetime").datetime(2026, 9, 1, 8, 0, tzinfo=pe.CT))
         flagless = [{k: v for k, v in c.items() if k != "activeContract"} for c in GOLD]
         with caplog.at_level("WARNING"):
             assert pe.resolve_contract_id(FakeClient(flagless), "MGC")["name"] == "MGCV6"

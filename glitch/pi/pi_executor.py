@@ -135,14 +135,19 @@ require_env(
 
 from brokers.projectx import OrderType, ProjectXClient, ProjectXCredentials, position_is_open, position_net
 from execution.ct_logging import setup_ct_logging
+from execution.mll_guard import cushion_usd, decide as _mll_decide
+from execution.roll_rules import apply_roll_rule
+from execution.session_calendar import flatten_minutes_ct
 from execution.gist_store import load_log as _gist_load_log
 from execution.gist_store import load_log_strict as _gist_load_log_strict
 from execution.gist_store import save_log_strict as _gist_save_log_strict
 from execution.gist_store import load_state as _gist_load_state
 from execution.gist_store import save_log as _gist_save_log
 from execution.gist_store import save_state as _gist_save_state
+from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, slippage_ticks
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES
+from strategies.sizing_pure import XFA_START_BALANCE_USD, parse_xfa_size_rule, xfa_nc_for_balance
 
 CT = ZoneInfo("America/Chicago")
 log = setup_ct_logging("pi_executor")
@@ -348,11 +353,18 @@ def resolve_contract_id(client: ProjectXClient, product_code: str) -> dict:
         raise RuntimeError(f"No se encontro contrato para product_code={product_code!r} en ProjectX.")
     active = [c for c in matches if c.get("activeContract") is True]
     pool = active or matches
+    if not active:
+        # J4-f (26-oct-2026; NEEDS HUMAN REVIEW): sin la marca `activeContract` el "mas cercano" es, para el oro, el contrato que ya paso su aviso de
+        # entrega (MGCV6 vence ~28-oct). Se aplica la MISMA regla de roll determinista que usan los schedulers (execution/contracts.py::ROLL_RULES); para
+        # productos sin regla (MES) no cambia nada. Si la regla vaciara la lista, apply_roll_rule devuelve la original.
+        by_exp = sorted(matches, key=lambda c: c.get("expirationDate", ""))
+        kept = {n for n, _ in apply_roll_rule(product_code, [(c.get("name", ""), c.get("expirationDate", "")) for c in by_exp], ct_now().date())}
+        pool = [c for c in by_exp if c.get("name", "") in kept] or matches
     pool.sort(key=lambda c: c.get("expirationDate", ""))
     chosen = pool[0]
     if not active:
-        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano "
-                    f"({chosen.get('name')}), que puede NO ser el front month por volumen.")
+        log.warning(f"resolve_contract_id({product_code}): ningun contrato trae activeContract=true -- se usa el vencimiento mas cercano que no "
+                    f"haya pasado su ventana de roll ({chosen.get('name')}), que puede NO ser el front month por volumen.")
     else:
         nearest = sorted(matches, key=lambda c: c.get("expirationDate", ""))[0]
         if nearest.get("id") != chosen.get("id"):
@@ -384,10 +396,8 @@ def _warn_if_contract_spec_differs(contract: dict) -> None:
         log.warning(f"_warn_if_contract_spec_differs: {e}")
 
 
-def _reference_price(client: ProjectXClient, contract_id) -> float:
-    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
-    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
-    y proteccion siempre juntas, sin ventana desnuda)."""
+def _reference_quote(client: ProjectXClient, contract_id) -> tuple:
+    """(precio, marca de tiempo de la barra o None). Igual que _reference_price pero conserva el `t` de la barra para medir su antiguedad (G1a)."""
     bars = client.get_recent_bars(contract_id, minutes_back=15, live=False)
     if not bars:
         raise RuntimeError(f"Sin barras de los ultimos 15 min en ProjectX para contract_id={contract_id!r} "
@@ -396,8 +406,15 @@ def _reference_price(client: ProjectXClient, contract_id) -> float:
     last = bars[-1]
     for k in ("close", "c", "last", "lastPrice"):
         if k in last and last[k] is not None:
-            return float(last[k])
+            return float(last[k]), (str(last["t"]) if last.get("t") is not None else None)
     raise RuntimeError(f"Barra de ProjectX sin campo de precio reconocible: {last!r}")
+
+
+def _reference_price(client: ProjectXClient, contract_id) -> float:
+    """Ultimo precio real de ProjectX (no yfinance) para calcular TP/SL
+    ANTES de colocar la orden de entrada -- ver diseño del modulo (entrada
+    y proteccion siempre juntas, sin ventana desnuda)."""
+    return _reference_quote(client, contract_id)[0]
 
 
 # ── Resolucion de OrderSide -- gateada, nunca adivinada ──────────────────
@@ -744,11 +761,20 @@ def place_bracket_order(client: ProjectXClient, account_id: int, contract_id,
 
 
 # ── 5. poll_position_until_closed ────────────────────────────────────────
+def _flatten_cutoff_minutes(now, flatten_hour: Optional[int] = None, flatten_minute: Optional[int] = None) -> int:
+    """Minuto CT (desde medianoche) a partir del cual se aplana HOY. J4-b (26-oct-2026; NEEDS HUMAN REVIEW): 14:30 en un dia normal, pero ANTES en los
+    cierres anticipados publicados por Topstep (26-nov, 27-nov, 24-dic; `execution/session_calendar.py`): ahi Topstep liquida las posiciones abiertas a
+    la hora publicada y el flatten fijo de las 14:30 llegaria despues, sin registro fiel del resultado. Si el llamador pasa hora Y minuto explicitos se usan tal cual."""
+    if flatten_hour is not None and flatten_minute is not None:
+        return flatten_hour * 60 + flatten_minute
+    return flatten_minutes_ct(now.date())
+
+
 def poll_position_until_closed(client: ProjectXClient, account_id: int, contract_id,
                                 tp_order_id, sl_order_id, tp_price: float, sl_price: float,
                                 poll_interval: int = POSITION_POLL_INTERVAL,
-                                flatten_hour: int = FLATTEN_HOUR,
-                                flatten_minute: int = FLATTEN_MINUTE) -> dict:
+                                flatten_hour: Optional[int] = None,
+                                flatten_minute: Optional[int] = None) -> dict:
     """
     Monitorea el bracket hasta que se resuelve: TP lleno (cancela SL), SL
     lleno (cancela TP), o cierre forzado de sesion (cancela ambos y
@@ -765,7 +791,7 @@ def poll_position_until_closed(client: ProjectXClient, account_id: int, contract
     polls = 0
     while True:
         now = ct_now()
-        if now.hour * 60 + now.minute >= flatten_hour * 60 + flatten_minute:
+        if now.hour * 60 + now.minute >= _flatten_cutoff_minutes(now, flatten_hour, flatten_minute):
             leftover = _cancel_orders_verified(client, account_id, [tp_order_id, sl_order_id])
             if leftover:
                 send(f"{PREFIX}\nSTATUS: ALERTA\nTras el cierre de sesion siguen ABIERTAS las ordenes {leftover} "
@@ -881,8 +907,11 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
 
     entry_price = state["entry_price"]
     entry_estimated = True
+    ref_price = state.get("ref_price", state["entry_price"])     # state["entry_price"] es la referencia pre-trade hasta que se confirma el fill
     rec = _lookup_order(client, account_id, state["entry_order_id"])
     fill = _extract_fill_price(rec) if rec else None
+    if fill is None:
+        fill = state.get("fill_price")
     if fill is not None:
         entry_price, entry_estimated = fill, False
 
@@ -907,6 +936,16 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
     for flag in ("flatten_failed", "position_forced_flat", "flat_unverified"):
         if outcome.get(flag):
             entry[flag] = True
+    if not entry_estimated:
+        slip = slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)
+        if slip is not None:
+            entry.update({"ref_price": ref_price, "fill_price": entry_price, "slip_ticks": slip})
+    if not outcome.get("exit_price_estimated", False) and outcome["result"] in ("TP", "SL"):
+        xs = exit_slip_ticks(signal["side"], outcome["result"], state.get("tp_price"), state.get("sl_price"), exit_price, CFG.spec.tick_size)
+        if xs is not None:
+            entry["exec_exit"] = {"result": outcome["result"], "trigger": state.get("tp_price") if outcome["result"] == "TP" else state.get("sl_price"), "exit_price": exit_price, "slip_exit_ticks": xs}
+    if state.get("exec"):
+        entry["exec"] = {**state["exec"], **({"fill_price": entry_price, "slip_ticks": slippage_ticks(signal["side"], ref_price, entry_price, CFG.spec.tick_size)} if not entry_estimated else {})}
     if signal.get("nc_signal") is not None:
         entry["nc_signal"] = signal["nc_signal"]     # contratos de la señal (paper); "nc" = los operados
     if outcome.get("orphan_orders"):
@@ -1073,6 +1112,78 @@ def _parse_nc_cap(raw: Optional[str]) -> Optional[int]:
 
 NC_MAX = _parse_nc_cap(os.getenv("GLITCH_PI_NC_MAX"))
 
+# Guardia de colchon del MLL (J4-a, 26-oct-2026; NEEDS HUMAN REVIEW). APAGADA por defecto. Con GLITCH_PI_MLL_GUARD=si el Pi calcula el colchon como
+# (balance de la cuenta fijada, leido de la API) − GLITCH_PI_MLL_FLOOR_USD (piso ABSOLUTO del MLL en USD, que mantiene el operador: sube con el balance de
+# cierre hasta fijarse en el balance inicial) y limita los contratos a los que caben con su perdida maxima dentro del colchon. Falla CERRADO: guardia
+# encendida y sin piso valido ⇒ no se opera. Ver execution/mll_guard.py (y su advertencia: baja el cobrado esperado).
+MLL_GUARD = os.getenv("GLITCH_PI_MLL_GUARD", "no").strip().lower() == "si"
+
+
+def _mll_floor_from_env() -> Optional[float]:
+    try:
+        v = float(os.environ.get("GLITCH_PI_MLL_FLOOR_USD", "").strip())
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _account_balance(client, account_id) -> Optional[float]:
+    for a in client.get_accounts(only_active=True):
+        if str(a.get("id")) == str(account_id) and a.get("balance") is not None:
+            return float(a["balance"])
+    return None
+
+
+def _apply_mll_guard(client, account_id, signal: dict):
+    """Devuelve (signal_ajustada | None, motivo). None = bloquear la entrada de hoy. Si la guardia esta apagada devuelve la señal intacta."""
+    if not MLL_GUARD:
+        return signal, "guardia apagada"
+    floor = _mll_floor_from_env()
+    balance = _account_balance(client, account_id)
+    if floor is None or balance is None:
+        return None, "guardia de MLL encendida pero falta un dato (GLITCH_PI_MLL_FLOOR_USD valido o el balance de la API): no se opera"
+    nc, why = _mll_decide(signal["nc"], cushion_usd(balance, floor), signal["sl_ticks"], CFG.spec.tick_value_usd, CFG.spec.commission_roundturn)
+    if nc <= 0:
+        return None, why
+    if nc == signal["nc"]:
+        return signal, why
+    adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc
+    return adj, why
+
+
+# Regla de tamaño de la XFA (28-oct-2026; NEEDS HUMAN REVIEW). APAGADA por defecto. GLITCH_PI_XFA_SIZE_RULE='hi:U:lo' (p. ej. '5:1500:1'): opera `hi` micros mientras el saldo de la XFA
+# (balance de la API − GLITCH_PI_XFA_START_BALANCE_USD, 50000 por defecto) sea < U dolares y `lo` despues (ver strategies/sizing_pure.py y optimo/resultados_OPT_XFA_ROBUSTEZ.md).
+# Solo MGC. Se aplica DESPUES de validar la señal (la validacion exige nc <= CFG.nc, que es 3) y ANTES de la guardia de MLL y del tope local GLITCH_PI_NC_MAX, que siguen mandando.
+# Sin balance de la API o con la regla mal formada se conserva el tamaño de la señal (no se bloquea ni se adivina). NO combinar con GLITCH_PI_MLL_GUARD=si cuando el bracket es 728:
+# la guardia limita los contratos a los que caben con su stop DENTRO del colchon (728 ticks por micro > $2,000 / 3) y reduciria o bloquearia la entrada.
+try:
+    XFA_SIZE_RULE = parse_xfa_size_rule(os.getenv("GLITCH_PI_XFA_SIZE_RULE"))
+except ValueError as _e:
+    log.error(f"GLITCH_PI_XFA_SIZE_RULE invalida ({_e}) -- la regla queda APAGADA; se usa el tamaño de la señal.")
+    XFA_SIZE_RULE = None
+try:
+    XFA_START_BALANCE = float(os.getenv("GLITCH_PI_XFA_START_BALANCE_USD", "").strip() or XFA_START_BALANCE_USD)
+except ValueError:
+    log.error("GLITCH_PI_XFA_START_BALANCE_USD no es un numero -- se usa 50000.")
+    XFA_START_BALANCE = XFA_START_BALANCE_USD
+
+
+def _apply_xfa_size_rule(client, account_id, signal: dict) -> dict:
+    """Devuelve la señal con nc segun la regla de tamaño de la XFA, o intacta si la regla esta apagada, la señal es de ensayo, el producto no es MGC o falta el balance."""
+    if XFA_SIZE_RULE is None or _is_test_signal(signal) or CFG.spec.product_code != "MGC":
+        return signal
+    balance = _account_balance(client, account_id)
+    if balance is None:
+        log.warning("regla de tamaño XFA: sin balance de la API -- se conserva el tamaño de la señal.")
+        return signal
+    hi, u, lo = XFA_SIZE_RULE
+    nc = xfa_nc_for_balance(balance, XFA_START_BALANCE, hi, u, lo)
+    log.info(f"regla de tamaño XFA {hi}:{u:g}:{lo}: saldo ${balance - XFA_START_BALANCE:,.2f} -> {nc} micros (señal: {signal['nc']})")
+    if nc == signal["nc"]:
+        return signal
+    adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc
+    return adj
+
 
 def _apply_nc_cap(signal: dict) -> dict:
     """Devuelve la señal con nc = min(nc, tope). Se aplica ANTES de operar, asi TODO lo que sigue (ordenes, confirmacion
@@ -1116,14 +1227,20 @@ def _validate_signal(signal: dict) -> Optional[str]:
     return None
 
 
+_LAST_EMPTY_POLL = None      # epoch del ultimo poll SIN señal (G1a)
+
+
 def run_once():
     try:
         reconcile_if_needed()
 
         signal = load_order_signal()
         if not signal:
+            global _LAST_EMPTY_POLL
+            _LAST_EMPTY_POLL = time.time()                     # G1a: acota el retraso del polling (la señal se escribio despues de este instante)
             log.info("Sin señal pendiente -- nada que hacer.")
             return
+        _t_seen = time.time()                                  # G1a: instante en que el Pi ve la señal (polling de 120 s)
 
         if not _signal_is_current(signal):
             return
@@ -1186,7 +1303,19 @@ def run_once():
             )
             return
 
-        reference_price = _reference_price(client, contract_id)
+        signal = _apply_nc_cap(_apply_xfa_size_rule(client, account_id, signal))   # regla de tamaño XFA (apagada por defecto); el tope local sigue mandando
+        signal, _mll_why = _apply_mll_guard(client, account_id, signal)       # J4-a (apagada por defecto)
+        if signal is None:
+            _notify_blocked_once_per_day(f"Guardia de colchon del MLL: NO se opera hoy -- {_mll_why}. Se descarta la señal del dia.")
+            save_order_signal({})
+            return
+        if MLL_GUARD:
+            log.info(f"guardia de MLL: {_mll_why}")
+
+
+        t_signal_seen = _t_seen
+        reference_price, ref_bar_t = _reference_quote(client, contract_id)
+        t_ref_local = time.time()
         tp_price = _round_to_tick(reference_price + signal["side"] * signal["tp_ticks"] * CFG.spec.tick_size)
         sl_price = _round_to_tick(reference_price - signal["side"] * signal["sl_ticks"] * CFG.spec.tick_size)
 
@@ -1196,6 +1325,7 @@ def run_once():
         if not _is_test_signal(signal):
             _claim_signal(signal)
 
+        t_send = time.time()
         try:
             bracket = place_bracket_order(client, account_id, contract_id, signal["side"], signal["nc"],
                                            tp_price, sl_price, verified_map)
@@ -1214,6 +1344,7 @@ def run_once():
             log.error(msg.replace("\n", " | "))
             return
 
+        t_ack = time.time()
         state = {
             "phase": "bracket_open", "signal": signal, "entry_price": reference_price,
             "entry_order_id": bracket["entry_order_id"], "tp_price": tp_price, "sl_price": sl_price,
@@ -1235,9 +1366,23 @@ def run_once():
                  f"{contract_id}. TP/SL estan por {signal['nc']}: al resolverse, el Pi cerrara cualquier remanente "
                  f"invertido.\n{utc_now_str()}")
 
+        entry_rec = _lookup_order(client, account_id, bracket["entry_order_id"])
+        open_fill = _extract_fill_price(entry_rec) if entry_rec else None
+        open_slip = slippage_ticks(signal["side"], reference_price, open_fill, CFG.spec.tick_size)
+        exec_rec = build_exec_record(side=signal["side"], nc=signal["nc"], tick_size=CFG.spec.tick_size, ref_price=reference_price,
+                                     t_signal_seen=t_signal_seen, t_ref_bar=ref_bar_t, t_ref_local=t_ref_local, t_send=t_send, t_ack=t_ack,
+                                     fill_price=open_fill, fill_time=extract_fill_time(entry_rec), t_prev_empty_poll=_LAST_EMPTY_POLL)
+        state["exec"] = exec_rec
+        if open_slip is not None:
+            state.update({"ref_price": reference_price, "fill_price": open_fill, "slip_ticks": open_slip})
+        save_pi_state(state)
         msg = (f"{PREFIX}\n[OPEN]\n"
                f"{signal['direction']}: ~{reference_price:,.4f} (referencia pre-trade)\n"
-               f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
+               + (f"Fill: {open_fill:,.4f}  |  slippage de entrada: {open_slip:+.2f} ticks (+ = adverso)\n" if open_slip is not None
+                  else "Fill de entrada no leido aun (se registra al cierre)\n")
+               + f"Latencia: referencia→envío {exec_rec['lat_ref_to_send_ms']} ms · envío→ack {exec_rec['lat_send_to_ack_ms']} ms · "
+               f"antigüedad de la barra {exec_rec['ref_bar_age_s']} s · señal→envío {exec_rec['lat_signal_to_send_ms'] / 1000:.0f} s\n"
+               + f"TP: {tp_price:,.4f}  SL: {sl_price:,.4f}\n"
                f"Contracts: {_nc_label(signal)}  |  Intento #{signal['intento']}\n"
                + utc_now_str())
         send(msg)
