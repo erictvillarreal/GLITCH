@@ -275,3 +275,46 @@ class TestMesSignalEndToEnd:
     def test_invalid_mode_falls_back_to_fixed(self, monkeypatch):
         sig, _ = self._go(monkeypatch, "agresivo")
         assert sig["nc"] == 40
+
+
+class TestXfaGeometry:
+    def test_no_variables_keeps_the_default(self):
+        assert sp.xfa_geometry_from_env(None, None) == (364, 364, True)
+        assert sp.xfa_geometry_from_env("", " ") == (364, 364, True)
+
+    def test_only_sl_means_tp_equals_sl_like_today(self):
+        assert sp.xfa_geometry_from_env("728", None) == (728, 728, True)
+        assert sp.xfa_geometry_from_env("364", "") == (364, 364, True)
+
+    def test_modeled_asymmetric_geometries(self):
+        assert sp.xfa_geometry_from_env("364", "728") == (364, 728, True)
+        assert sp.xfa_geometry_from_env("120", "360") == (120, 360, True)
+        assert sp.xfa_geometry_from_env(None, "728") == (364, 728, True)               # solo TP: el SL queda en el default 364
+
+    @pytest.mark.parametrize("sl,tp", [("120", None), ("120", "120"), ("364", "1092"), ("728", "364"), ("546", "546"), ("abc", None), ("364", "x"), (None, "999"), ("-364", "-364")])
+    def test_unmodeled_combinations_fall_back_with_flag(self, sl, tp):
+        assert sp.xfa_geometry_from_env(sl, tp) == (364, 364, False)
+
+    def test_custom_default_is_returned_untouched(self):
+        assert sp.xfa_geometry_from_env("120", None, 728, 728) == (728, 728, False)
+
+
+class TestMgcSchedulerTpEnv:
+    CODE = "import scheduler.geometry_mgc_scheduler as m; print(m.REAL_CFG.sl_ticks, m.REAL_CFG.tp_ticks, m.REAL_CFG.nc)"
+
+    @pytest.mark.parametrize("env,expect", [
+        ({}, ["364", "364", "3"]),
+        ({"GLITCH_XFA_BRACKET_TICKS": "728"}, ["728", "728", "3"]),
+        ({"GLITCH_XFA_BRACKET_TICKS": "364", "GLITCH_XFA_TP_TICKS": "728"}, ["364", "728", "3"]),
+        ({"GLITCH_XFA_BRACKET_TICKS": "120", "GLITCH_XFA_TP_TICKS": "360"}, ["120", "360", "3"]),
+        ({"GLITCH_XFA_BRACKET_TICKS": "120"}, ["364", "364", "3"]),                       # SL 120 sin TP no esta modelado: se ignora
+        ({"GLITCH_XFA_BRACKET_TICKS": "546", "GLITCH_XFA_TP_TICKS": "1092"}, ["364", "364", "3"]),
+    ])
+    def test_real_cfg_follows_env_or_falls_back(self, env, expect):
+        r = _run(self.CODE, GLITCH_PRODUCT="MGC", **env)
+        assert r.returncode == 0, r.stderr[-400:]
+        assert r.stdout.split()[-3:] == expect
+
+    def test_invalid_combination_is_logged_not_fatal(self):
+        r = _run(self.CODE, GLITCH_PRODUCT="MGC", GLITCH_XFA_BRACKET_TICKS="546", GLITCH_XFA_TP_TICKS="1092")
+        assert r.returncode == 0 and "geometria modelada" in (r.stderr + r.stdout)

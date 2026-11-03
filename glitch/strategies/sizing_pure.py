@@ -19,6 +19,8 @@ from typing import Optional
 MODES = ("fixed", "finish_line")
 CONSISTENCY_PCT = 0.55                       # Topstep: mejor dia <= 55 % de la meta original (respuesta de Support, 28-oct-2026)
 XFA_BRACKETS = (364, 728)                    # unicos valores evaluados (SL = TP en ticks de MGC)
+# Geometrías (SL, TP) en ticks de MGC modeladas en experimentos/estructura (SEGURO_MGC, 1-nov-2026): las dos de hoy y dos con TP mayor que el SL. Nada fuera de esta lista se acepta.
+XFA_GEOMETRIES = ((364, 364), (728, 728), (364, 728), (120, 360))
 XFA_START_BALANCE_USD = 50_000.0             # XFA 50K
 
 
@@ -84,3 +86,23 @@ def xfa_bracket_from_env(raw: Optional[str], default: int = 364) -> int:
     except ValueError:
         return default
     return v if v in XFA_BRACKETS else default
+
+
+def xfa_geometry_from_env(sl_raw: Optional[str], tp_raw: Optional[str], default_sl: int = 364, default_tp: int = 364) -> tuple:
+    """(sl, tp, ok) de la señal MGC a partir de GLITCH_XFA_BRACKET_TICKS (SL) y GLITCH_XFA_TP_TICKS (TP). Sin variables: el default. Con solo SL, TP = SL (comportamiento de hoy).
+    Solo se aceptan las geometrías de XFA_GEOMETRIES; cualquier otra combinación o valor ilegible devuelve el default con ok=False (el llamador lo registra y la señal no cambia)."""
+    def _int(raw):
+        if raw is None or not raw.strip():
+            return None
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return -1
+    sl, tp = _int(sl_raw), _int(tp_raw)
+    if sl is None and tp is None:
+        return default_sl, default_tp, True
+    sl = default_sl if sl is None else sl
+    tp = sl if tp is None and sl_raw is not None and sl_raw.strip() else (default_tp if tp is None else tp)
+    if (sl, tp) in XFA_GEOMETRIES:
+        return sl, tp, True
+    return default_sl, default_tp, False
