@@ -19,3 +19,14 @@
 
 ## Lo que el modelo dice (MODELADO, lado al azar; ver `experimentos/estructura/`)
 C: cobra 47 de cada 100 (A: 34), el primer pago llega en la sesión 10 mediana (≈ 2 semanas de operación) y la que cobra se lleva ≈ $1,585 (A: $2,538); cubrir $345 pasa de 33 % a 38 %, y $720 de 30 % a 27 %. Costo en cobrado medio contra A: −$71 [−$160, +$59] (no se distingue de cero). **No cumplió el criterio estricto preregistrado en un tercio de los datos** y nunca se ha probado en vivo.
+
+## Despliegue elegido por Eric (15-nov-2026): SL 364 / TP 728 con 1 micro — NEEDS HUMAN REVIEW (CLAUDE.md regla 4)
+**Qué cambia en producción:** solo dos variables en Railway (servicio MGC). **El Pi NO se toca** (sigue con su tope local de 1 micro y su regla actual). El Pi ya coloca el TP y el SL con distancias independientes (`pi_executor.py`, precios de TP y SL calculados con `signal["tp_ticks"]` y `signal["sl_ticks"]`) y acepta hasta 4× los ticks de CFG, así que 364/728 pasa su validación.
+**Verificación hecha antes de pedir el merge:** rama `feat/xfa-geometria-tp` = 1 commit sobre `origin/main` (0 atrás, 1 adelante, sin conflictos); `tests/test_sizing_pure.py` 70 pasan; suite completa **765 pasan**.
+**Pasos (los hace Eric, entre sesiones y con la cuenta plana; nunca con una posición abierta):**
+1. Revisar el diff **contra `origin/main`** (la rama local `main` de la carpeta orphaned es otra línea de historia y no comparte base): `git diff origin/main...feat/xfa-geometria-tp --stat` (4 archivos: guía, scheduler, `sizing_pure.py`, pruebas).
+2. `git push -u origin feat/xfa-geometria-tp`, abrir el PR hacia `main`, revisar y mezclar. Railway redespliega con las variables viejas: la señal NO cambia.
+3. Con el servicio ya estable, en Railway (MGC): poner `GLITCH_XFA_TP_TICKS=728` y cambiar `GLITCH_XFA_BRACKET_TICKS` de `728` a `364`. Hacerlo antes de las 11:00 UTC (5:00 CT) para no tocar el servicio cerca de la señal de las 12:00 UTC.
+4. Primera sesión: el Telegram `[SEÑAL ENVIADA AL PI]` debe decir `SL/TP: 364/728 ticks`; el `[OPEN]` del Pi debe mostrar SL ≈ 36.4 puntos y TP ≈ 72.8 puntos de la entrada, `Contracts: 1`. Si en el log de Railway aparece `no es una geometria modelada`, la variable está mal escrita y la señal conserva el bracket anterior.
+5. Anotar fecha y sesión del cambio.
+**Volver atrás:** `GLITCH_XFA_BRACKET_TICKS=728` y **quitar** `GLITCH_XFA_TP_TICKS` (entre sesiones). **Qué esperar (MODELADO, desde saldo −$745 y 3 días ganadores):** `experimentos/estructura/SEMANA_ESPERADA.md` y `HITOS.md` en la rama `experimentos-research`.
