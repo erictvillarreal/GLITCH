@@ -102,7 +102,7 @@ import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el 
 
 from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
-from strategies.sizing_pure import xfa_bracket_from_env  # noqa: E402
+from strategies.sizing_pure import xfa_geometry_from_env  # noqa: E402
 from execution.contracts import get_front_month, check_expiry_alerts, have_key  # noqa: E402
 from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
@@ -151,10 +151,14 @@ REAL_CFG = CANDIDATES[REAL_PRODUCT_KEY] if REAL_PRODUCT_KEY in CANDIDATES else C
 # PROPUESTA (28-oct-2026; NEEDS HUMAN REVIEW): bracket de la XFA real. GLITCH_XFA_BRACKET_TICKS=728 duplica SL = TP (364 -> 728 ticks de MGC); solo 364 y 728 estan
 # evaluados (strategies/sizing_pure.py::XFA_BRACKETS). Sin la variable (o con un valor no evaluado) la señal conserva el bracket de hoy. Topstep Support confirmo que un stop
 # mayor que el MLL esta permitido: con 728 el MLL (tiempo real, P&L no realizado) liquida antes de que el stop se alcance. Solo aplica a la cuenta MGC real.
+# PROPUESTA (2-nov-2026; NEEDS HUMAN REVIEW, CLAUDE.md regla 4): TP independiente del SL. GLITCH_XFA_TP_TICKS (junto con GLITCH_XFA_BRACKET_TICKS = SL) acepta SOLO las geometrias modeladas
+# (strategies/sizing_pure.py::XFA_GEOMETRIES): (364,364) y (728,728) [hoy], (364,728) [variante «equilibrada»] y (120,360) [«defensiva»]. Cualquier otra combinacion se ignora y se registra: la señal conserva la geometria de hoy.
 if REAL_PRODUCT_KEY.startswith("MGC"):
-    _XFA_BRACKET = xfa_bracket_from_env(os.getenv("GLITCH_XFA_BRACKET_TICKS"), REAL_CFG.sl_ticks)
-    if _XFA_BRACKET != REAL_CFG.sl_ticks:
-        REAL_CFG = dataclasses.replace(REAL_CFG, sl_ticks=_XFA_BRACKET, tp_ticks=_XFA_BRACKET)
+    _G_SL, _G_TP, _G_OK = xfa_geometry_from_env(os.getenv("GLITCH_XFA_BRACKET_TICKS"), os.getenv("GLITCH_XFA_TP_TICKS"), REAL_CFG.sl_ticks, REAL_CFG.tp_ticks)
+    if not _G_OK:
+        log.error(f"GLITCH_XFA_BRACKET_TICKS={os.getenv('GLITCH_XFA_BRACKET_TICKS')!r} / GLITCH_XFA_TP_TICKS={os.getenv('GLITCH_XFA_TP_TICKS')!r} no es una geometria modelada -- se conserva SL/TP {_G_SL}/{_G_TP}.")
+    if (_G_SL, _G_TP) != (REAL_CFG.sl_ticks, REAL_CFG.tp_ticks):
+        REAL_CFG = dataclasses.replace(REAL_CFG, sl_ticks=_G_SL, tp_ticks=_G_TP)
 ORDER_FILE = f"orden_pendiente_{REAL_PRODUCT_KEY.lower()}.json"
 REAL_ACCOUNT_SIZE = {"MGC": "50K", "MGC_XFA_100K": "100K", "MGC_XFA_150K": "150K"}.get(REAL_PRODUCT_KEY, "50K")
 
