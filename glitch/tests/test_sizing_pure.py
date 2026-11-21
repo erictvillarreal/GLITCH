@@ -533,3 +533,41 @@ class TestPiPayoutLatchAndLastDay:
                  TOPSTEP_ACCOUNT_ID="555", GLITCH_PI_XFA_LASTDAY="viernes", GLITCH_PI_XFA_POST_PAYOUT_NC="99")
         assert r.returncode == 0, r.stderr[-500:]
         assert r.stdout.split()[-2:] == ["None", "1"]
+
+
+class TestGeometry500x250:
+    def test_500_250_is_modeled(self):
+        assert (500, 250) in sp.XFA_GEOMETRIES
+        assert sp.xfa_geometry_from_env("500", "250") == (500, 250, True)
+
+    @pytest.mark.parametrize("sl,tp", [("500", "200"), ("500", None), ("500", "500"), ("250", "250"), ("500", "251"), ("499", "250")])
+    def test_close_but_unmodeled_values_fall_back_with_flag(self, sl, tp):
+        assert sp.xfa_geometry_from_env(sl, tp) == (364, 364, False)           # «500/200» (error de dedo) cae al default, no a una geometria no evaluada
+
+    def test_previous_geometries_unchanged(self):
+        for g in ((364, 364), (728, 728), (364, 728), (120, 360), (364, 182)):
+            assert sp.xfa_geometry_from_env(str(g[0]), str(g[1])) == (g[0], g[1], True)
+
+    def test_twelve_micros_rule_is_accepted_and_balance_switch_works(self):
+        assert sp.parse_xfa_size_rule("12:500:1") == (12, 500.0, 1)
+        assert sp.xfa_nc_for_balance(50_028.0, 50_000.0, 12, 500.0, 1) == 12
+        assert sp.xfa_nc_for_balance(50_600.0, 50_000.0, 12, 500.0, 1) == 1
+
+    def test_post_payout_below_u_is_caught_by_the_latch_not_by_the_rule(self):
+        # pre-cobro $600 -> se pide $300 -> quedan $300 < U=500: la regla sola volveria a 12 micros; el candado lo baja a 1
+        assert sp.xfa_nc_for_balance(50_300.0, 50_000.0, 12, 500.0, 1) == 12
+        assert sp.xfa_nc_plan(50_300.0, 50_000.0, 12, 500.0, 1, latched=True, post_nc=1)[0] == 1
+
+
+class TestMgcSchedulerGeometry500x250:
+    CODE = "import scheduler.geometry_mgc_scheduler as m; print(m.REAL_CFG.sl_ticks, m.REAL_CFG.tp_ticks, m.REAL_CFG.nc)"
+
+    def test_env_500_250_changes_sl_and_tp(self):
+        r = _run(self.CODE, GLITCH_PRODUCT="MGC", GLITCH_XFA_BRACKET_TICKS="500", GLITCH_XFA_TP_TICKS="250")
+        assert r.returncode == 0, r.stderr[-400:]
+        assert r.stdout.split()[-3:] == ["500", "250", "3"]
+
+    def test_typo_500_200_is_ignored_and_logged(self):
+        r = _run(self.CODE, GLITCH_PRODUCT="MGC", GLITCH_XFA_BRACKET_TICKS="500", GLITCH_XFA_TP_TICKS="200")
+        assert r.returncode == 0, r.stderr[-400:]
+        assert r.stdout.split()[-3:] == ["364", "364", "3"] and "geometria modelada" in (r.stderr + r.stdout)

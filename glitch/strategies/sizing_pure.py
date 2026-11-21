@@ -21,7 +21,8 @@ CONSISTENCY_PCT = 0.55                       # Topstep: mejor dia <= 55 % de la 
 XFA_BRACKETS = (364, 728)                    # unicos valores evaluados (SL = TP en ticks de MGC)
 # Geometrías (SL, TP) en ticks de MGC modeladas en experimentos/estructura (SEGURO_MGC, 1-nov-2026): las dos de hoy y dos con TP mayor que el SL. Nada fuera de esta lista se acepta.
 # (364, 182) se agrega el 20-nov-2026 (LUNES8B/LUNES9B/LUNES11 en experimentos/estructura): TP MENOR que el SL = perfil «perdedor mayor que ganador», motivo citado del RTP (umbrales no publicados).
-XFA_GEOMETRIES = ((364, 364), (728, 728), (364, 728), (120, 360), (364, 182))
+# (500, 250) se agrega el 21-nov-2026 (LUNES16/LUNES17): misma bandera TP < SL; con 12 micros el MLL liquida a ~167 ticks en contra, antes del SL de 500. «500/200» NO es una geometria modelada y se rechaza.
+XFA_GEOMETRIES = ((364, 364), (728, 728), (364, 728), (120, 360), (364, 182), (500, 250))
 XFA_DIRECTIONS = ("alternate", "always_short", "always_long")
 XFA_PAYOUT_DROP_TOL_USD = 100.0              # una baja de saldo >= esto entre cierres, no explicada por el P&L del trade, se toma como cobro hecho (el cobro minimo son $125)
 XFA_START_BALANCE_USD = 50_000.0             # XFA 50K
