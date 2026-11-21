@@ -147,7 +147,7 @@ from execution.gist_store import save_state as _gist_save_state
 from pi.slippage_pure import build_exec_record, exit_slip_ticks, extract_fill_time, slippage_ticks
 from scheduler.telegram_bot import send
 from strategies.geometry_pure import CANDIDATES
-from strategies.sizing_pure import XFA_START_BALANCE_USD, parse_xfa_size_rule, xfa_nc_for_balance
+from strategies.sizing_pure import XFA_START_BALANCE_USD, parse_xfa_lastday, parse_xfa_size_rule, xfa_nc_for_balance, xfa_nc_plan, xfa_payout_detected
 
 CT = ZoneInfo("America/Chicago")
 log = setup_ct_logging("pi_executor")
@@ -955,6 +955,7 @@ def _finalize_cycle(client: ProjectXClient, account_id: int, state: dict, outcom
     append_to_historic_log(signal["product"], entry)
     save_order_signal({})
     save_pi_state({})
+    _xfa_latch_record_close(signal, pnl, outcome["result"])
 
     msg = (f"{PREFIX}\n[CLOSE] [{outcome['result']}]\n"
            f"{signal['direction']}: {entry_price:,.4f} → {exit_price:,.4f}\n"
@@ -1167,6 +1168,65 @@ except ValueError:
     log.error("GLITCH_PI_XFA_START_BALANCE_USD no es un numero -- se usa 50000.")
     XFA_START_BALANCE = XFA_START_BALANCE_USD
 
+# PROPUESTA (20-nov-2026; NEEDS HUMAN REVIEW, CLAUDE.md regla 4). Dos complementos de la regla de tamaño; solo actuan si GLITCH_PI_XFA_SIZE_RULE esta puesta y son MGC. APAGADOS por defecto.
+#  · GLITCH_PI_XFA_LASTDAY='AAAA-MM-DD:n' (p. ej. '2026-11-27:12'): ese dia (hora de Chicago) se operan n micros si todavia no se llego a U ni se cobro (palanca del viernes, LUNES9B).
+#  · CANDADO DE COBRO HECHO: tras pedir el cobro el saldo restante (~$200-$430) suele quedar < U y la regla volveria a `hi` micros con el piso del MLL en $0. El Pi guarda en disco el saldo
+#    esperado tras cada cierre (saldo previo + P&L); si al siguiente dia el saldo esta por debajo del esperado por mas de $100, lo toma como cobro hecho, avisa por Telegram y opera
+#    GLITCH_PI_XFA_POST_PAYOUT_NC micros (1 por defecto). GLITCH_PI_XFA_PAYOUT_DONE=si lo fuerza a mano. Para reiniciarlo: borrar el archivo .glitch_pi_xfa_latch_<producto>.json del directorio de estado.
+try:
+    XFA_LASTDAY = parse_xfa_lastday(os.getenv("GLITCH_PI_XFA_LASTDAY"))
+except ValueError as _e:
+    log.error(f"GLITCH_PI_XFA_LASTDAY invalida ({_e}) -- la palanca queda APAGADA.")
+    XFA_LASTDAY = None
+try:
+    XFA_POST_NC = int(os.getenv("GLITCH_PI_XFA_POST_PAYOUT_NC", "").strip() or 1)
+    if not 1 <= XFA_POST_NC <= 12:
+        raise ValueError(XFA_POST_NC)
+except ValueError:
+    log.error("GLITCH_PI_XFA_POST_PAYOUT_NC invalido (entero 1..12) -- se usa 1.")
+    XFA_POST_NC = 1
+XFA_PAYOUT_DONE_MANUAL = os.getenv("GLITCH_PI_XFA_PAYOUT_DONE", "no").strip().lower() == "si"
+
+
+def _xfa_latch_path() -> str:
+    return os.path.join(_state_dir(), f".glitch_pi_xfa_latch_{PRODUCT_KEY.lower()}.json")
+
+
+def _xfa_latch_load() -> dict:
+    try:
+        with open(_xfa_latch_path()) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {"latched": True, "note": "contenido inesperado"}
+    except FileNotFoundError:
+        return {}
+    except (ValueError, OSError) as e:
+        log.error(f"candado de cobro ilegible ({e}) -- se trata como COBRO HECHO por seguridad (opera el tamaño posterior).")
+        return {"latched": True, "note": f"ilegible: {e}"}
+
+
+def _xfa_latch_save(d: dict) -> None:
+    path = _xfa_latch_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _xfa_latch_record_close(signal: dict, pnl: float, result: str) -> None:
+    """Tras un cierre real: saldo esperado del siguiente dia = saldo previo al trade + P&L. Nunca rompe el cierre."""
+    if XFA_SIZE_RULE is None or _is_test_signal(signal) or CFG.spec.product_code != "MGC":
+        return
+    try:
+        st = _xfa_latch_load()
+        pre = st.get("pre_balance")
+        st["expected_balance"] = None if (pre is None or result == "UNKNOWN" or str(st.get("pre_date")) != str(signal.get("date"))) else round(float(pre) + float(pnl), 2)
+        _xfa_latch_save(st)
+    except Exception as e:
+        log.error(f"no se pudo guardar el saldo esperado del candado de cobro: {e}")
+
 
 def _apply_xfa_size_rule(client, account_id, signal: dict) -> dict:
     """Devuelve la señal con nc segun la regla de tamaño de la XFA, o intacta si la regla esta apagada, la señal es de ensayo, el producto no es MGC o falta el balance."""
@@ -1177,8 +1237,24 @@ def _apply_xfa_size_rule(client, account_id, signal: dict) -> dict:
         log.warning("regla de tamaño XFA: sin balance de la API -- se conserva el tamaño de la señal.")
         return signal
     hi, u, lo = XFA_SIZE_RULE
-    nc = xfa_nc_for_balance(balance, XFA_START_BALANCE, hi, u, lo)
-    log.info(f"regla de tamaño XFA {hi}:{u:g}:{lo}: saldo ${balance - XFA_START_BALANCE:,.2f} -> {nc} micros (señal: {signal['nc']})")
+    st = _xfa_latch_load()
+    latched = XFA_PAYOUT_DONE_MANUAL or bool(st.get("latched"))
+    if not latched and xfa_payout_detected(st.get("expected_balance"), balance):
+        latched = True
+        st.update(latched=True, detected_at=utc_now_str(), detected_balance=balance)
+        try:
+            _xfa_latch_save(st)
+        except Exception as e:
+            log.error(f"no se pudo guardar el candado de cobro: {e}")
+        send(f"{PREFIX}\n[CANDADO COBRO] Saldo ${balance:,.2f} por debajo del esperado ${st.get('expected_balance'):,.2f}: se toma como COBRO HECHO. "
+             f"Desde hoy se operan {XFA_POST_NC} micros. Si fue un error, borrar .glitch_pi_xfa_latch_{PRODUCT_KEY.lower()}.json y reiniciar el Pi.\n{utc_now_str()}")
+    nc, why = xfa_nc_plan(balance, XFA_START_BALANCE, hi, u, lo, latched=latched, post_nc=XFA_POST_NC, lastday=XFA_LASTDAY, today=ct_now().date())
+    try:
+        st["pre_balance"], st["pre_date"] = balance, str(signal.get("date"))
+        _xfa_latch_save(st)
+    except Exception as e:
+        log.error(f"no se pudo guardar el saldo previo del candado de cobro: {e}")
+    log.info(f"regla de tamaño XFA: saldo ${balance - XFA_START_BALANCE:,.2f} -> {nc} micros ({why}) (señal: {signal['nc']})")
     if nc == signal["nc"]:
         return signal
     adj = dict(signal); adj["nc_signal"] = signal.get("nc_signal", signal["nc"]); adj["nc"] = nc

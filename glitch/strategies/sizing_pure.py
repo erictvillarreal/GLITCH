@@ -20,7 +20,10 @@ MODES = ("fixed", "finish_line")
 CONSISTENCY_PCT = 0.55                       # Topstep: mejor dia <= 55 % de la meta original (respuesta de Support, 28-oct-2026)
 XFA_BRACKETS = (364, 728)                    # unicos valores evaluados (SL = TP en ticks de MGC)
 # Geometrías (SL, TP) en ticks de MGC modeladas en experimentos/estructura (SEGURO_MGC, 1-nov-2026): las dos de hoy y dos con TP mayor que el SL. Nada fuera de esta lista se acepta.
-XFA_GEOMETRIES = ((364, 364), (728, 728), (364, 728), (120, 360))
+# (364, 182) se agrega el 20-nov-2026 (LUNES8B/LUNES9B/LUNES11 en experimentos/estructura): TP MENOR que el SL = perfil «perdedor mayor que ganador», motivo citado del RTP (umbrales no publicados).
+XFA_GEOMETRIES = ((364, 364), (728, 728), (364, 728), (120, 360), (364, 182))
+XFA_DIRECTIONS = ("alternate", "always_short", "always_long")
+XFA_PAYOUT_DROP_TOL_USD = 100.0              # una baja de saldo >= esto entre cierres, no explicada por el P&L del trade, se toma como cobro hecho (el cobro minimo son $125)
 XFA_START_BALANCE_USD = 50_000.0             # XFA 50K
 
 
@@ -73,6 +76,61 @@ def parse_xfa_size_rule(raw: Optional[str]) -> Optional[tuple]:
 def xfa_nc_for_balance(balance_usd: float, start_balance_usd: float, hi: int, u_usd: float, lo: int) -> int:
     """hi micros mientras (balance − balance inicial) < U; si no, lo. Es la regla `np.where(st.b < U, hi, lo)` evaluada en opt_xfa_reglas.py."""
     return int(hi if (float(balance_usd) - float(start_balance_usd)) < float(u_usd) else lo)
+
+
+def parse_xfa_lastday(raw: Optional[str]) -> Optional[tuple]:
+    """'AAAA-MM-DD:n' (p. ej. '2026-11-27:12') -> (fecha, n) o None si esta vacia. En esa fecha (hora de Chicago) el Pi opera n micros mientras no se haya
+    cobrado todavia (palanca del viernes, LUNES9B). Lanza ValueError si esta mal formada (el Pi la deja APAGADA y lo registra)."""
+    if raw is None or not raw.strip():
+        return None
+    parts = raw.strip().split(":")
+    if len(parts) != 2:
+        raise ValueError(f"palanca de ultimo dia invalida {raw!r}: formato 'AAAA-MM-DD:n'")
+    import datetime as _dt
+    d = _dt.date.fromisoformat(parts[0].strip())
+    n = int(parts[1])
+    if not 1 <= n <= 12:
+        raise ValueError(f"palanca de ultimo dia invalida {raw!r}: n debe estar entre 1 y 12")
+    return d, n
+
+
+def xfa_payout_detected(expected_balance: Optional[float], balance_now: Optional[float], tol_usd: float = XFA_PAYOUT_DROP_TOL_USD) -> bool:
+    """True si el saldo actual esta por DEBAJO del esperado (saldo previo al trade + P&L del trade) por mas de la tolerancia: lo que lo explica es un cobro (o un
+    retiro) hecho entre cierres. Sin dato (None) -> False: no se adivina. Un falso positivo solo achica el tamaño (falla seguro)."""
+    if expected_balance is None or balance_now is None:
+        return False
+    return float(balance_now) < float(expected_balance) - float(tol_usd)
+
+
+def xfa_nc_plan(balance_usd: float, start_balance_usd: float, hi: int, u_usd: float, lo: int, *, latched: bool = False, post_nc: int = 1,
+                lastday: Optional[tuple] = None, today=None) -> tuple:
+    """(nc, motivo) del Pi para hoy. Base = regla hi:U:lo por saldo. (1) cobro hecho (candado): min(base, post_nc), sin excepciones; (2) palanca de ultimo dia: si hoy es la
+    fecha y la base sigue siendo `hi` (todavia no se llego a U), n micros; (3) si no, la base. El saldo restante tras un cobro suele quedar < U: sin el candado la regla
+    volveria a `hi` con el piso del MLL en $0."""
+    base = xfa_nc_for_balance(balance_usd, start_balance_usd, hi, u_usd, lo)
+    if latched:
+        return int(min(base, post_nc)), f"cobro hecho (candado): {min(base, post_nc)} micros"
+    if lastday is not None and today is not None and today == lastday[0] and base == hi:
+        return int(lastday[1]), f"ultimo dia {lastday[0]}: {lastday[1]} micros"
+    return int(base), f"regla {hi}:{u_usd:g}:{lo}: {base} micros"
+
+
+def xfa_direction_from_env(raw_dir: Optional[str], raw_until: Optional[str], today, default: str = "alternate") -> tuple:
+    """(direccion, nota) del scheduler MGC. GLITCH_XFA_DIRECTION (always_short | always_long | alternate; alias short | long) SOLO se aplica si GLITCH_XFA_DIRECTION_UNTIL
+    (AAAA-MM-DD, inclusive) es una fecha valida y `today` no la pasa: asi un override olvidado vuelve solo a `default`. Sin variable: (default, None). Cualquier error -> (default, motivo)."""
+    if raw_dir is None or not raw_dir.strip():
+        return default, None
+    d = {"short": "always_short", "long": "always_long"}.get(raw_dir.strip().lower(), raw_dir.strip().lower())
+    if d not in XFA_DIRECTIONS:
+        return default, f"GLITCH_XFA_DIRECTION={raw_dir!r} no valida (alternate | always_short | always_long): se usa {default}"
+    import datetime as _dt
+    try:
+        until = _dt.date.fromisoformat((raw_until or "").strip())
+    except ValueError:
+        return default, f"GLITCH_XFA_DIRECTION={raw_dir!r} exige GLITCH_XFA_DIRECTION_UNTIL=AAAA-MM-DD (fecha valida): se ignora y se usa {default}"
+    if today > until:
+        return default, f"GLITCH_XFA_DIRECTION={d} expiro el {until}: se usa {default}"
+    return d, f"GLITCH_XFA_DIRECTION={d} activa hasta {until} (inclusive)"
 
 
 # ── 3. Bracket de la XFA ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
