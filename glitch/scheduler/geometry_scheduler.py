@@ -100,6 +100,9 @@ log = setup_ct_logging("geometry")
 
 # ── Config ────────────────────────────────────────────────────────────────
 DRY_RUN = os.getenv("DRY_RUN", "true").lower() == "true"
+# Silencio opcional de los avisos de RUTINA en paper (GLITCH_PAPER_SILENT=true; solo con DRY_RUN=true; las fallas siguen avisando). Ver scheduler/paper_silence.py.
+from scheduler.paper_silence import paper_silent as _paper_silent, wrap_send as _wrap_send
+send = _wrap_send(send, _paper_silent(DRY_RUN, os.getenv("GLITCH_PAPER_SILENT")), log)
 
 PRODUCT_KEY = _PRODUCT_KEY_FOR_STARTUP_CHECK  # ya calculado arriba, antes del chequeo unificado
 if PRODUCT_KEY not in CANDIDATES:
