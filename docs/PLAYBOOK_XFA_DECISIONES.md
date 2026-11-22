@@ -90,8 +90,9 @@ Mapa interactivo: https://claude.ai/artifact/L9bpm4mMXUao48t4KqULDc (hasta LUNES
 | D-06 | 20-nov | prioridad inicial | P(cobro) / dinero | LUNES6-8 | frontera con precio de $11-$14 por punto | sí | histórica (§5) |
 | D-07 | 20-nov | configuración del lunes | ver LUNES8-11 | LUNES9B, 10, 11 | **A:** 364/182, 4 micros + 12 el viernes, X $250, cobro 50 %, luego misma con 1 micro; parche en `feat/xfa-lunes-364-182` | sí | vigente hasta D-09 |
 | D-08 | 21-nov | 120/360 recomendado sin probar en el real | mantener / retirar | LUNES9 (19 sesiones: 54 % a 34 %) | retirado | — | cerrada |
-| D-09 | 21-nov | prioridad = segundo cobro (MLL post-cobro) | A / B / C / D / E y cobro parcial | LUNES16, 17 (§7) | **propuesta:** B = 500/250, 12 micros, X $500, luego 1 micro; parche en `feat/xfa-lunes-500-250`. Falta decidir el monto del primer cobro (máximo o mínimo) | sí (variables) | **pendiente de confirmación de Eric** |
-| D-10 | 21-nov | dirección de la semana | alternar / solo short / solo long | LUNES12, 12B | decide Eric el domingo; `GLITCH_XFA_DIRECTION*` con fecha de expiración | sí | pendiente |
+| D-09 | 21-nov | prioridad = segundo cobro (MLL post-cobro) | A / B / C / D / E y cobro parcial | LUNES16, 17 (§7) | **B** = 500/250, 12 micros, X $500, luego 1 micro (misma geometría); parche en `feat/xfa-lunes-500-250`. **Eric decide iniciar la semana del 23-nov con B.** Falta decidir el monto del primer cobro (máximo o mínimo) | sí (variables) | **vigente** (inicio con B, 21-nov) |
+| D-10 | 21-nov | dirección de la semana | alternar / solo short / solo long | LUNES12, 12B, LUNES18 §C | decide Eric el domingo en la tarde; `GLITCH_XFA_DIRECTION*` con fecha de expiración | sí | pendiente |
+| D-11 | 21-nov | plan de la semana con B y qué cambia solo en el Pi al cobrar | — | LUNES18; `TestPlanBWeek` | `docs/PLAN_SEMANA_23NOV_B.md`: la semana se decide el lunes (cobro 37 %, muerte 50 %, continúa 13 %); al cobrar el Pi baja solo a 1 micro; geometría y monto del cobro no cambian solos | sí | vigente |
 Cada nueva decisión se agrega aquí con: contexto, opciones, evidencia (archivo y commit), decisión, reversibilidad y estado.
 
 ## 7. Comparativa A (parche del lunes) contra B (500/250 con 12 micros), LUNES17

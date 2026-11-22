@@ -571,3 +571,74 @@ class TestMgcSchedulerGeometry500x250:
         r = _run(self.CODE, GLITCH_PRODUCT="MGC", GLITCH_XFA_BRACKET_TICKS="500", GLITCH_XFA_TP_TICKS="200")
         assert r.returncode == 0, r.stderr[-400:]
         assert r.stdout.split()[-3:] == ["364", "364", "3"] and "geometria modelada" in (r.stderr + r.stdout)
+
+
+class TestPlanBWeek:
+    """La semana del 23-nov con B (500/250, regla 12:500:1): lo que el Pi cambia SOLO al cobrar. Documentacion ejecutable de docs/PLAN_SEMANA_23NOV_B.md."""
+    @pytest.fixture
+    def pe(self, monkeypatch, tmp_path):
+        import pi.pi_executor as pe
+        monkeypatch.setenv("GLITCH_PI_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(pe, "CFG", CANDIDATES["MGC"])
+        monkeypatch.setattr(pe, "XFA_START_BALANCE", 50_000.0)
+        monkeypatch.setattr(pe, "XFA_SIZE_RULE", (12, 500.0, 1))
+        monkeypatch.setattr(pe, "XFA_LASTDAY", None)
+        monkeypatch.setattr(pe, "XFA_POST_NC", 1)
+        monkeypatch.setattr(pe, "XFA_PAYOUT_DONE_MANUAL", False)
+        monkeypatch.setattr(pe, "NC_MAX", None)
+        monkeypatch.setattr(pe, "_is_test_signal", lambda s: s.get("product") != "MGC")
+        self.sent = []
+        monkeypatch.setattr(pe, "send", lambda m: self.sent.append(m))
+        monkeypatch.setattr(pe, "ct_now", lambda: _dt.datetime(2026, 11, 23, 9, 0))
+        return pe
+
+    _C = TestPiSizeRule._C
+
+    def _sig(self, day):
+        return {"date": day, "side": 1, "direction": "LONG", "product_code": "MGC", "nc": 3, "sl_ticks": 500, "tp_ticks": 250, "product": "MGC", "intento": 1, "dry_run": False}
+
+    def _open(self, pe, balance, day):
+        return pe._apply_xfa_size_rule(self._C(50_000.0 + balance), 555, self._sig(day))["nc"]
+
+    def _close(self, pe, pnl, day, result="TP"):
+        pe._xfa_latch_record_close(self._sig(day), pnl, result)
+
+    def test_monday_opens_with_12_micros(self, pe):
+        assert self._open(pe, 28.28, "2026-11-23") == 12
+
+    def test_tp_day_then_max_payout_goes_to_one_micro_automatically(self, pe):
+        assert self._open(pe, 28.28, "2026-11-23") == 12
+        self._close(pe, 2_965.0, "2026-11-23")                                    # un TP: 12 x 250 ticks, neto ~$2,965 -> saldo ~$2,993
+        assert self._open(pe, 2_993.28, "2026-11-24") == 1                         # sin pedir el cobro todavia: regla = lo (saldo >= U)
+        assert pe._xfa_latch_load().get("latched") is None
+        self._close(pe, 0.0, "2026-11-24", "FLATTEN")
+        assert self._open(pe, 1_497.0, "2026-11-25") == 1                          # cobro maximo pedido: el saldo cae a la mitad
+        assert pe._xfa_latch_load()["latched"] is True and any("COBRO HECHO" in m for m in self.sent)
+
+    def test_min_payout_is_also_detected(self, pe):
+        self._open(pe, 28.28, "2026-11-23"); self._close(pe, 2_965.0, "2026-11-23")
+        assert self._open(pe, 2_868.28, "2026-11-24") == 1                         # cobro minimo de $125: saldo $2,868
+        assert pe._xfa_latch_load()["latched"] is True
+
+    def test_small_win_then_payout_below_u_is_held_at_one_micro_by_the_latch(self, pe):
+        self._open(pe, 28.28, "2026-11-23"); self._close(pe, 600.0, "2026-11-23", "FLATTEN")      # saldo $628 >= U
+        assert self._open(pe, 628.28, "2026-11-24") == 1
+        self._close(pe, 0.0, "2026-11-24", "FLATTEN")
+        out = self._open(pe, 314.14, "2026-11-25")                                 # cobro maximo de $314: quedan $314 < U -> la regla sola daria 12
+        assert out == 1 and pe._xfa_latch_load()["latched"] is True
+
+    def test_losing_day_without_payout_keeps_12_micros(self, pe):
+        self._open(pe, 28.28, "2026-11-23"); self._close(pe, -1_200.0, "2026-11-23", "SL")
+        assert self._open(pe, -1_171.72, "2026-11-24") == 12                       # sigue en fase 1: el colchon que queda lo decide el MLL, no el Pi
+        assert pe._xfa_latch_load().get("latched") is None
+
+    def test_latch_survives_a_second_payout_and_balance_swings(self, pe):
+        self._open(pe, 28.28, "2026-11-23"); self._close(pe, 2_965.0, "2026-11-23")
+        self._open(pe, 1_497.0, "2026-11-24")                                      # detecta el cobro
+        for day, bal in (("2026-11-25", 1_497.0), ("2026-11-27", 900.0), ("2026-11-30", 300.0), ("2026-12-01", 2_400.0)):
+            assert self._open(pe, bal, day) == 1                                   # nunca vuelve a 12, ni con saldo < U ni despues de un 2.o cobro
+
+    def test_geometry_and_direction_are_not_touched_by_the_payout(self, pe):
+        self._open(pe, 28.28, "2026-11-23"); self._close(pe, 2_965.0, "2026-11-23")
+        out = pe._apply_xfa_size_rule(self._C(51_497.0), 555, self._sig("2026-11-24"))
+        assert out["sl_ticks"] == 500 and out["tp_ticks"] == 250 and out["side"] == 1 and out["nc"] == 1
