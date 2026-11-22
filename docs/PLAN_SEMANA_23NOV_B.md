@@ -10,7 +10,7 @@
 5. **Cambia solo en el Pi al cobrar:** contratos 12 → 1 (regla `12:500:1` más candado de cobro hecho), con aviso `[CANDADO COBRO]`. No cambian solos: la geometría, la dirección, el monto del cobro ni el segundo cobro (manuales).
 6. Probado con pruebas ejecutables (`TestPlanBWeek`, 7 pruebas; suite completa verde).
 7. Dirección: alternar pone el **lunes en LONG**; el lado del lunes pesa casi todo (§5). Decide Eric el domingo en la tarde.
-8. Decisiones que siguen abiertas: **monto del primer cobro** (máximo o $125), **dirección del lunes**.
+8. Decididas por Eric: iniciar con B y, con un TP, pedir el **cobro máximo**. Abierta: **dirección del lunes** (la confirma el domingo; probable override a short).
 9. Si el lunes liquida la cuenta, se detiene el Pi y se documenta (§7); no se reabre la cuenta con otra configuración sin una decisión nueva en el registro.
 10. Sin verificar: valor actual de `GLITCH_PI_NC_MAX` y `GLITCH_PI_MLL_GUARD` en el Pi, rama de Railway, comportamiento del Pi con una cuenta liquidada, calendario macro.
 
@@ -23,7 +23,7 @@ Orden y comandos en `ACTIVAR_LUNES_500_250.md`. Lista de salida:
 - [ ] `pi/ops/check_contracts.py`: contrato activo del lunes (corte del repo hacia MGCG7 el 26-nov).
 - [ ] La API muestra el saldo +$28.28 (TopstepX igual).
 - [ ] Domingo en la tarde (apertura de Asia): decidir la dirección (§5) y, si es override, poner `GLITCH_XFA_DIRECTION` y `GLITCH_XFA_DIRECTION_UNTIL` antes de las 07:00 CT del lunes.
-- [ ] Decidir el monto del primer cobro (§4) para no decidirlo con prisa el lunes.
+- [x] Monto del primer cobro: máximo si toca un TP (D-12).
 
 ## 2. Calendario de la semana
 | día | qué ocurre | qué hacer |
@@ -64,7 +64,7 @@ Orden en el Pi: validar la señal (3 micros) → regla de tamaño y candado → 
 | contador de días ganadores | 5 cumplidos | **0**: hacen falta 5 nuevos de >= $150 | lo aplica Topstep | — | TopstepX |
 | segundo cobro | — | elegible con 5 días nuevos, saldo >= $250 y saldo > el que quedó tras el cobro | **manual** pedirlo | — | TopstepX |
 | reiniciar el candado | — | solo manual | manual | borrar el archivo y reiniciar el Pi | — |
-**Monto del primer cobro (decisión pendiente; manual en TopstepX).** En 60 sesiones desde el cobro, 1 micro (MOD, realista / optimista, entre quienes cobraron):
+**Monto del primer cobro. Decisión de Eric (21-nov, D-12): si el lunes toca un TP, pedir el MÁXIMO (50 % del saldo).** Es manual en TopstepX. Con la ganancia media (saldo de $500 a $2,000) se decide ese día. En 60 sesiones desde el cobro, 1 micro (MOD, realista / optimista, entre quienes cobraron):
 | monto | viva a 10 / 20 / 40 ses. | 2.º cobro a 20 / 40 / 60 ses. | sesiones hasta el 2.º cobro (mediana) | dinero a 60 ses. (cobro + extra) |
 |---|---|---|---|---|
 | **máximo 50 %** (neto ≈ $1,347) | 75 / 45 / 10 % · 80 / 55 / 18 % | 48 / 53 / 54 % · 60 / 65 / 66 % | 11 | $1,347 + $706 = **≈ $2,053** · $1,347 + $1,050 |
