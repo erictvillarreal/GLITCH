@@ -102,7 +102,7 @@ import requests  # noqa: E402 -- despues del chequeo de env, mismo orden que el 
 
 from scheduler.telegram_bot import send  # noqa: E402
 from strategies.geometry_pure import CANDIDATES, decide_side, trading_day_index  # noqa: E402
-from strategies.sizing_pure import xfa_geometry_from_env  # noqa: E402
+from strategies.sizing_pure import xfa_direction_from_env, xfa_geometry_from_env  # noqa: E402
 from execution.contracts import get_front_month, check_expiry_alerts, have_key  # noqa: E402
 from execution.session_calendar import is_flatten_time, flatten_minutes_ct  # noqa: E402
 from execution.gist_store import load_log as _gist_load_log, save_log as _gist_save_log  # noqa: E402
@@ -159,6 +159,17 @@ if REAL_PRODUCT_KEY.startswith("MGC"):
         log.error(f"GLITCH_XFA_BRACKET_TICKS={os.getenv('GLITCH_XFA_BRACKET_TICKS')!r} / GLITCH_XFA_TP_TICKS={os.getenv('GLITCH_XFA_TP_TICKS')!r} no es una geometria modelada -- se conserva SL/TP {_G_SL}/{_G_TP}.")
     if (_G_SL, _G_TP) != (REAL_CFG.sl_ticks, REAL_CFG.tp_ticks):
         REAL_CFG = dataclasses.replace(REAL_CFG, sl_ticks=_G_SL, tp_ticks=_G_TP)
+# PROPUESTA (20-nov-2026; NEEDS HUMAN REVIEW, CLAUDE.md regla 4): override de DIRECCION de la XFA real. GLITCH_XFA_DIRECTION=always_short|always_long|alternate junto con GLITCH_XFA_DIRECTION_UNTIL=AAAA-MM-DD
+# (inclusive; SIN fecha valida se ignora): pasada esa fecha el scheduler vuelve solo a la direccion del candidato (alternate). Sin variables el comportamiento es identico al de hoy. Solo cuenta real MGC.
+def _direction_mode(today) -> str:
+    if DRY_RUN or not REAL_PRODUCT_KEY.startswith("MGC"):
+        return CFG.direction
+    mode, note = xfa_direction_from_env(os.getenv("GLITCH_XFA_DIRECTION"), os.getenv("GLITCH_XFA_DIRECTION_UNTIL"), today, CFG.direction)
+    if note:
+        (log.warning if "activa" in note else log.error)(note)
+    return mode
+
+
 ORDER_FILE = f"orden_pendiente_{REAL_PRODUCT_KEY.lower()}.json"
 REAL_ACCOUNT_SIZE = {"MGC": "50K", "MGC_XFA_100K": "100K", "MGC_XFA_150K": "150K"}.get(REAL_PRODUCT_KEY, "50K")
 
@@ -802,9 +813,10 @@ def run():
 
     # ── 2. Señal: sin predictiva, funcion pura de la fecha ──
     day_idx = trading_day_index(dt.date.today())
-    side = decide_side(day_idx, CFG.direction)
+    _dir_mode = _direction_mode(dt.date.today())
+    side = decide_side(day_idx, _dir_mode)
     direction_str = {1: "LONG", -1: "SHORT"}[side]
-    log.info(f"Direccion (day_index={day_idx}, mode={CFG.direction}): {direction_str}")
+    log.info(f"Direccion (day_index={day_idx}, mode={_dir_mode}): {direction_str}")
 
     # ── 2b. Reporte de arranque ──
     progress = _paper_progress(paper_log, today_str)
@@ -823,7 +835,7 @@ def run():
 
     kickoff = (f"{PREFIX} | INICIO DE DIA\n"
                f"Dia {progress['days_elapsed']} de paper  |  Ciclos completados: {progress['n_cycles']}\n"
-               f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={CFG.direction})\n"
+               f"Señal de hoy: {direction_str} (day_index={day_idx}, mode={_dir_mode})\n"
                f"Resultado de ayer: {yesterday_line}\n"
                f"WR acumulado: {wr_line}\n"
                f"{utc_now_str()}")
